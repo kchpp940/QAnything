@@ -69,6 +69,7 @@ def parse_sse_message(raw_data: str) -> Optional[Dict[str, Any]]:
 
 def stream_chat_request(url: str, data: Dict[str, Any], timeout: int = 60) -> Iterator[Dict[str, Any]]:
     response = requests.post(url, json=data, timeout=timeout, stream=True)
+    done_emitted = False
     for line in response.iter_lines(decode_unicode=False, delimiter=b'\n\n'):
         if line:
             chunk_str = line.decode('utf-8')
@@ -76,4 +77,8 @@ def stream_chat_request(url: str, data: Dict[str, Any], timeout: int = 60) -> It
                 chunk_str = chunk_str[6:]
             parsed = parse_sse_message(chunk_str)
             if parsed:
+                if parsed['event'] == 'done':
+                    if done_emitted:
+                        continue
+                    done_emitted = True
                 yield parsed

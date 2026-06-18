@@ -128,7 +128,7 @@ export function createSseMessageHandler(options: ISseChatHandlerOptions) {
 
   let hasFinal = false;
   let isUserStopped = false;
-  let legacyDoneEmitted = false;
+  let doneEmitted = false;
 
   const handleOpen = (e: any) => {
     if (e.ok && e.headers.get('content-type') === 'text/event-stream') {
@@ -184,12 +184,10 @@ export function createSseMessageHandler(options: ISseChatHandlerOptions) {
         break;
 
       case 'done':
-        if (parsed.isLegacy) {
-          if (legacyDoneEmitted) {
-            return;
-          }
-          legacyDoneEmitted = true;
+        if (doneEmitted) {
+          return;
         }
+        doneEmitted = true;
         if (onDone) {
           onDone();
         }
