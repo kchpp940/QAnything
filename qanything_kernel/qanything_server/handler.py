@@ -1393,9 +1393,20 @@ async def update_bot(req: request):
     else:
         llm_setting = get_default_llm_setting_for_bot()
 
+    submitted_params = {}
     for field, schema in LLM_PARAM_SCHEMA.items():
         raw_val = safe_get(req, field, None)
         if raw_val is not None:
+            submitted_params[field] = raw_val
+
+    if submitted_params:
+        _, missing_fields, invalid_fields = normalize_and_validate_llm_params_for_request(submitted_params)
+        if invalid_fields:
+            error_msg_parts = [f"{f} value is invalid" for f in invalid_fields]
+            return sanic_json({"code": 2003, "msg": "fail, " + "; ".join(error_msg_parts)})
+
+        for field, raw_val in submitted_params.items():
+            schema = LLM_PARAM_SCHEMA[field]
             llm_setting[field] = parse_param_by_schema(raw_val, schema, fill_default=True)
 
     debug_logger.info(f"update llm_setting: {llm_setting}")

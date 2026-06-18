@@ -277,8 +277,6 @@ export function getContentDispositionByHeader(headers: Headers): string {
   );
 }
 
-import LlmSchemaRaw from '/llm_param_schema.json';
-
 export interface LlmParamSchema {
   type: 'bool' | 'int' | 'float' | 'str' | 'list';
   default: any;
@@ -306,22 +304,54 @@ const FALLBACK_SCHEMA: Record<string, LlmParamSchema> = {
   only_need_search_results: { type: 'bool', default: false, required_for_request: false, fill_default_for_bot: true, description: 'Return Search Results Only' },
 };
 
-export const LLM_SCHEMA_META = (LlmSchemaRaw as any)?.post_process || {
+const FALLBACK_META = {
   top_p_1_0_correction: { enabled: true, from: 1.0, to: 0.99 },
 };
 
-function loadSchemaFromShared(): Record<string, LlmParamSchema> {
-  try {
-    const rawFields = (LlmSchemaRaw as any)?.fields;
-    if (!rawFields || typeof rawFields !== 'object') return FALLBACK_SCHEMA;
-    return rawFields as Record<string, LlmParamSchema>;
-  } catch (e) {
-    console.warn('[loadSchemaFromShared] 加载共享 schema 失败，使用内置回退:', e);
-    return FALLBACK_SCHEMA;
-  }
+let _llmSchema: Record<string, LlmParamSchema> = FALLBACK_SCHEMA;
+let _llmSchemaMeta: Record<string, any> = FALLBACK_META;
+let _schemaLoadPromise: Promise<void> | null = null;
+
+export async function loadSchemaFromSharedAsync(): Promise<void> {
+  if (_schemaLoadPromise) return _schemaLoadPromise;
+
+  _schemaLoadPromise = (async () => {
+    try {
+      const resp = await fetch('/llm_param_schema.json', { cache: 'no-cache' });
+      if (!resp.ok) {
+        console.warn('[loadSchemaFromSharedAsync] HTTP 错误，使用内置回退:', resp.status);
+        return;
+      }
+      const raw = await resp.json();
+      if (raw?.fields && typeof raw.fields === 'object') {
+        _llmSchema = raw.fields as Record<string, LlmParamSchema>;
+        if (raw?.post_process) {
+          _llmSchemaMeta = raw.post_process;
+        }
+        console.log('[loadSchemaFromSharedAsync] 已加载共享 schema:', Object.keys(_llmSchema).length, '个字段');
+      } else {
+        console.warn('[loadSchemaFromSharedAsync] schema 格式错误，使用内置回退');
+      }
+    } catch (e) {
+      console.warn('[loadSchemaFromSharedAsync] 加载失败，使用内置回退:', e);
+    }
+  })();
+
+  return _schemaLoadPromise;
 }
 
-export const LLM_PARAM_SCHEMA: Record<string, LlmParamSchema> = loadSchemaFromShared();
+export function getLlmParamSchema(): Record<string, LlmParamSchema> {
+  return _llmSchema;
+}
+
+export function getLlmSchemaMeta(): Record<string, any> {
+  return _llmSchemaMeta;
+}
+
+export { FALLBACK_SCHEMA };
+
+export const LLM_PARAM_SCHEMA: Record<string, LlmParamSchema> = _llmSchema;
+export const LLM_SCHEMA_META: Record<string, any> = _llmSchemaMeta;
 
 export function parseParamBySchema(value: any, schema: LlmParamSchema): any {
   const paramType = schema.type;
@@ -341,12 +371,17 @@ export function parseParamBySchema(value: any, schema: LlmParamSchema): any {
 }
 
 export function normalizeLlmParamsFromSchema(llmDict: Record<string, any>): Record<string, any> {
+  const schema = getLlmParamSchema();
   const result: Record<string, any> = {};
-  for (const [field, schema] of Object.entries(LLM_PARAM_SCHEMA)) {
+  for (const [field, fieldSchema] of Object.entries(schema)) {
     const rawValue = llmDict[field];
-    result[field] = parseParamBySchema(rawValue, schema);
+    result[field] = parseParamBySchema(rawValue, fieldSchema);
   }
-  if (result.top_p === 1.0) result.top_p = 0.99;
+  const meta = getLlmSchemaMeta();
+  const correction = meta?.top_p_1_0_correction;
+  if (correction?.enabled && result.top_p === correction.from) {
+    result.top_p = correction.to;
+  }
   return result;
 }
 
@@ -463,6 +498,7 @@ export interface BuildChatSendDataOptions {
 export function buildChatSendData(options: BuildChatSendDataOptions): Record<string, any> {
   const { kb_ids, bot_id, history, question, user_id, user_info, chatSetting, product_source = 'saas' } = options;
   const { capabilities } = chatSetting;
+  const schema = getLlmParamSchema();
 
   const sendData: Record<string, any> = {
     user_id,
@@ -472,20 +508,20 @@ export function buildChatSendData(options: BuildChatSendDataOptions): Record<str
     streaming: parseBool(capabilities.onlySearch === false, false),
     networking: parseBool(capabilities.networkSearch, false),
     product_source,
-    rerank: parseBool(capabilities.rerank, LLM_PARAM_SCHEMA.rerank.default),
-    only_need_search_results: parseBool(capabilities.onlySearch, LLM_PARAM_SCHEMA.only_need_search_results.default),
-    hybrid_search: parseBool(capabilities.mixedSearch, LLM_PARAM_SCHEMA.hybrid_search.default),
+    rerank: parseBool(capabilities.rerank, schema.rerank.default),
+    only_need_search_results: parseBool(capabilities.onlySearch, schema.only_need_search_results.default),
+    hybrid_search: parseBool(capabilities.mixedSearch, schema.hybrid_search.default),
     max_token: chatSetting.maxToken !== null && chatSetting.maxToken !== undefined
       ? parseInt_(chatSetting.maxToken)
-      : LLM_PARAM_SCHEMA.max_token.default,
-    api_base: String(chatSetting.apiBase || LLM_PARAM_SCHEMA.api_base.default),
-    api_key: String(chatSetting.apiKey || LLM_PARAM_SCHEMA.api_key.default),
-    model: String(chatSetting.apiModelName || LLM_PARAM_SCHEMA.model.default),
-    api_context_length: parseInt_(chatSetting.apiContextLength, LLM_PARAM_SCHEMA.api_context_length.default),
-    chunk_size: parseInt_(chatSetting.chunkSize, LLM_PARAM_SCHEMA.chunk_size.default),
-    top_p: parseFloat_(chatSetting.top_P, LLM_PARAM_SCHEMA.top_p.default),
-    top_k: parseInt_(chatSetting.top_K, LLM_PARAM_SCHEMA.top_k.default),
-    temperature: parseFloat_(chatSetting.temperature, LLM_PARAM_SCHEMA.temperature.default),
+      : schema.max_token.default,
+    api_base: String(chatSetting.apiBase || schema.api_base.default),
+    api_key: String(chatSetting.apiKey || schema.api_key.default),
+    model: String(chatSetting.apiModelName || schema.model.default),
+    api_context_length: parseInt_(chatSetting.apiContextLength, schema.api_context_length.default),
+    chunk_size: parseInt_(chatSetting.chunkSize, schema.chunk_size.default),
+    top_p: parseFloat_(chatSetting.top_P, schema.top_p.default),
+    top_k: parseInt_(chatSetting.top_K, schema.top_k.default),
+    temperature: parseFloat_(chatSetting.temperature, schema.temperature.default),
   };
 
   if (kb_ids !== undefined) {
@@ -512,6 +548,7 @@ export interface BuildUpdateBotParamsOptions {
 export function buildUpdateBotParams(options: BuildUpdateBotParamsOptions): Record<string, any> {
   const { bot_id, kb_ids, chatSetting } = options;
   const { capabilities } = chatSetting;
+  const schema = getLlmParamSchema();
 
   const params: Record<string, any> = {
     bot_id,
@@ -521,7 +558,7 @@ export function buildUpdateBotParams(options: BuildUpdateBotParamsOptions): Reco
     networking: parseBool(capabilities.networkSearch),
     max_token: chatSetting.maxToken !== null && chatSetting.maxToken !== undefined
       ? parseInt_(chatSetting.maxToken)
-      : LLM_PARAM_SCHEMA.max_token.default,
+      : schema.max_token.default,
     api_base: String(chatSetting.apiBase || ''),
     api_key: String(chatSetting.apiKey || ''),
     model: String(chatSetting.apiModelName || ''),

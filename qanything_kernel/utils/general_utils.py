@@ -124,7 +124,7 @@ def safe_get(req: Request, attr: str, default=None):
 
 LLM_SCHEMA_SHARED_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    'front_end', 'public', 'llm_param_schema.json'
+    'shared_configs', 'llm_param_schema.json'
 )
 
 
