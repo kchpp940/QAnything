@@ -45,6 +45,67 @@ async def run_in_background(func, *args):
         await loop.run_in_executor(pool, func, *args)
 
 
+def safe_delete_es_files(es_client, mysql_summary, file_ids, op_name="delete"):
+    if not file_ids:
+        return {"success": True, "deleted": 0, "failed": 0, "method": "no-op"}
+    total = len(file_ids)
+    deleted = es_client.delete_files_by_file_id(file_ids)
+    if deleted >= 0:
+        debug_logger.info(
+            f"[ES {op_name}] delete_by_query succeeded: {deleted} docs deleted "
+            f"for {total} files"
+        )
+        return {"success": True, "deleted": deleted, "failed": 0,
+                "method": "delete_by_query" if deleted > 0 else "no-docs"}
+    debug_logger.warning(
+        f"[ES {op_name}] delete_by_query failed, fallback to chunks_number from MySQL "
+        f"for {total} files"
+    )
+    try:
+        chunks_numbers = mysql_summary.get_chunks_number(file_ids)
+        valid_chunks = []
+        valid_file_ids = []
+        unknown_chunk_files = []
+        for fid, cn in zip(file_ids, chunks_numbers):
+            if cn is not None and cn > 0:
+                valid_file_ids.append(fid)
+                valid_chunks.append(cn)
+            else:
+                unknown_chunk_files.append(fid)
+        if valid_file_ids:
+            es_client.delete_files(valid_file_ids, valid_chunks)
+            deleted_count = sum(valid_chunks)
+            debug_logger.info(
+                f"[ES {op_name}] fallback delete_files succeeded: "
+                f"{deleted_count} docs for {len(valid_file_ids)} files"
+            )
+        else:
+            deleted_count = 0
+            debug_logger.warning(
+                f"[ES {op_name}] fallback delete_files: no valid chunks_number "
+                f"for any of {total} files, ES documents may be leftover"
+            )
+        if unknown_chunk_files:
+            debug_logger.error(
+                f"[ES {op_name}] files with unknown chunks_number (ES may have residuals): "
+                f"{unknown_chunk_files}"
+            )
+        return {
+            "success": len(unknown_chunk_files) == 0,
+            "deleted": deleted_count,
+            "failed": len(unknown_chunk_files),
+            "unknown_files": unknown_chunk_files,
+            "method": "chunks_number_fallback"
+        }
+    except Exception as e:
+        debug_logger.error(
+            f"[ES {op_name}] ALL delete paths failed for {total} files: {e}. "
+            f"ES documents will be leftover. file_ids sample: {file_ids[:3]}"
+        )
+        return {"success": False, "deleted": 0, "failed": total, "method": "all-failed",
+                "error": str(e)}
+
+
 # 使用aiohttp异步请求另一个API
 async def fetch(session, url, input_json):
     headers = {'Content-Type': 'application/json'}
@@ -474,16 +535,22 @@ async def delete_knowledge_base(req: request):
     for kb_id in kb_ids:
         expr = f"kb_id == \"{kb_id}\""
         asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
-        # local_doc_qa.milvus_kb.delete_expr(expr)
-        # milvus.delete_partition(kb_id)
+    total_es_deleted = 0
+    total_es_failed_files = 0
+    all_es_failed_files = []
     for kb_id in kb_ids:
         file_infos = local_doc_qa.milvus_summary.get_files(user_id, kb_id)
         file_ids = [file_info[0] for file_info in file_infos]
-        asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files_by_file_id, file_ids))
+        es_res = await run_in_background(
+            safe_delete_es_files, local_doc_qa.es_client,
+            local_doc_qa.milvus_summary, file_ids, "delete_kb")
+        total_es_deleted += es_res.get("deleted", 0)
+        total_es_failed_files += es_res.get("failed", 0)
+        if es_res.get("unknown_files"):
+            all_es_failed_files.extend(es_res["unknown_files"])
         local_doc_qa.milvus_summary.delete_documents(file_ids)
         local_doc_qa.milvus_summary.delete_faqs(file_ids)
 
-        # delete kb_id file dir
         try:
             upload_path = os.path.join(UPLOAD_ROOT_PATH, user_id)
             file_dir = os.path.join(upload_path, kb_id)
@@ -492,10 +559,18 @@ async def delete_knowledge_base(req: request):
         except Exception as e:
             debug_logger.error("An error occurred while constructing file paths: %s", str(e))
 
-
         debug_logger.info(f"""delete knowledge base {kb_id} success""")
     local_doc_qa.milvus_summary.delete_knowledge_base(user_id, kb_ids)
-    return sanic_json({"code": 200, "msg": "Knowledge Base {} delete success".format(kb_ids)})
+    return sanic_json({
+        "code": 200,
+        "msg": "Knowledge Base {} delete success".format(kb_ids),
+        "es_delete": {
+            "success": total_es_failed_files == 0,
+            "deleted_docs": total_es_deleted,
+            "failed_files": total_es_failed_files,
+            "failed_file_ids": all_es_failed_files
+        }
+    })
 
 
 @get_time_async
@@ -543,7 +618,9 @@ async def delete_docs(req: request):
     # milvus_kb.delete_files(file_ids)
     expr = f"""kb_id == "{kb_id}" and file_id in {valid_file_ids}"""
     asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
-    asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files_by_file_id, valid_file_ids))
+    es_delete_result = await run_in_background(
+        safe_delete_es_files, local_doc_qa.es_client,
+        local_doc_qa.milvus_summary, valid_file_ids, "delete_docs")
 
     local_doc_qa.milvus_summary.delete_files(kb_id, valid_file_ids)
     local_doc_qa.milvus_summary.delete_documents(valid_file_ids)
@@ -563,7 +640,17 @@ async def delete_docs(req: request):
         except Exception as e:
             debug_logger.error("An error occurred while constructing file paths: %s", str(e))
 
-    return sanic_json({"code": 200, "msg": "documents {} delete success".format(valid_file_ids)})
+    return sanic_json({
+        "code": 200,
+        "msg": "documents {} delete success".format(valid_file_ids),
+        "es_delete": {
+            "success": es_delete_result["success"],
+            "method": es_delete_result["method"],
+            "deleted_docs": es_delete_result.get("deleted", 0),
+            "failed_files": es_delete_result.get("failed", 0),
+            "failed_file_ids": es_delete_result.get("unknown_files", [])
+        }
+    })
 
 
 @get_time_async
@@ -628,16 +715,30 @@ async def clean_files_by_status(req: request):
     file_ids = [f[0] for f in file_infos]
     file_names = [f[1] for f in file_infos]
     debug_logger.info(f'{status} files number: {len(file_names)}')
+    es_delete_result = {"success": True, "deleted": 0, "failed": 0, "method": "skipped"}
     if file_ids:
         if status in ('red', 'yellow'):
             for kb_id in kb_ids:
                 expr = f"""kb_id == "{kb_id}" and file_id in {file_ids}"""
                 asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
-            asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files_by_file_id, file_ids))
+            es_delete_result = await run_in_background(
+                safe_delete_es_files, local_doc_qa.es_client,
+                local_doc_qa.milvus_summary, file_ids, f"clean_{status}")
             local_doc_qa.milvus_summary.delete_documents(file_ids)
         for kb_id in kb_ids:
             local_doc_qa.milvus_summary.delete_files(kb_id, file_ids)
-    return sanic_json({"code": 200, "msg": f"delete {status} files success", "data": file_names})
+    return sanic_json({
+        "code": 200,
+        "msg": f"delete {status} files success",
+        "data": file_names,
+        "es_delete": {
+            "success": es_delete_result["success"],
+            "method": es_delete_result["method"],
+            "deleted_docs": es_delete_result.get("deleted", 0),
+            "failed_files": es_delete_result.get("failed", 0),
+            "failed_file_ids": es_delete_result.get("unknown_files", [])
+        }
+    })
 
 
 @get_time_async
