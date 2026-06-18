@@ -479,8 +479,7 @@ async def delete_knowledge_base(req: request):
     for kb_id in kb_ids:
         file_infos = local_doc_qa.milvus_summary.get_files(user_id, kb_id)
         file_ids = [file_info[0] for file_info in file_infos]
-        file_chunks = [file_info[8] if file_info[8] > 0 else 0 for file_info in file_infos]
-        asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files, file_ids, file_chunks))
+        asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files_by_file_id, file_ids))
         local_doc_qa.milvus_summary.delete_documents(file_ids)
         local_doc_qa.milvus_summary.delete_faqs(file_ids)
 
@@ -542,12 +541,9 @@ async def delete_docs(req: request):
     debug_logger.info("delete_docs valid_file_ids %s", valid_file_ids)
     # milvus_kb = local_doc_qa.match_milvus_kb(user_id, [kb_id])
     # milvus_kb.delete_files(file_ids)
-    expr = f"""kb_id == "{kb_id}" and file_id in {valid_file_ids}"""  # 删除数据库中的记录
+    expr = f"""kb_id == "{kb_id}" and file_id in {valid_file_ids}"""
     asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
-    # local_doc_qa.milvus_kb.delete_expr(expr)
-    file_chunks = local_doc_qa.milvus_summary.get_chunks_number(valid_file_ids)
-    file_chunks = [c if c > 0 else 0 for c in file_chunks]
-    asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files, valid_file_ids, file_chunks))
+    asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files_by_file_id, valid_file_ids))
 
     local_doc_qa.milvus_summary.delete_files(kb_id, valid_file_ids)
     local_doc_qa.milvus_summary.delete_documents(valid_file_ids)

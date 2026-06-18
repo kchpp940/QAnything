@@ -24,7 +24,26 @@ class StoreElasticSearchClient:
     def delete_files(self, file_ids, file_chunks):
         docs_ids = []
         for file_id, file_chunk in zip(file_ids, file_chunks):
-            # doc_id 是file_id + '_' + i，其中i是range(file_chunk)
             docs_ids.extend([file_id + '_' + str(i) for i in range(file_chunk)])
         if docs_ids:
             self.delete(docs_ids)
+
+    def delete_files_by_file_id(self, file_ids):
+        try:
+            es_client = getattr(self.es_store, 'client', None)
+            index_name = getattr(self.es_store, 'index_name', ES_INDEX_NAME)
+            if es_client is None:
+                debug_logger.error("ES client not available, skip delete by file_id")
+                return
+            for file_id in file_ids:
+                query = {
+                    "query": {
+                        "term": {
+                            "metadata.file_id.keyword": file_id
+                        }
+                    }
+                }
+                res = es_client.delete_by_query(index=index_name, body=query, timeout="60s")
+                debug_logger.info(f"Delete ES documents by file_id {file_id}: deleted={res.get('deleted', 0)}, total={res.get('total', 0)}")
+        except Exception as e:
+            debug_logger.error(f"Delete ES documents by file_id failed: {e}")
