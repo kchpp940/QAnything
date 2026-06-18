@@ -458,9 +458,9 @@ class KnowledgeBaseManager:
         query = "UPDATE File SET content_length = %s WHERE file_id = %s"
         self.execute_query_(query, (content_length, file_id), commit=True)
 
-    #  更新file中的chunk_number
+    #  更新file中的chunks_number
     def update_chunks_number(self, file_id, chunks_number):
-        query = "UPDATE File SET chunk_size = %s WHERE file_id = %s"
+        query = "UPDATE File SET chunks_number = %s WHERE file_id = %s"
         self.execute_query_(query, (chunks_number, file_id), commit=True)
 
     def update_file_status(self, file_id, status):
@@ -479,7 +479,7 @@ class KnowledgeBaseManager:
 
         base_query = """
             SELECT file_id, file_name, status, file_size, content_length, timestamp,
-                   file_location, file_url, chunk_size, msg
+                   file_location, file_url, chunks_number, msg
             FROM File
             WHERE kb_id = %s AND deleted = 0
         """
@@ -528,10 +528,10 @@ class KnowledgeBaseManager:
 
         return {date: dict(status_dict) for date, status_dict in files_by_date.items()}
 
-    def get_chunk_size(self, file_ids):
+    def get_chunks_number(self, file_ids):
         limit = 100
         offset = 0
-        all_chunk_sizes = []
+        all_chunks_numbers = []
 
         while True:
             file_ids_sublist = file_ids[offset:offset + limit]
@@ -539,14 +539,14 @@ class KnowledgeBaseManager:
                 break
 
             file_ids_str = ','.join("'{}'".format(str(x)) for x in file_ids_sublist)
-            query = f"SELECT chunk_size FROM File WHERE file_id IN ({file_ids_str})"
-            chunk_sizes = self.execute_query_(query, (), fetch=True)
-            if not chunk_sizes:
+            query = f"SELECT chunks_number FROM File WHERE file_id IN ({file_ids_str})"
+            chunks_numbers = self.execute_query_(query, (), fetch=True)
+            if not chunks_numbers:
                 break
-            all_chunk_sizes.extend(chunk_sizes)
+            all_chunks_numbers.extend(chunks_numbers)
             offset += limit
 
-        file_chunks = [file_info[0] for file_info in all_chunk_sizes]
+        file_chunks = [file_info[0] for file_info in all_chunks_numbers]
         return file_chunks
 
     def is_deleted_file(self, file_id):

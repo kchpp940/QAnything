@@ -545,7 +545,7 @@ async def delete_docs(req: request):
     expr = f"""kb_id == "{kb_id}" and file_id in {valid_file_ids}"""  # 删除数据库中的记录
     asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
     # local_doc_qa.milvus_kb.delete_expr(expr)
-    file_chunks = local_doc_qa.milvus_summary.get_chunk_size(valid_file_ids)
+    file_chunks = local_doc_qa.milvus_summary.get_chunks_number(valid_file_ids)
     asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files, valid_file_ids, file_chunks))
 
     local_doc_qa.milvus_summary.delete_files(kb_id, valid_file_ids)
@@ -631,10 +631,13 @@ async def clean_files_by_status(req: request):
     gray_file_ids = [f[0] for f in gray_file_infos]
     gray_file_names = [f[1] for f in gray_file_infos]
     debug_logger.info(f'{status} files number: {len(gray_file_names)}')
-    # 删除milvus中的file
     if gray_file_ids:
-        # expr = f"file_id in \"{gray_file_ids}\""
-        # asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
+        if status == 'red':
+            for kb_id in kb_ids:
+                expr = f"""kb_id == "{kb_id}" and file_id in {gray_file_ids}"""
+                asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
+            file_chunks = local_doc_qa.milvus_summary.get_chunks_number(gray_file_ids)
+            asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files, gray_file_ids, file_chunks))
         for kb_id in kb_ids:
             local_doc_qa.milvus_summary.delete_files(kb_id, gray_file_ids)
     return sanic_json({"code": 200, "msg": f"delete {status} files success", "data": gray_file_names})
