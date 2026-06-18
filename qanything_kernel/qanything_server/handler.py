@@ -644,43 +644,24 @@ async def clean_files_by_status(req: request):
 
 def normalize_llm_params(llm_dict, from_bot=False):
     """
-    统一规范化 LLM 配置参数，确保 Bot 分支和非 Bot 分支走同一套解析链路。
+    统一规范化 LLM 配置参数，内部调用 LLM_PARAM_SCHEMA 派生的标准化函数。
     from_bot=True 表示参数来自数据库存储的 llm_setting JSON，需要全量规范化。
     """
-    rerank = parse_bool(llm_dict.get('rerank'), True)
-    only_need_search_results = parse_bool(llm_dict.get('only_need_search_results'), False)
-    need_web_search = parse_bool(llm_dict.get('networking'), False)
-    api_base = llm_dict.get('api_base', '')
-    api_key = llm_dict.get('api_key', 'ollama')
-    api_context_length = parse_int(llm_dict.get('api_context_length'), 4096)
-    top_p = parse_float(llm_dict.get('top_p'), 0.99)
-    temperature = parse_float(llm_dict.get('temperature'), 0.5)
-    top_k = parse_int(llm_dict.get('top_k'), VECTOR_SEARCH_TOP_K)
-    model = llm_dict.get('model', 'gpt-4o-mini')
-
-    max_token_raw = llm_dict.get('max_token', None)
-    if max_token_raw is not None:
-        max_token = parse_int(max_token_raw)
-    else:
-        max_token = None
-
-    hybrid_search = parse_bool(llm_dict.get('hybrid_search'), False)
-    chunk_size = parse_int(llm_dict.get('chunk_size'), DEFAULT_PARENT_CHUNK_SIZE)
-
+    params = normalize_llm_params_from_schema(llm_dict)
     return {
-        'rerank': rerank,
-        'only_need_search_results': only_need_search_results,
-        'need_web_search': need_web_search,
-        'api_base': api_base,
-        'api_key': api_key,
-        'api_context_length': api_context_length,
-        'top_p': top_p,
-        'temperature': temperature,
-        'top_k': top_k,
-        'model': model,
-        'max_token': max_token,
-        'hybrid_search': hybrid_search,
-        'chunk_size': chunk_size,
+        'rerank': params['rerank'],
+        'only_need_search_results': params['only_need_search_results'],
+        'need_web_search': params['networking'],
+        'api_base': params['api_base'],
+        'api_key': params['api_key'],
+        'api_context_length': params['api_context_length'],
+        'top_p': params['top_p'],
+        'temperature': params['temperature'],
+        'top_k': params['top_k'],
+        'model': params['model'],
+        'max_token': params['max_token'],
+        'hybrid_search': params['hybrid_search'],
+        'chunk_size': params['chunk_size'],
     }
 
 
@@ -767,24 +748,22 @@ async def local_doc_chat(req: request):
     streaming = safe_get_bool(req, 'streaming', False)
     history = safe_get_list(req, 'history', [])
 
-    if top_k > 100:
-        return sanic_json({"code": 2003, "msg": "fail, top_k should less than or equal to 100"})
-
-    missing_params = []
-    if not api_base:
-        missing_params.append('api_base')
-    if not api_key:
-        missing_params.append('api_key')
-    if api_context_length is None or api_context_length <= 0:
-        missing_params.append('api_context_length')
-    if top_p is None or top_p <= 0:
-        missing_params.append('top_p')
-    if top_k is None or top_k <= 0:
-        missing_params.append('top_k')
-    if top_p == 1.0:
-        top_p = 0.99
-    if temperature is None:
-        missing_params.append('temperature')
+    validate_params = {
+        'api_key': api_key,
+        'api_base': api_base,
+        'api_context_length': api_context_length,
+        'top_p': top_p,
+        'top_k': top_k,
+        'temperature': temperature,
+        'model': model,
+        'max_token': max_token,
+        'chunk_size': chunk_size,
+        'rerank': rerank,
+        'hybrid_search': hybrid_search,
+        'networking': need_web_search,
+        'only_need_search_results': only_need_search_results,
+    }
+    missing_params = validate_llm_params_from_schema(validate_params)
 
     if missing_params:
         missing_params_str = " and ".join(missing_params) if len(missing_params) > 1 else missing_params[0]
@@ -1372,8 +1351,21 @@ async def new_bot(req: request):
         return sanic_json({"code": 2001, "msg": msg, "data": [{}]})
     debug_logger.info("new_bot %s", user_id)
     bot_id = 'BOT' + uuid.uuid4().hex
+
+    llm_raw_dict = {}
+    for field in LLM_PARAM_SCHEMA.keys():
+        raw_val = safe_get(req, field, None)
+        if raw_val is not None:
+            llm_raw_dict[field] = raw_val
+
+    if llm_raw_dict:
+        llm_setting = normalize_llm_params_from_schema(llm_raw_dict)
+    else:
+        llm_setting = get_default_llm_setting()
+    llm_setting_json = json.dumps(llm_setting)
+
     local_doc_qa.milvus_summary.new_qanything_bot(bot_id, user_id, bot_name, desc, head_image, prompt_setting,
-                                                  welcome_message, kb_ids_str)
+                                                  welcome_message, kb_ids_str, llm_setting_json)
     create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return sanic_json({"code": 200, "msg": "success create qanything bot {}".format(bot_id),
                        "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time}})
@@ -1433,47 +1425,10 @@ async def update_bot(req: request):
     else:
         llm_setting = normalize_llm_params({}, from_bot=True)
 
-    api_base_raw = safe_get(req, "api_base", None)
-    if api_base_raw is not None:
-        llm_setting["api_base"] = api_base_raw
-    api_key_raw = safe_get(req, "api_key", None)
-    if api_key_raw is not None:
-        llm_setting["api_key"] = api_key_raw
-
-    api_context_length_raw = safe_get(req, "api_context_length", None)
-    if api_context_length_raw is not None:
-        llm_setting["api_context_length"] = parse_int(api_context_length_raw)
-    top_p_raw = safe_get(req, "top_p", None)
-    if top_p_raw is not None:
-        llm_setting["top_p"] = parse_float(top_p_raw)
-    top_k_raw = safe_get(req, "top_k", None)
-    if top_k_raw is not None:
-        llm_setting["top_k"] = parse_int(top_k_raw)
-    chunk_size_raw = safe_get(req, "chunk_size", None)
-    if chunk_size_raw is not None:
-        llm_setting["chunk_size"] = parse_int(chunk_size_raw)
-    temperature_raw = safe_get(req, "temperature", None)
-    if temperature_raw is not None:
-        llm_setting["temperature"] = parse_float(temperature_raw)
-    model_raw = safe_get(req, "model", None)
-    if model_raw is not None:
-        llm_setting["model"] = model_raw
-    max_token_raw = safe_get(req, "max_token", None)
-    if max_token_raw is not None:
-        llm_setting["max_token"] = parse_int(max_token_raw)
-
-    rerank_raw = safe_get(req, "rerank", None)
-    if rerank_raw is not None:
-        llm_setting["rerank"] = parse_bool(rerank_raw)
-    hybrid_search_raw = safe_get(req, "hybrid_search", None)
-    if hybrid_search_raw is not None:
-        llm_setting["hybrid_search"] = parse_bool(hybrid_search_raw)
-    networking_raw = safe_get(req, "networking", None)
-    if networking_raw is not None:
-        llm_setting["networking"] = parse_bool(networking_raw)
-    only_need_search_results_raw = safe_get(req, "only_need_search_results", None)
-    if only_need_search_results_raw is not None:
-        llm_setting["only_need_search_results"] = parse_bool(only_need_search_results_raw)
+    for field, schema in LLM_PARAM_SCHEMA.items():
+        raw_val = safe_get(req, field, None)
+        if raw_val is not None:
+            llm_setting[field] = parse_param_by_schema(raw_val, schema)
 
     debug_logger.info(f"update llm_setting: {llm_setting}")
 

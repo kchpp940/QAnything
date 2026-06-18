@@ -41,7 +41,9 @@ __all__ = ['isURL', 'get_time', 'get_time_async', 'format_source_documents', 'sa
            'check_user_id_and_user_info', 'get_table_infos', 'format_time_record', 'get_time_range',
            'html_to_markdown', "num_tokens_embed", "num_tokens_rerank", "get_all_subpages", "replace_image_references",
            'check_and_transform_excel', 'parse_bool', 'parse_int', 'parse_float', 'parse_list',
-           'safe_get_bool', 'safe_get_int', 'safe_get_float', 'safe_get_list']
+           'safe_get_bool', 'safe_get_int', 'safe_get_float', 'safe_get_list',
+           'LLM_PARAM_SCHEMA', 'normalize_llm_params_from_schema', 'validate_llm_params_from_schema',
+           'get_default_llm_setting', 'parse_param_by_schema']
 
 
 def get_invalid_user_id_msg(user_id):
@@ -116,6 +118,170 @@ def safe_get(req: Request, attr: str, default=None):
         logging.warning(f"get {attr} from request failed:")
         logging.warning(traceback.format_exc())
     return default
+
+
+LLM_PARAM_SCHEMA = {
+    'api_key': {
+        'type': 'str',
+        'default': 'ollama',
+        'required': True,
+        'description': 'LLM API Key',
+    },
+    'api_base': {
+        'type': 'str',
+        'default': '',
+        'required': True,
+        'description': 'LLM API Base URL',
+    },
+    'model': {
+        'type': 'str',
+        'default': 'gpt-4o-mini',
+        'required': False,
+        'description': 'LLM Model Name',
+    },
+    'api_context_length': {
+        'type': 'int',
+        'default': 4096,
+        'min': 1,
+        'required': True,
+        'description': 'LLM Context Window Size',
+    },
+    'max_token': {
+        'type': 'int',
+        'default': None,
+        'allow_null': True,
+        'required': False,
+        'description': 'Max Output Tokens',
+    },
+    'chunk_size': {
+        'type': 'int',
+        'default': 300,
+        'min': 50,
+        'required': False,
+        'description': 'Document Chunk Size',
+    },
+    'temperature': {
+        'type': 'float',
+        'default': 0.5,
+        'min': 0.0,
+        'max': 2.0,
+        'required': True,
+        'description': 'Sampling Temperature',
+    },
+    'top_k': {
+        'type': 'int',
+        'default': 8,
+        'min': 1,
+        'max': 100,
+        'required': True,
+        'description': 'Vector Search Top-K',
+    },
+    'top_p': {
+        'type': 'float',
+        'default': 0.99,
+        'min': 0.0,
+        'max': 1.0,
+        'required': True,
+        'description': 'Nucleus Sampling Top-P',
+    },
+    'rerank': {
+        'type': 'bool',
+        'default': True,
+        'required': False,
+        'description': 'Enable Rerank',
+    },
+    'hybrid_search': {
+        'type': 'bool',
+        'default': False,
+        'required': False,
+        'description': 'Enable Hybrid Search',
+    },
+    'networking': {
+        'type': 'bool',
+        'default': False,
+        'required': False,
+        'description': 'Enable Web Search',
+    },
+    'only_need_search_results': {
+        'type': 'bool',
+        'default': False,
+        'required': False,
+        'description': 'Return Search Results Only',
+    },
+}
+
+
+def parse_param_by_schema(value, field_schema):
+    """根据 schema 定义解析单个参数值"""
+    param_type = field_schema['type']
+    default = field_schema['default']
+    allow_null = field_schema.get('allow_null', False)
+
+    if value is None and allow_null:
+        return None
+
+    if param_type == 'bool':
+        return parse_bool(value, default)
+    elif param_type == 'int':
+        return parse_int(value, default)
+    elif param_type == 'float':
+        return parse_float(value, default)
+    elif param_type == 'str':
+        if value is None:
+            return default
+        return str(value)
+    elif param_type == 'list':
+        return parse_list(value, default if default is not None else [])
+    else:
+        raise ValueError(f"Unknown param type: {param_type}")
+
+
+def normalize_llm_params_from_schema(llm_dict):
+    """根据 LLM_PARAM_SCHEMA 规范化所有参数"""
+    result = {}
+    for field, schema in LLM_PARAM_SCHEMA.items():
+        raw_value = llm_dict.get(field, None)
+        result[field] = parse_param_by_schema(raw_value, schema)
+
+    if result['top_p'] == 1.0:
+        result['top_p'] = 0.99
+
+    return result
+
+
+def validate_llm_params_from_schema(normalized_params):
+    """根据 LLM_PARAM_SCHEMA 验证参数，返回缺失/非法字段列表"""
+    errors = []
+    for field, schema in LLM_PARAM_SCHEMA.items():
+        value = normalized_params[field]
+        required = schema['required']
+        allow_null = schema.get('allow_null', False)
+        min_val = schema.get('min', None)
+        max_val = schema.get('max', None)
+
+        if required and (value is None or (isinstance(value, str) and not value.strip())):
+            if not (allow_null and value is None):
+                errors.append(field)
+                continue
+
+        if value is None and not allow_null:
+            errors.append(field)
+            continue
+
+        if value is not None:
+            if min_val is not None and value < min_val:
+                errors.append(field)
+                continue
+            if max_val is not None and value > max_val:
+                errors.append(field)
+                continue
+
+    return errors
+
+
+def get_default_llm_setting():
+    """根据 schema 获取默认 LLM 配置"""
+    return normalize_llm_params_from_schema({})
 
 
 def parse_bool(value, default=False):

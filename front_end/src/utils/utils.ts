@@ -277,6 +277,63 @@ export function getContentDispositionByHeader(headers: Headers): string {
   );
 }
 
+export interface LlmParamSchema {
+  type: 'bool' | 'int' | 'float' | 'str' | 'list';
+  default: any;
+  required: boolean;
+  allowNull?: boolean;
+  min?: number;
+  max?: number;
+  description: string;
+}
+
+export const LLM_PARAM_SCHEMA: Record<string, LlmParamSchema> = {
+  api_key: { type: 'str', default: 'ollama', required: true, description: 'LLM API Key' },
+  api_base: { type: 'str', default: '', required: true, description: 'LLM API Base URL' },
+  model: { type: 'str', default: 'gpt-4o-mini', required: false, description: 'LLM Model Name' },
+  api_context_length: { type: 'int', default: 4096, min: 1, required: true, description: 'LLM Context Window Size' },
+  max_token: { type: 'int', default: null, allowNull: true, required: false, description: 'Max Output Tokens' },
+  chunk_size: { type: 'int', default: 300, min: 50, required: false, description: 'Document Chunk Size' },
+  temperature: { type: 'float', default: 0.5, min: 0.0, max: 2.0, required: true, description: 'Sampling Temperature' },
+  top_k: { type: 'int', default: 8, min: 1, max: 100, required: true, description: 'Vector Search Top-K' },
+  top_p: { type: 'float', default: 0.99, min: 0.0, max: 1.0, required: true, description: 'Nucleus Sampling Top-P' },
+  rerank: { type: 'bool', default: true, required: false, description: 'Enable Rerank' },
+  hybrid_search: { type: 'bool', default: false, required: false, description: 'Enable Hybrid Search' },
+  networking: { type: 'bool', default: false, required: false, description: 'Enable Web Search' },
+  only_need_search_results: { type: 'bool', default: false, required: false, description: 'Return Search Results Only' },
+};
+
+export function parseParamBySchema(value: any, schema: LlmParamSchema): any {
+  const paramType = schema.type;
+  const defaultValue = schema.default;
+  const allowNull = schema.allowNull ?? false;
+
+  if (value === null && allowNull) return null;
+
+  switch (paramType) {
+    case 'bool': return parseBool(value, defaultValue);
+    case 'int': return parseInt_(value, defaultValue);
+    case 'float': return parseFloat_(value, defaultValue);
+    case 'str': return value === null || value === undefined ? defaultValue : String(value);
+    case 'list': return parseList(value, defaultValue ?? []);
+    default: throw new Error(`Unknown param type: ${paramType}`);
+  }
+}
+
+export function normalizeLlmParamsFromSchema(llmDict: Record<string, any>): Record<string, any> {
+  const result: Record<string, any> = {};
+  for (const [field, schema] of Object.entries(LLM_PARAM_SCHEMA)) {
+    const rawValue = llmDict[field];
+    result[field] = parseParamBySchema(rawValue, schema);
+  }
+  if (result.top_p === 1.0) result.top_p = 0.99;
+  return result;
+}
+
+export function getDefaultLlmSetting(): Record<string, any> {
+  return normalizeLlmParamsFromSchema({});
+}
+
 export function parseBool(value: any, defaultValue: boolean = false): boolean {
   if (value === null || value === undefined || value === '') return defaultValue;
   if (typeof value === 'boolean') return value;
@@ -348,19 +405,75 @@ export interface NormalizedBotLlmSetting {
 
 export function normalizeBotLlmSetting(llmSettingRaw: string | object): NormalizedBotLlmSetting {
   const raw = typeof llmSettingRaw === 'string' ? JSON.parse(llmSettingRaw) : llmSettingRaw;
-  return {
-    api_key: String(raw.api_key ?? 'ollama'),
-    api_base: String(raw.api_base ?? ''),
-    model: String(raw.model ?? 'gpt-4o-mini'),
-    api_context_length: parseInt_(raw.api_context_length, 4096),
-    max_token: raw.max_token !== null && raw.max_token !== undefined ? parseInt_(raw.max_token) : null,
-    chunk_size: parseInt_(raw.chunk_size, 300),
-    temperature: parseFloat_(raw.temperature, 0.5),
-    top_k: parseInt_(raw.top_k, 8),
-    top_p: parseFloat_(raw.top_p, 0.99),
-    rerank: parseBool(raw.rerank, true),
-    hybrid_search: parseBool(raw.hybrid_search, false),
-    networking: parseBool(raw.networking, false),
-    only_need_search_results: parseBool(raw.only_need_search_results, false),
+  const normalized = normalizeLlmParamsFromSchema(raw);
+  return normalized as NormalizedBotLlmSetting;
+}
+
+export interface IChatCapabilities {
+  onlySearch: boolean;
+  networkSearch: boolean;
+  mixedSearch: boolean;
+  rerank: boolean;
+}
+
+export interface IChatSettingCore {
+  apiKey: string;
+  apiBase: string;
+  apiModelName: string;
+  apiContextLength: number;
+  maxToken: number | null;
+  chunkSize: number;
+  temperature: number;
+  top_K: number;
+  top_P: number;
+  capabilities: IChatCapabilities;
+}
+
+export interface BuildChatSendDataOptions {
+  kb_ids?: string[];
+  bot_id?: string;
+  history: any[];
+  question: string;
+  user_id: string;
+  user_info: string;
+  chatSetting: IChatSettingCore;
+  product_source?: string;
+}
+
+export function buildChatSendData(options: BuildChatSendDataOptions): Record<string, any> {
+  const { kb_ids, bot_id, history, question, user_id, user_info, chatSetting, product_source = 'saas' } = options;
+  const { capabilities } = chatSetting;
+
+  const sendData: Record<string, any> = {
+    user_id,
+    user_info,
+    history,
+    question,
+    streaming: parseBool(capabilities.onlySearch === false, false),
+    networking: parseBool(capabilities.networkSearch, false),
+    product_source,
+    rerank: parseBool(capabilities.rerank, LLM_PARAM_SCHEMA.rerank.default),
+    only_need_search_results: parseBool(capabilities.onlySearch, LLM_PARAM_SCHEMA.only_need_search_results.default),
+    hybrid_search: parseBool(capabilities.mixedSearch, LLM_PARAM_SCHEMA.hybrid_search.default),
+    max_token: chatSetting.maxToken !== null && chatSetting.maxToken !== undefined
+      ? parseInt_(chatSetting.maxToken)
+      : LLM_PARAM_SCHEMA.max_token.default,
+    api_base: String(chatSetting.apiBase || LLM_PARAM_SCHEMA.api_base.default),
+    api_key: String(chatSetting.apiKey || LLM_PARAM_SCHEMA.api_key.default),
+    model: String(chatSetting.apiModelName || LLM_PARAM_SCHEMA.model.default),
+    api_context_length: parseInt_(chatSetting.apiContextLength, LLM_PARAM_SCHEMA.api_context_length.default),
+    chunk_size: parseInt_(chatSetting.chunkSize, LLM_PARAM_SCHEMA.chunk_size.default),
+    top_p: parseFloat_(chatSetting.top_P, LLM_PARAM_SCHEMA.top_p.default),
+    top_k: parseInt_(chatSetting.top_K, LLM_PARAM_SCHEMA.top_k.default),
+    temperature: parseFloat_(chatSetting.temperature, LLM_PARAM_SCHEMA.temperature.default),
   };
+
+  if (kb_ids !== undefined) {
+    sendData.kb_ids = kb_ids;
+  }
+  if (bot_id !== undefined) {
+    sendData.bot_id = bot_id;
+  }
+
+  return sendData;
 }
