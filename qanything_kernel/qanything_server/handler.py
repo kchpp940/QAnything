@@ -627,15 +627,13 @@ async def clean_files_by_status(req: request):
     file_infos = local_doc_qa.milvus_summary.get_file_by_status(kb_ids, status)
     file_ids = [f[0] for f in file_infos]
     file_names = [f[1] for f in file_infos]
-    file_chunks = [f[2] for f in file_infos]
     debug_logger.info(f'{status} files number: {len(file_names)}')
     if file_ids:
         if status in ('red', 'yellow'):
             for kb_id in kb_ids:
                 expr = f"""kb_id == "{kb_id}" and file_id in {file_ids}"""
                 asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
-            valid_chunks = [c if c > 0 else 0 for c in file_chunks]
-            asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files, file_ids, valid_chunks))
+            asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files_by_file_id, file_ids))
             local_doc_qa.milvus_summary.delete_documents(file_ids)
         for kb_id in kb_ids:
             local_doc_qa.milvus_summary.delete_files(kb_id, file_ids)

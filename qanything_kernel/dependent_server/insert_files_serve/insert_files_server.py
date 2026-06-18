@@ -206,7 +206,7 @@ async def check_and_process(pool):
                         insert_logger.error(error_msg)
                         if id is not None:
                             await cur.execute(
-                                "UPDATE File SET status='red', content_length=-1, chunks_number=0, msg=%s "
+                                "UPDATE File SET status='red', content_length=-1, msg=%s "
                                 "WHERE id=%s AND status='yellow'",
                                 (f"service exception: {str(e)}", id))
                             await conn.commit()
