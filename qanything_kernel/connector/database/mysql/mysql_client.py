@@ -834,18 +834,25 @@ class KnowledgeBaseManager:
             break
         return qa_log, recent_logs, older_logs
 
-    def check_bot_is_exist(self, bot_id):
-        # 使用参数化查询
-        query = "SELECT bot_id FROM QanythingBot WHERE bot_id = %s AND deleted = 0"
-        result = self.execute_query_(query, (bot_id,), fetch=True)
+    def check_bot_is_exist(self, bot_id, user_id=None):
+        # 使用参数化查询，支持可选 user_id 校验
+        if user_id:
+            query = "SELECT bot_id FROM QanythingBot WHERE bot_id = %s AND user_id = %s AND deleted = 0"
+            result = self.execute_query_(query, (bot_id, user_id), fetch=True)
+        else:
+            query = "SELECT bot_id FROM QanythingBot WHERE bot_id = %s AND deleted = 0"
+            result = self.execute_query_(query, (bot_id,), fetch=True)
         debug_logger.info("check_bot_exist {}".format(result))
         return result is not None and len(result) > 0
 
     def new_qanything_bot(self, bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message,
-                          kb_ids_str):
-        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                          kb_ids_str, llm_setting=None):
+        if llm_setting is None:
+            llm_setting = {}
+        llm_setting = json.dumps(llm_setting, ensure_ascii=False)
+        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, llm_setting) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
         self.execute_query_(query, (
-        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str),
+        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, llm_setting),
                             commit=True)
         return bot_id, "success"
 

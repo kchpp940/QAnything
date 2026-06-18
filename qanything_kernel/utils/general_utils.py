@@ -38,7 +38,8 @@ __all__ = ['isURL', 'get_time', 'get_time_async', 'format_source_documents', 'sa
            'clear_string', 'simplify_filename', 'string_bytes_length', 'correct_kb_id', 'clear_kb_id',
            'clear_string_is_equal', 'export_qalogs_to_excel', 'deduplicate_documents', 'fast_estimate_file_char_count',
            'check_user_id_and_user_info', 'get_table_infos', 'format_time_record', 'get_time_range',
-           'html_to_markdown', "num_tokens_embed", "num_tokens_rerank", "get_all_subpages", "replace_image_references", 'check_and_transform_excel']
+           'html_to_markdown', "num_tokens_embed", "num_tokens_rerank", "get_all_subpages", "replace_image_references",
+           'check_and_transform_excel', 'normalize_llm_setting', 'str2bool']
 
 
 def get_invalid_user_id_msg(user_id):
@@ -620,3 +621,49 @@ def check_and_transform_excel(binary_data):
         transformed_data.append({"question": row['问题'], "answer": row['答案']})
 
     return transformed_data
+
+
+def str2bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.lower() in ('true', '1', 'yes', 'on')
+    return False
+
+
+def normalize_llm_setting(llm_setting):
+    if not llm_setting:
+        return llm_setting
+
+    bool_fields = ['rerank', 'hybrid_search', 'networking', 'only_need_search_results']
+    int_fields = ['top_k', 'max_token', 'chunk_size', 'api_context_length']
+    float_fields = ['top_p', 'temperature']
+
+    for field in bool_fields:
+        if field in llm_setting and llm_setting[field] is not None:
+            llm_setting[field] = str2bool(llm_setting[field])
+
+    for field in int_fields:
+        if field in llm_setting and llm_setting[field] is not None:
+            try:
+                llm_setting[field] = int(llm_setting[field])
+            except (ValueError, TypeError):
+                pass
+
+    for field in float_fields:
+        if field in llm_setting and llm_setting[field] is not None:
+            try:
+                llm_setting[field] = float(llm_setting[field])
+            except (ValueError, TypeError):
+                pass
+
+    if 'top_p' in llm_setting and llm_setting['top_p'] is not None:
+        try:
+            if float(llm_setting['top_p']) == 1.0:
+                llm_setting['top_p'] = 0.99
+        except (ValueError, TypeError):
+            pass
+
+    return llm_setting

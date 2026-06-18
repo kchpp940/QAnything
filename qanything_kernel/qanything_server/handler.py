@@ -656,10 +656,10 @@ async def local_doc_chat(req: request):
     debug_logger.info('user_info %s', user_info)
     bot_id = safe_get(req, 'bot_id')
     if bot_id:
-        if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id):
+        if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id, user_id):
             return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
-        bot_info = local_doc_qa.milvus_summary.get_bot(None, bot_id)[0]
-        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting = bot_info
+        bot_info = local_doc_qa.milvus_summary.get_bot(user_id, bot_id)[0]
+        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, bot_user_id, llm_setting = bot_info
         kb_ids = kb_ids_str.split(',')
         if not kb_ids:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} unbound knowledge base.".format(bot_id)})
@@ -667,6 +667,7 @@ async def local_doc_chat(req: request):
         if not llm_setting:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} llm_setting is empty.".format(bot_id)})
         llm_setting = json.loads(llm_setting)
+        llm_setting = normalize_llm_setting(llm_setting)
         rerank = llm_setting.get('rerank', True)
         only_need_search_results = llm_setting.get('only_need_search_results', False)
         need_web_search = llm_setting.get('networking', False)
@@ -684,23 +685,54 @@ async def local_doc_chat(req: request):
         kb_ids = safe_get(req, 'kb_ids')
         custom_prompt = safe_get(req, 'custom_prompt', None)
         rerank = safe_get(req, 'rerank', default=True)
+        rerank = str2bool(rerank)
         only_need_search_results = safe_get(req, 'only_need_search_results', False)
+        only_need_search_results = str2bool(only_need_search_results)
         need_web_search = safe_get(req, 'networking', False)
+        need_web_search = str2bool(need_web_search)
         api_base = safe_get(req, 'api_base', '')
         # 如果api_base中包含0.0.0.0或127.0.0.1或localhost，替换为GATEWAY_IP
         api_base = api_base.replace('0.0.0.0', GATEWAY_IP).replace('127.0.0.1', GATEWAY_IP).replace('localhost',
                                                                                                     GATEWAY_IP)
         api_key = safe_get(req, 'api_key', 'ollama')
         api_context_length = safe_get(req, 'api_context_length', 4096)
+        try:
+            api_context_length = int(api_context_length)
+        except (ValueError, TypeError):
+            pass
         top_p = safe_get(req, 'top_p', 0.99)
+        try:
+            top_p = float(top_p)
+            if top_p == 1.0:
+                top_p = 0.99
+        except (ValueError, TypeError):
+            pass
         temperature = safe_get(req, 'temperature', 0.5)
+        try:
+            temperature = float(temperature)
+        except (ValueError, TypeError):
+            pass
         top_k = safe_get(req, 'top_k', VECTOR_SEARCH_TOP_K)
+        try:
+            top_k = int(top_k)
+        except (ValueError, TypeError):
+            pass
 
         model = safe_get(req, 'model', 'gpt-4o-mini')
         max_token = safe_get(req, 'max_token')
+        if max_token is not None and max_token != "":
+            try:
+                max_token = int(max_token)
+            except (ValueError, TypeError):
+                pass
 
         hybrid_search = safe_get(req, 'hybrid_search', False)
+        hybrid_search = str2bool(hybrid_search)
         chunk_size = safe_get(req, 'chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
+        try:
+            chunk_size = int(chunk_size)
+        except (ValueError, TypeError):
+            pass
 
     debug_logger.info('rerank %s', rerank)
 
@@ -789,124 +821,82 @@ async def local_doc_chat(req: request):
 
         async def generate_answer(response):
             debug_logger.info("start generate...")
-            try:
-                async for resp, next_history in local_doc_qa.get_knowledge_based_answer(model=model,
-                                                                                        max_token=max_token,
-                                                                                        kb_ids=kb_ids,
-                                                                                        query=question,
-                                                                                        retriever=local_doc_qa.retriever,
-                                                                                        chat_history=history,
-                                                                                        streaming=True,
-                                                                                        rerank=rerank,
-                                                                                        custom_prompt=custom_prompt,
-                                                                                        time_record=time_record,
-                                                                                        need_web_search=need_web_search,
-                                                                                        hybrid_search=hybrid_search,
-                                                                                        web_chunk_size=chunk_size,
-                                                                                        temperature=temperature,
-                                                                                        api_base=api_base,
-                                                                                        api_key=api_key,
-                                                                                        api_context_length=api_context_length,
-                                                                                        top_p=top_p,
-                                                                                        top_k=top_k
-                                                                                        ):
-                    chunk_data = resp["result"]
-                    if not chunk_data:
-                        continue
-                    chunk_str = chunk_data[6:]
-                    if chunk_str.startswith("[DONE]"):
-                        retrieval_documents = format_source_documents(resp["retrieval_documents"])
-                        source_documents = format_source_documents(resp["source_documents"])
-                        result = next_history[-1][1]
-                        time_record['chat_completed'] = round(time.perf_counter() - preprocess_start, 2)
-                        if time_record.get('llm_completed', 0) > 0:
-                            time_record['tokens_per_second'] = round(
-                                len(result) / time_record['llm_completed'], 2)
-                        formatted_time_record = format_time_record(time_record)
-                        chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, "model": model,
-                                     "product_source": request_source, 'time_record': formatted_time_record,
-                                     'history': history,
-                                     'condense_question': resp['condense_question'], 'prompt': resp['prompt'],
-                                     'result': result, 'retrieval_documents': retrieval_documents,
-                                     'source_documents': source_documents, 'bot_id': bot_id}
-                        local_doc_qa.milvus_summary.add_qalog(**chat_data)
-                        qa_logger.info("chat_data: %s", chat_data)
-                        debug_logger.info("response: %s", chat_data['result'])
-                        final_data = {
-                            "code": 200,
-                            "msg": "success",
-                            "response": result,
-                            "question": question,
-                            "model": model,
-                            "history": next_history,
-                            "condense_question": resp['condense_question'],
-                            "source_documents": source_documents,
-                            "retrieval_documents": retrieval_documents,
-                            "time_record": formatted_time_record,
-                            "show_images": resp.get('show_images', [])
-                        }
-                        stream_res = {
-                            "event": "final",
-                            "data": final_data,
-                            "version": 2,
-                            "code": 200,
-                            "msg": "success",
-                            "response": result,
-                            "question": question,
-                            "source_documents": source_documents,
-                            "retrieval_documents": retrieval_documents,
-                            "time_record": formatted_time_record,
-                            "show_images": resp.get('show_images', [])
-                        }
-                        await response.write(f"data: {json.dumps(stream_res, ensure_ascii=False)}\n\n")
-                        done_res = {"event": "done", "data": {}, "version": 2}
-                        await response.write(f"data: {json.dumps(done_res, ensure_ascii=False)}\n\n")
-                        await response.write("data: [DONE]\n\n")
-                        await response.eof()
-                    else:
-                        time_record['rollback_length'] = resp.get('rollback_length', 0)
-                        if 'first_return' not in time_record:
-                            time_record['first_return'] = round(time.perf_counter() - preprocess_start, 2)
-                        chunk_js = json.loads(chunk_str)
-                        delta_answer = chunk_js["answer"]
-                        delta_time_record = format_time_record(time_record)
-                        delta_data = {
-                            "code": 200,
-                            "msg": "success",
-                            "response": delta_answer,
-                            "time_record": delta_time_record,
-                        }
-                        stream_res = {
-                            "event": "delta",
-                            "data": delta_data,
-                            "version": 2,
-                            "code": 200,
-                            "msg": "success",
-                            "response": delta_answer,
-                            "time_record": delta_time_record,
-                        }
-                        await response.write(f"data: {json.dumps(stream_res, ensure_ascii=False)}\n\n")
-                    await asyncio.sleep(0.001)
-            except Exception as e:
-                debug_logger.error(f"stream chat error: {e}")
-                import traceback
-                debug_logger.error(traceback.format_exc())
-                error_data = {
-                    "code": 500,
-                    "msg": str(e)
-                }
-                error_res = {
-                    "event": "error",
-                    "data": error_data,
-                    "version": 2,
-                    "code": 500,
-                    "msg": str(e),
-                }
-                await response.write(f"data: {json.dumps(error_res, ensure_ascii=False)}\n\n")
-                done_res = {"event": "done", "data": {}, "version": 2}
-                await response.write(f"data: {json.dumps(done_res, ensure_ascii=False)}\n\n")
-                await response.write("data: [DONE]\n\n")
-                await response.eof()
+            async for resp, next_history in local_doc_qa.get_knowledge_based_answer(model=model,
+                                                                                    max_token=max_token,
+                                                                                    kb_ids=kb_ids,
+                                                                                    query=question,
+                                                                                    retriever=local_doc_qa.retriever,
+                                                                                    chat_history=history,
+                                                                                    streaming=True,
+                                                                                    rerank=rerank,
+                                                                                    custom_prompt=custom_prompt,
+                                                                                    time_record=time_record,
+                                                                                    need_web_search=need_web_search,
+                                                                                    hybrid_search=hybrid_search,
+                                                                                    web_chunk_size=chunk_size,
+                                                                                    temperature=temperature,
+                                                                                    api_base=api_base,
+                                                                                    api_key=api_key,
+                                                                                    api_context_length=api_context_length,
+                                                                                    top_p=top_p,
+                                                                                    top_k=top_k
+                                                                                    ):
+                chunk_data = resp["result"]
+                if not chunk_data:
+                    continue
+                chunk_str = chunk_data[6:]
+                if chunk_str.startswith("[DONE]"):
+                    retrieval_documents = format_source_documents(resp["retrieval_documents"])
+                    source_documents = format_source_documents(resp["source_documents"])
+                    result = next_history[-1][1]
+                    # result = resp['result']
+                    time_record['chat_completed'] = round(time.perf_counter() - preprocess_start, 2)
+                    if time_record.get('llm_completed', 0) > 0:
+                        time_record['tokens_per_second'] = round(
+                            len(result) / time_record['llm_completed'], 2)
+                    formatted_time_record = format_time_record(time_record)
+                    chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, "model": model,
+                                 "product_source": request_source, 'time_record': formatted_time_record,
+                                 'history': history,
+                                 'condense_question': resp['condense_question'], 'prompt': resp['prompt'],
+                                 'result': result, 'retrieval_documents': retrieval_documents,
+                                 'source_documents': source_documents, 'bot_id': bot_id}
+                    local_doc_qa.milvus_summary.add_qalog(**chat_data)
+                    qa_logger.info("chat_data: %s", chat_data)
+                    debug_logger.info("response: %s", chat_data['result'])
+                    stream_res = {
+                        "code": 200,
+                        "msg": "success stream chat",
+                        "question": question,
+                        "response": result,
+                        "model": model,
+                        "history": next_history,
+                        "condense_question": resp['condense_question'],
+                        "source_documents": source_documents,
+                        "retrieval_documents": retrieval_documents,
+                        "time_record": formatted_time_record,
+                        "show_images": resp.get('show_images', [])
+                    }
+                else:
+                    time_record['rollback_length'] = resp.get('rollback_length', 0)
+                    if 'first_return' not in time_record:
+                        time_record['first_return'] = round(time.perf_counter() - preprocess_start, 2)
+                    chunk_js = json.loads(chunk_str)
+                    delta_answer = chunk_js["answer"]
+                    stream_res = {
+                        "code": 200,
+                        "msg": "success",
+                        "question": "",
+                        "response": delta_answer,
+                        "history": [],
+                        "source_documents": [],
+                        "retrieval_documents": [],
+                        "time_record": format_time_record(time_record),
+                    }
+                await response.write(f"data: {json.dumps(stream_res, ensure_ascii=False)}\n\n")
+                if chunk_str.startswith("[DONE]"):
+                    await response.eof()
+                await asyncio.sleep(0.001)
 
         response_stream = ResponseStream(generate_answer, content_type='text/event-stream')
         return response_stream
@@ -1296,7 +1286,7 @@ async def get_bot_info(req: request):
     user_id = user_id + '__' + user_info
     bot_id = safe_get(req, 'bot_id')
     if bot_id:
-        if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id):
+        if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id, user_id):
             return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
     debug_logger.info("get_bot_info %s", user_id)
     bot_infos = local_doc_qa.milvus_summary.get_bot(user_id, bot_id)
@@ -1314,10 +1304,14 @@ async def get_bot_info(req: request):
         else:
             kb_ids = []
             kb_names = []
+        llm_setting = bot_info[9]
+        if llm_setting:
+            llm_setting = json.loads(llm_setting)
+            llm_setting = normalize_llm_setting(llm_setting)
         info = {"bot_id": bot_info[0], "user_id": user_id, "bot_name": bot_info[1], "description": bot_info[2],
                 "head_image": bot_info[3], "prompt_setting": bot_info[4], "welcome_message": bot_info[5],
                 "kb_ids": kb_ids, "kb_names": kb_names,
-                "update_time": bot_info[7].strftime("%Y-%m-%d %H:%M:%S"), "llm_setting": bot_info[9]}
+                "update_time": bot_info[7].strftime("%Y-%m-%d %H:%M:%S"), "llm_setting": llm_setting}
         data.append(info)
     return sanic_json({"code": 200, "msg": "success", "data": data})
 
@@ -1345,8 +1339,23 @@ async def new_bot(req: request):
         return sanic_json({"code": 2001, "msg": msg, "data": [{}]})
     debug_logger.info("new_bot %s", user_id)
     bot_id = 'BOT' + uuid.uuid4().hex
+    default_llm_setting = {
+        "api_key": "ollama",
+        "api_base": "",
+        "model": "gpt-4o-mini",
+        "api_context_length": 4096,
+        "max_token": None,
+        "chunk_size": DEFAULT_PARENT_CHUNK_SIZE,
+        "temperature": 0.5,
+        "top_k": VECTOR_SEARCH_TOP_K,
+        "top_p": 0.99,
+        "rerank": True,
+        "hybrid_search": False,
+        "networking": False,
+        "only_need_search_results": False,
+    }
     local_doc_qa.milvus_summary.new_qanything_bot(bot_id, user_id, bot_name, desc, head_image, prompt_setting,
-                                                  welcome_message, kb_ids_str)
+                                                  welcome_message, kb_ids_str, default_llm_setting)
     create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return sanic_json({"code": 200, "msg": "success create qanything bot {}".format(bot_id),
                        "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time}})
@@ -1363,7 +1372,7 @@ async def delete_bot(req: request):
     user_id = user_id + '__' + user_info
     debug_logger.info("delete_bot %s", user_id)
     bot_id = safe_get(req, 'bot_id')
-    if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id):
+    if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id, user_id):
         return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
     local_doc_qa.milvus_summary.delete_bot(user_id, bot_id)
     return sanic_json({"code": 200, "msg": "Bot {} delete success".format(bot_id)})
@@ -1380,7 +1389,7 @@ async def update_bot(req: request):
     user_id = user_id + '__' + user_info
     debug_logger.info("update_bot %s", user_id)
     bot_id = safe_get(req, 'bot_id')
-    if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id):
+    if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id, user_id):
         return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
     bot_info = local_doc_qa.milvus_summary.get_bot(user_id, bot_id)[0]
     bot_name = safe_get(req, "bot_name", bot_info[1])
@@ -1399,38 +1408,48 @@ async def update_bot(req: request):
         kb_ids_str = bot_info[6]
 
     llm_setting = json.loads(bot_info[9])
+    llm_setting = normalize_llm_setting(llm_setting)
+
     if api_base := safe_get(req, "api_base"):
         llm_setting["api_base"] = api_base
     if api_key := safe_get(req, "api_key"):
         llm_setting["api_key"] = api_key
-    if api_context_length := safe_get(req, "api_context_length"):
+
+    api_context_length = safe_get(req, "api_context_length")
+    if api_context_length is not None and api_context_length != "":
         llm_setting["api_context_length"] = api_context_length
-    if top_p := safe_get(req, "top_p"):
+    top_p = safe_get(req, "top_p")
+    if top_p is not None and top_p != "":
         llm_setting["top_p"] = top_p
-    if top_k := safe_get(req, "top_k"):
+    top_k = safe_get(req, "top_k")
+    if top_k is not None and top_k != "":
         llm_setting["top_k"] = top_k
-    if chunk_size := safe_get(req, "chunk_size"):
+    chunk_size = safe_get(req, "chunk_size")
+    if chunk_size is not None and chunk_size != "":
         llm_setting["chunk_size"] = chunk_size
-    if temperature := safe_get(req, "temperature"):
+    temperature = safe_get(req, "temperature")
+    if temperature is not None and temperature != "":
         llm_setting["temperature"] = temperature
     if model := safe_get(req, "model"):
         llm_setting["model"] = model
-    if max_token := safe_get(req, "max_token"):
+    max_token = safe_get(req, "max_token")
+    if max_token is not None and max_token != "":
         llm_setting["max_token"] = max_token
-    # 如果rerank不是None，赋值，false也可以
+
     rerank = safe_get(req, "rerank")
-    if rerank is not None:
+    if rerank is not None and rerank != "":
         llm_setting["rerank"] = rerank
     hybrid_search = safe_get(req, "hybrid_search")
-    if hybrid_search is not None:
+    if hybrid_search is not None and hybrid_search != "":
         llm_setting["hybrid_search"] = hybrid_search
     networking = safe_get(req, "networking")
-    if networking is not None:
+    if networking is not None and networking != "":
         llm_setting["networking"] = networking
     only_need_search_results = safe_get(req, "only_need_search_results")
-    if only_need_search_results is not None:
+    if only_need_search_results is not None and only_need_search_results != "":
         llm_setting["only_need_search_results"] = only_need_search_results
 
+    llm_setting = normalize_llm_setting(llm_setting)
     debug_logger.info(f"update llm_setting: {llm_setting}")
 
     # 判断哪些项修改了

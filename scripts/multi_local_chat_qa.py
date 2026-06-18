@@ -12,7 +12,6 @@ import pandas as pd
 from tqdm import tqdm
 import random
 import threading
-from sse_client import stream_chat_request
 
 lock = threading.Lock()
 
@@ -97,9 +96,11 @@ def test_stream():
         "rerank": True,
         "history": []
     }
-    url = "http://0.0.0.0:8777/api/local_doc_qa/local_doc_chat"
-    for parsed in stream_chat_request(url, data_raw):
-        print(parsed)
+    for i, chunk in enumerate(stream_requests(data_raw)):
+        if chunk:
+            chunkstr = chunk.decode("utf-8")[6:]
+            chunkjs = json.loads(chunkstr)
+            print(chunkjs)
 
 def test():
     data_raw = {

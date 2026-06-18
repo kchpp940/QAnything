@@ -224,8 +224,8 @@ import { IChatItem, IChatSetting, MakePartial } from '@/utils/types';
 import { useThrottleFn, useClipboard } from '@vueuse/core';
 import { message } from 'ant-design-vue';
 import SvgIcon from '../SvgIcon.vue';
+import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { useBotsChat } from '@/store/useBotsChat';
-import { createSseMessageHandler, startSseChat, ISseFinalData } from '@/utils/sseChat';
 import { useChat } from '@/store/useChat';
 import { useChatSource } from '@/store/useChatSource';
 import { Typewriter } from '@/utils/typewriter';
@@ -328,7 +328,6 @@ const showSourceIdxs = ref([]);
 
 //取消请求用
 let ctrl: AbortController;
-let sseHandler: any = null;
 
 const chatContainer = ref(null);
 
@@ -408,9 +407,6 @@ const addAnswer = (question: string) => {
 const chatInfoClass = new ChatInfoClass<ShareSettingType>();
 
 const stopChat = () => {
-  if (sseHandler) {
-    sseHandler.setUserStopped(true);
-  }
   if (ctrl) {
     ctrl.abort('停止对话');
   }
@@ -531,77 +527,81 @@ const send = async () => {
       scrollBottom();
     });
   } else {
-    chatInfoClass.addChatSetting(chatSettingFormActive.value);
-    addAnswer(q);
-
-    sseHandler = createSseMessageHandler({
-      typewriter,
-      chatInfoClass,
-      onFinal(data: ISseFinalData) {
-        if (data?.source_documents?.length) {
-          QA_List.value[QA_List.value.length - 1].source = data.source_documents;
-        }
-        if (data?.show_images?.length) {
-          if (!QA_List.value[QA_List.value.length - 1].picList) {
-            QA_List.value[QA_List.value.length - 1].picList = [];
-          }
-          data.show_images.forEach(item => {
-            typewriter.add(item);
-          });
-        }
-        scrollBottom();
+    fetchEventSource(apiBase + '/local_doc_qa/local_doc_chat', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: ['text/event-stream', 'application/json'],
       },
-      onDone() {
-        typewriter.done();
-        ctrl.abort();
-        showLoading.value = false;
-        if (QA_List.value.length) {
-          const lastItem = QA_List.value[QA_List.value.length - 1];
-          lastItem.showTools = true;
-          if (sseHandler.getHasFinal()) {
-            lastItem.itemInfo = chatInfoClass.getChatInfo();
-          }
-        }
-        nextTick(() => {
-          scrollBottom();
-        });
-      },
-      onError(data) {
-        typewriter.done();
-        ctrl.abort();
-        showLoading.value = false;
-        if (QA_List.value.length) {
-          QA_List.value[QA_List.value.length - 1].showTools = true;
-        }
-        nextTick(() => {
-          scrollBottom();
-        });
-      },
-      onClose() {
-        if (showLoading.value) {
-          typewriter.done();
-          ctrl.abort();
-          showLoading.value = false;
-          if (QA_List.value.length) {
-            QA_List.value[QA_List.value.length - 1].showTools = true;
-            if (sseHandler.getHasFinal()) {
-              QA_List.value[QA_List.value.length - 1].itemInfo = chatInfoClass.getChatInfo();
-            }
-          }
-          nextTick(() => {
-            scrollBottom();
-          });
-        }
-      },
-    });
-
-    startSseChat({
-      url: apiBase + '/local_doc_qa/local_doc_chat',
-      body: {
+      openWhenHidden: true,
+      body: JSON.stringify({
         ...sendData,
-      },
+      }),
       signal: ctrl.signal,
-      handler: sseHandler,
+      onopen(e: any) {
+        console.log('open', e);
+        addAnswer(q);
+        if (e.ok && e.headers.get('content-type') === 'text/event-stream') {
+          // 模型配置添加进去
+          chatInfoClass.addChatSetting(chatSettingFormActive.value);
+          typewriter.start();
+        } else if (e.headers.get('content-type') === 'application/json') {
+          typewriter.add('Error 请检查模型是否配置正确');
+        }
+      },
+      onmessage(msg: { data: string }) {
+        console.log('message', msg);
+        const res: any = JSON.parse(msg.data);
+        if (res?.code == 200 && res?.response && res.msg === 'success') {
+          // 中间的回答
+          // QA_List.value[QA_List.value.length - 1].answer += res.result.response;
+          // typewriter.add(res?.response.replaceAll('\n', '<br/>'));
+          typewriter.add(res?.response);
+          scrollBottom();
+        } else {
+          // 最后一次回答
+          const timeObj = res.time_record.time_usage;
+          delete timeObj['retriever_search_by_milvus'];
+          chatInfoClass.addTime(res.time_record.time_usage);
+          chatInfoClass.addToken(res.time_record.token_usage);
+          chatInfoClass.addDate(Date.now());
+        }
+
+        if (res?.source_documents?.length) {
+          QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+        }
+
+        if (res?.show_images?.length) {
+          res?.show_images.map(item => {
+            typewriter.add(item);
+            console.log(QA_List.value.at(-1).answer);
+          });
+        }
+      },
+      onclose(e: any) {
+        console.log('close', e);
+        typewriter.done();
+        ctrl.abort();
+        showLoading.value = false;
+        QA_List.value[QA_List.value.length - 1].showTools = true;
+        // 将chat info添加进回答中
+        QA_List.value.at(-1).itemInfo = chatInfoClass.getChatInfo();
+        nextTick(() => {
+          scrollBottom();
+        });
+      },
+      onerror(err: any) {
+        console.log('error', err);
+        typewriter?.done();
+        ctrl?.abort();
+        showLoading.value = false;
+        QA_List.value[QA_List.value.length - 1].showTools = true;
+        message.error(err.msg || '出错了');
+        nextTick(() => {
+          scrollBottom();
+        });
+        throw err;
+      },
     });
   }
 };

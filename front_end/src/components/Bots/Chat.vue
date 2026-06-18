@@ -221,8 +221,8 @@ import { IChatItem } from '@/utils/types';
 import { useClipboard } from '@vueuse/core';
 import { message } from 'ant-design-vue';
 import SvgIcon from '../SvgIcon.vue';
+import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { useBotsChat } from '@/store/useBotsChat';
-import { createSseMessageHandler, startSseChat, ISseFinalData } from '@/utils/sseChat';
 import { useChat } from '@/store/useChat';
 import { useChatSource } from '@/store/useChatSource';
 import { Typewriter } from '@/utils/typewriter';
@@ -284,7 +284,6 @@ const showSourceIdxs = ref([]);
 
 //取消请求用
 let ctrl: AbortController;
-let sseHandler: any = null;
 
 const scrollDom = ref(null);
 const stopBtn = ref(null);
@@ -353,9 +352,6 @@ const addAnswer = (question: string) => {
 const chatInfoClass = new ChatInfoClass();
 
 const stopChat = () => {
-  if (sseHandler) {
-    sseHandler.setUserStopped(true);
-  }
   if (ctrl) {
     ctrl.abort();
   }
@@ -421,75 +417,99 @@ const send = async () => {
   scrollDom.value?.scrollIntoView(true);
   ctrl = new AbortController();
 
-  chatInfoClass.addChatSetting(chatSettingFormActive.value);
-  addAnswer(q);
+  const headers = {
+    'Content-Type': 'application/json',
+    Accept: ['text/event-stream', 'application/json'],
+    'Transfer-Encoding': 'chunked',
+    Connection: 'keep-alive',
+  };
 
-  sseHandler = createSseMessageHandler({
-    typewriter,
-    chatInfoClass,
-    onFinal(data: ISseFinalData) {
-      if (data?.source_documents?.length) {
-        QA_List.value[QA_List.value.length - 1].source = data.source_documents;
-      }
-      scrollBottom();
-    },
-    onDone() {
-      typewriter.done();
-      ctrl.abort();
-      showLoading.value = false;
-      if (QA_List.value.length) {
-        const lastItem = QA_List.value[QA_List.value.length - 1];
-        lastItem.showTools = true;
-        if (sseHandler.getHasFinal()) {
-          lastItem.itemInfo = chatInfoClass.getChatInfo();
-        }
-      }
-      nextTick(() => {
-        scrollBottom();
-      });
-    },
-    onError(data) {
-      typewriter.done();
-      ctrl.abort();
-      showLoading.value = false;
-      if (QA_List.value.length) {
-        QA_List.value[QA_List.value.length - 1].showTools = true;
-      }
-      nextTick(() => {
-        scrollBottom();
-      });
-    },
-    onClose() {
-      if (showLoading.value) {
-        typewriter.done();
-        ctrl.abort();
-        showLoading.value = false;
-        if (QA_List.value.length) {
-          QA_List.value[QA_List.value.length - 1].showTools = true;
-          if (sseHandler.getHasFinal()) {
-            QA_List.value[QA_List.value.length - 1].itemInfo = chatInfoClass.getChatInfo();
-          }
-        }
-        nextTick(() => {
-          scrollBottom();
-        });
-      }
-    },
-  });
-
-  startSseChat({
-    url: apiBase + '/local_doc_qa/local_doc_chat',
-    body: {
+  fetchEventSource(apiBase + '/local_doc_qa/local_doc_chat', {
+    method: 'POST',
+    headers: headers,
+    openWhenHidden: true,
+    body: JSON.stringify({
       user_id: userId,
       user_info: userPhone,
       bot_id: props.botInfo.bot_id,
       history: history.value,
       question: q,
       streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
+      // networking: chatSettingFormActive.value.capabilities.networkSearch,
       product_source: 'saas',
-    },
+      // rerank: chatSettingFormActive.value.capabilities.rerank,
+      // only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
+      // hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
+      // max_token: chatSettingFormActive.value.maxToken,
+      // api_base: chatSettingFormActive.value.apiBase,
+      // api_key: chatSettingFormActive.value.apiKey,
+      // model: chatSettingFormActive.value.apiModelName,
+      // api_context_length: chatSettingFormActive.value.apiContextLength,
+      // chunk_size: chatSettingFormActive.value.chunkSize,
+      // top_p: chatSettingFormActive.value.top_P,
+      // top_k: chatSettingFormActive.value.top_K,
+      // temperature: chatSettingFormActive.value.temperature,
+    }),
     signal: ctrl.signal,
-    handler: sseHandler,
+    onopen(e: any) {
+      console.log('open', e);
+      addAnswer(q);
+      if (e.ok && e.headers.get('content-type') === 'text/event-stream') {
+        // 模型配置添加进去
+        chatInfoClass.addChatSetting(chatSettingFormActive.value);
+        typewriter.start();
+      } else if (e.headers.get('content-type') === 'application/json') {
+        typewriter.add('Error 请检查模型是否配置正确');
+      }
+    },
+    onmessage(msg: { data: string }) {
+      console.log('message');
+      const res: any = JSON.parse(msg.data);
+      console.log(res);
+      if (res?.code == 200 && res?.response && res.msg === 'success') {
+        // QA_List.value[QA_List.value.length - 1].answer += res.result.response;
+        typewriter.add(res?.response.replaceAll('\n', '<br/>'));
+        scrollBottom();
+      } else {
+        const timeObj = res.time_record.time_usage;
+        delete timeObj['retriever_search_by_milvus'];
+        chatInfoClass.addTime(res.time_record.time_usage);
+        chatInfoClass.addToken(res.time_record.token_usage);
+        chatInfoClass.addDate(Date.now());
+      }
+
+      if (res?.source_documents?.length) {
+        QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+      }
+
+      // if (res?.history.length) {
+      //   history.value = res?.history;
+      // }
+    },
+    onclose(e: any) {
+      console.log('close', e);
+      typewriter.done();
+      ctrl.abort();
+      showLoading.value = false;
+      QA_List.value[QA_List.value.length - 1].showTools = true;
+      // 将chat info添加进回答中
+      QA_List.value.at(-1).itemInfo = chatInfoClass.getChatInfo();
+      nextTick(() => {
+        scrollBottom();
+      });
+    },
+    onerror(err: any) {
+      console.log('error', err);
+      typewriter.done();
+      ctrl.abort();
+      showLoading.value = false;
+      QA_List.value[QA_List.value.length - 1].showTools = true;
+
+      nextTick(() => {
+        scrollBottom();
+      });
+      throw err;
+    },
   });
 };
 
