@@ -479,7 +479,7 @@ async def delete_knowledge_base(req: request):
     for kb_id in kb_ids:
         file_infos = local_doc_qa.milvus_summary.get_files(user_id, kb_id)
         file_ids = [file_info[0] for file_info in file_infos]
-        file_chunks = [file_info[8] for file_info in file_infos]
+        file_chunks = [file_info[8] if file_info[8] > 0 else 0 for file_info in file_infos]
         asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files, file_ids, file_chunks))
         local_doc_qa.milvus_summary.delete_documents(file_ids)
         local_doc_qa.milvus_summary.delete_faqs(file_ids)
@@ -546,6 +546,7 @@ async def delete_docs(req: request):
     asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
     # local_doc_qa.milvus_kb.delete_expr(expr)
     file_chunks = local_doc_qa.milvus_summary.get_chunks_number(valid_file_ids)
+    file_chunks = [c if c > 0 else 0 for c in file_chunks]
     asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files, valid_file_ids, file_chunks))
 
     local_doc_qa.milvus_summary.delete_files(kb_id, valid_file_ids)
@@ -627,20 +628,22 @@ async def clean_files_by_status(req: request):
         if not_exist_kb_ids:
             return sanic_json({"code": 2003, "msg": "fail, knowledge Base {} not found".format(not_exist_kb_ids)})
 
-    gray_file_infos = local_doc_qa.milvus_summary.get_file_by_status(kb_ids, status)
-    gray_file_ids = [f[0] for f in gray_file_infos]
-    gray_file_names = [f[1] for f in gray_file_infos]
-    debug_logger.info(f'{status} files number: {len(gray_file_names)}')
-    if gray_file_ids:
-        if status == 'red':
+    file_infos = local_doc_qa.milvus_summary.get_file_by_status(kb_ids, status)
+    file_ids = [f[0] for f in file_infos]
+    file_names = [f[1] for f in file_infos]
+    file_chunks = [f[2] for f in file_infos]
+    debug_logger.info(f'{status} files number: {len(file_names)}')
+    if file_ids:
+        if status in ('red', 'yellow'):
             for kb_id in kb_ids:
-                expr = f"""kb_id == "{kb_id}" and file_id in {gray_file_ids}"""
+                expr = f"""kb_id == "{kb_id}" and file_id in {file_ids}"""
                 asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
-            file_chunks = local_doc_qa.milvus_summary.get_chunks_number(gray_file_ids)
-            asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files, gray_file_ids, file_chunks))
+            valid_chunks = [c if c > 0 else 0 for c in file_chunks]
+            asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files, file_ids, valid_chunks))
+            local_doc_qa.milvus_summary.delete_documents(file_ids)
         for kb_id in kb_ids:
-            local_doc_qa.milvus_summary.delete_files(kb_id, gray_file_ids)
-    return sanic_json({"code": 200, "msg": f"delete {status} files success", "data": gray_file_names})
+            local_doc_qa.milvus_summary.delete_files(kb_id, file_ids)
+    return sanic_json({"code": 200, "msg": f"delete {status} files success", "data": file_names})
 
 
 @get_time_async

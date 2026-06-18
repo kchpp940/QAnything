@@ -326,7 +326,7 @@ class KnowledgeBaseManager:
 
     def get_file_by_status(self, kb_ids, status):
         kb_ids_str = ','.join("'{}'".format(str(x)) for x in kb_ids)
-        query = "SELECT file_id, file_name FROM File WHERE kb_id IN ({}) AND deleted = 0 AND status = %s".format(
+        query = "SELECT file_id, file_name, chunks_number FROM File WHERE kb_id IN ({}) AND deleted = 0 AND status = %s".format(
             kb_ids_str)
         result = self.execute_query_(query, (status,), fetch=True)
         return result
