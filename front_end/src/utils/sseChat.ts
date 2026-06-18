@@ -27,9 +27,80 @@ export interface ISseErrorData {
   msg: string;
 }
 
-export interface ISseMessage {
+export interface IParsedSseMessage {
   event: SseEventType;
   data: any;
+  isLegacy: boolean;
+}
+
+export function parseSseMessage(rawData: string): IParsedSseMessage | null {
+  const trimmed = rawData.trim();
+
+  if (!trimmed) {
+    return null;
+  }
+
+  if (trimmed === '[DONE]') {
+    return { event: 'done', data: {}, isLegacy: true };
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+
+    if (parsed && typeof parsed === 'object' && 'event' in parsed && 'data' in parsed) {
+      const event = parsed.event as SseEventType;
+      if (['delta', 'final', 'error', 'done'].includes(event)) {
+        return { event, data: parsed.data || {}, isLegacy: false };
+      }
+    }
+
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.code && parsed.code !== 200 && parsed.msg) {
+        return {
+          event: 'error',
+          data: { code: parsed.code, msg: parsed.msg },
+          isLegacy: true,
+        };
+      }
+
+      const hasTimeUsage = !!(parsed.time_record && parsed.time_record.time_usage);
+      const isDeltaShape = parsed.code === 200 && parsed.msg === 'success' && parsed.response !== undefined;
+
+      if (isDeltaShape && !hasTimeUsage) {
+        return {
+          event: 'delta',
+          data: {
+            response: parsed.response,
+            time_record: parsed.time_record,
+          },
+          isLegacy: true,
+        };
+      }
+
+      if (parsed.response !== undefined || hasTimeUsage) {
+        return {
+          event: 'final',
+          data: {
+            response: parsed.response ?? '',
+            question: parsed.question,
+            model: parsed.model,
+            history: parsed.history,
+            condense_question: parsed.condense_question,
+            source_documents: parsed.source_documents,
+            retrieval_documents: parsed.retrieval_documents,
+            time_record: parsed.time_record,
+            show_images: parsed.show_images,
+          },
+          isLegacy: true,
+        };
+      }
+    }
+
+    return null;
+  } catch (e) {
+    console.error('SSE message parse error:', e, rawData);
+    return null;
+  }
 }
 
 export interface ISseChatHandlerOptions {
@@ -57,6 +128,7 @@ export function createSseMessageHandler(options: ISseChatHandlerOptions) {
 
   let hasFinal = false;
   let isUserStopped = false;
+  let legacyDoneEmitted = false;
 
   const handleOpen = (e: any) => {
     if (e.ok && e.headers.get('content-type') === 'text/event-stream') {
@@ -70,55 +142,61 @@ export function createSseMessageHandler(options: ISseChatHandlerOptions) {
   };
 
   const handleMessage = (msg: { data: string }) => {
-    try {
-      const res: ISseMessage = JSON.parse(msg.data);
-      const { event, data } = res;
+    const parsed = parseSseMessage(msg.data);
+    if (!parsed) {
+      return;
+    }
 
-      switch (event) {
-        case 'delta':
-          if (data?.response) {
-            typewriter.add(data.response);
-          }
-          if (onDelta) {
-            onDelta(data as ISseDeltaData);
-          }
-          break;
+    const { event, data } = parsed;
 
-        case 'final':
-          hasFinal = true;
-          if (data?.time_record?.time_usage) {
-            const timeObj = { ...data.time_record.time_usage };
-            delete timeObj['retriever_search_by_milvus'];
-            chatInfoClass.addTime(timeObj);
-          }
-          if (data?.time_record?.token_usage) {
-            chatInfoClass.addToken(data.time_record.token_usage);
-          }
-          chatInfoClass.addDate(Date.now());
-          if (onFinal) {
-            onFinal(data as ISseFinalData);
-          }
-          break;
+    switch (event) {
+      case 'delta':
+        if (data?.response) {
+          typewriter.add(data.response);
+        }
+        if (onDelta) {
+          onDelta(data as ISseDeltaData);
+        }
+        break;
 
-        case 'error':
-          const errorMsg = data?.msg || '未知错误';
-          message.error(errorMsg);
-          if (onError) {
-            onError(data as ISseErrorData);
-          }
-          break;
+      case 'final':
+        hasFinal = true;
+        if (data?.time_record?.time_usage) {
+          const timeObj = { ...data.time_record.time_usage };
+          delete timeObj['retriever_search_by_milvus'];
+          chatInfoClass.addTime(timeObj);
+        }
+        if (data?.time_record?.token_usage) {
+          chatInfoClass.addToken(data.time_record.token_usage);
+        }
+        chatInfoClass.addDate(Date.now());
+        if (onFinal) {
+          onFinal(data as ISseFinalData);
+        }
+        break;
 
-        case 'done':
-          if (onDone) {
-            onDone();
-          }
-          break;
+      case 'error':
+        const errorMsg = data?.msg || '未知错误';
+        message.error(errorMsg);
+        if (onError) {
+          onError(data as ISseErrorData);
+        }
+        break;
 
-        default:
-          break;
-      }
-    } catch (e) {
-      console.error('SSE message parse error:', e, msg.data);
+      case 'done':
+        if (parsed.isLegacy) {
+          if (legacyDoneEmitted) {
+            return;
+          }
+          legacyDoneEmitted = true;
+        }
+        if (onDone) {
+          onDone();
+        }
+        break;
+
+      default:
+        break;
     }
   };
 

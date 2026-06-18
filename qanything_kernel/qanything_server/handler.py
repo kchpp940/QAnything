@@ -833,6 +833,8 @@ async def local_doc_chat(req: request):
                         qa_logger.info("chat_data: %s", chat_data)
                         debug_logger.info("response: %s", chat_data['result'])
                         final_data = {
+                            "code": 200,
+                            "msg": "success",
                             "response": result,
                             "question": question,
                             "model": model,
@@ -843,10 +845,11 @@ async def local_doc_chat(req: request):
                             "time_record": formatted_time_record,
                             "show_images": resp.get('show_images', [])
                         }
-                        stream_res = {"event": "final", "data": final_data}
+                        stream_res = {"event": "final", "data": final_data, "version": 2}
                         await response.write(f"data: {json.dumps(stream_res, ensure_ascii=False)}\n\n")
-                        done_res = {"event": "done", "data": {}}
+                        done_res = {"event": "done", "data": {}, "version": 2}
                         await response.write(f"data: {json.dumps(done_res, ensure_ascii=False)}\n\n")
+                        await response.write("data: [DONE]\n\n")
                         await response.eof()
                     else:
                         time_record['rollback_length'] = resp.get('rollback_length', 0)
@@ -855,10 +858,12 @@ async def local_doc_chat(req: request):
                         chunk_js = json.loads(chunk_str)
                         delta_answer = chunk_js["answer"]
                         delta_data = {
+                            "code": 200,
+                            "msg": "success",
                             "response": delta_answer,
                             "time_record": format_time_record(time_record),
                         }
-                        stream_res = {"event": "delta", "data": delta_data}
+                        stream_res = {"event": "delta", "data": delta_data, "version": 2}
                         await response.write(f"data: {json.dumps(stream_res, ensure_ascii=False)}\n\n")
                     await asyncio.sleep(0.001)
             except Exception as e:
@@ -869,10 +874,11 @@ async def local_doc_chat(req: request):
                     "code": 500,
                     "msg": str(e)
                 }
-                error_res = {"event": "error", "data": error_data}
+                error_res = {"event": "error", "data": error_data, "version": 2}
                 await response.write(f"data: {json.dumps(error_res, ensure_ascii=False)}\n\n")
-                done_res = {"event": "done", "data": {}}
+                done_res = {"event": "done", "data": {}, "version": 2}
                 await response.write(f"data: {json.dumps(done_res, ensure_ascii=False)}\n\n")
+                await response.write(f"data: {json.dumps(error_data, ensure_ascii=False)}\n\n")
                 await response.eof()
 
         response_stream = ResponseStream(generate_answer, content_type='text/event-stream')
