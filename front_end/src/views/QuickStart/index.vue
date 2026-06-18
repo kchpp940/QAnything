@@ -257,7 +257,7 @@ import { apiBase } from '@/services';
 import urlResquest, { userId, userPhone } from '@/services/urlConfig';
 import { useChat } from '@/store/useChat';
 import html2canvas from 'html2canvas';
-import { ChatInfoClass, formatTimestamp, resultControl } from '@/utils/utils';
+import { ChatInfoClass, formatTimestamp, resultControl, parseBool, parseInt_, parseFloat_ } from '@/utils/utils';
 import { useChatSource } from '@/store/useChatSource';
 import { useLanguage } from '@/store/useLanguage';
 import { useQuickStart } from '@/store/useQuickStart';
@@ -523,21 +523,23 @@ const send = async () => {
     kb_ids: [kbId.value],
     history: history.value,
     question: q,
-    streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
-    networking: chatSettingFormActive.value.capabilities.networkSearch,
+    streaming: parseBool(chatSettingFormActive.value.capabilities.onlySearch === false, false),
+    networking: parseBool(chatSettingFormActive.value.capabilities.networkSearch, false),
     product_source: 'saas',
-    rerank: chatSettingFormActive.value.capabilities.rerank,
-    only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-    hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-    max_token: chatSettingFormActive.value.maxToken,
-    api_base: chatSettingFormActive.value.apiBase,
-    api_key: chatSettingFormActive.value.apiKey,
-    model: chatSettingFormActive.value.apiModelName,
-    api_context_length: chatSettingFormActive.value.apiContextLength,
-    chunk_size: chatSettingFormActive.value.chunkSize,
-    top_p: chatSettingFormActive.value.top_P,
-    top_k: chatSettingFormActive.value.top_K,
-    temperature: chatSettingFormActive.value.temperature,
+    rerank: parseBool(chatSettingFormActive.value.capabilities.rerank, true),
+    only_need_search_results: parseBool(chatSettingFormActive.value.capabilities.onlySearch, false),
+    hybrid_search: parseBool(chatSettingFormActive.value.capabilities.mixedSearch, false),
+    max_token: chatSettingFormActive.value.maxToken !== null && chatSettingFormActive.value.maxToken !== undefined
+      ? parseInt_(chatSettingFormActive.value.maxToken)
+      : null,
+    api_base: String(chatSettingFormActive.value.apiBase || ''),
+    api_key: String(chatSettingFormActive.value.apiKey || 'ollama'),
+    model: String(chatSettingFormActive.value.apiModelName || 'gpt-4o-mini'),
+    api_context_length: parseInt_(chatSettingFormActive.value.apiContextLength, 4096),
+    chunk_size: parseInt_(chatSettingFormActive.value.chunkSize, 300),
+    top_p: parseFloat_(chatSettingFormActive.value.top_P, 0.99),
+    top_k: parseInt_(chatSettingFormActive.value.top_K, 8),
+    temperature: parseFloat_(chatSettingFormActive.value.temperature, 0.5),
   };
 
   // 如果是仅检索
@@ -690,19 +692,21 @@ const shareChat = async () => {
       await urlResquest.updateBot({
         bot_id,
         kb_ids: [kbId.value],
-        only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-        networking: chatSettingFormActive.value.capabilities.networkSearch,
-        api_base: chatSettingFormActive.value.apiBase,
-        api_key: chatSettingFormActive.value.apiKey,
-        api_context_length: chatSettingFormActive.value.apiContextLength,
-        top_p: chatSettingFormActive.value.top_P,
-        temperature: chatSettingFormActive.value.temperature,
-        top_k: chatSettingFormActive.value.top_K,
-        model: chatSettingFormActive.value.apiModelName,
-        max_token: chatSettingFormActive.value.maxToken,
-        hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-        chunk_size: chatSettingFormActive.value.chunkSize,
-        rerank: chatSettingFormActive.value.capabilities.rerank,
+        only_need_search_results: parseBool(chatSettingFormActive.value.capabilities.onlySearch, false),
+        networking: parseBool(chatSettingFormActive.value.capabilities.networkSearch, false),
+        api_base: String(chatSettingFormActive.value.apiBase || ''),
+        api_key: String(chatSettingFormActive.value.apiKey || 'ollama'),
+        api_context_length: parseInt_(chatSettingFormActive.value.apiContextLength, 4096),
+        top_p: parseFloat_(chatSettingFormActive.value.top_P, 0.99),
+        temperature: parseFloat_(chatSettingFormActive.value.temperature, 0.5),
+        top_k: parseInt_(chatSettingFormActive.value.top_K, 8),
+        model: String(chatSettingFormActive.value.apiModelName || 'gpt-4o-mini'),
+        max_token: chatSettingFormActive.value.maxToken !== null && chatSettingFormActive.value.maxToken !== undefined
+          ? parseInt_(chatSettingFormActive.value.maxToken)
+          : null,
+        hybrid_search: parseBool(chatSettingFormActive.value.capabilities.mixedSearch, false),
+        chunk_size: parseInt_(chatSettingFormActive.value.chunkSize, 300),
+        rerank: parseBool(chatSettingFormActive.value.capabilities.rerank, true),
       })
     );
     setCopyUrlVisible(true);

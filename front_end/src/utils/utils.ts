@@ -276,3 +276,91 @@ export function getContentDispositionByHeader(headers: Headers): string {
     (headers['content-disposition']?.split('filename=') || [])[1].slice(1, -1) || ''
   );
 }
+
+export function parseBool(value: any, defaultValue: boolean = false): boolean {
+  if (value === null || value === undefined || value === '') return defaultValue;
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  const str = String(value).trim().toLowerCase();
+  if (['true', '1', 'yes', 'on', 'y', 't'].includes(str)) return true;
+  if (['false', '0', 'no', 'off', 'n', 'f'].includes(str)) return false;
+  return defaultValue;
+}
+
+export function parseInt_(value: any, defaultValue: number = 0): number {
+  if (value === null || value === undefined || value === '') return defaultValue;
+  if (typeof value === 'number') return Math.floor(value);
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  const str = String(value).trim();
+  if (!str) return defaultValue;
+  const num = Number(str);
+  if (!isNaN(num)) return Math.floor(num);
+  const floatNum = parseFloat(str);
+  if (!isNaN(floatNum)) return Math.floor(floatNum);
+  return defaultValue;
+}
+
+export function parseFloat_(value: any, defaultValue: number = 0): number {
+  if (value === null || value === undefined || value === '') return defaultValue;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'boolean') return value ? 1 : 0;
+  const str = String(value).trim();
+  if (!str) return defaultValue;
+  const num = parseFloat(str);
+  if (!isNaN(num)) return num;
+  return defaultValue;
+}
+
+export function parseList(value: any, defaultValue: any[] = [], separator: string = ','): any[] {
+  if (value === null || value === undefined || value === '') return defaultValue;
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    const str = value.trim();
+    if (!str) return defaultValue;
+    if (str.startsWith('[') && str.endsWith(']')) {
+      try {
+        const parsed = JSON.parse(str);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {
+        // fall through to split
+      }
+    }
+    return str.split(separator).map(s => s.trim()).filter(s => s !== '');
+  }
+  return defaultValue;
+}
+
+export interface NormalizedBotLlmSetting {
+  api_key: string;
+  api_base: string;
+  model: string;
+  api_context_length: number;
+  max_token: number | null;
+  chunk_size: number;
+  temperature: number;
+  top_k: number;
+  top_p: number;
+  rerank: boolean;
+  hybrid_search: boolean;
+  networking: boolean;
+  only_need_search_results: boolean;
+}
+
+export function normalizeBotLlmSetting(llmSettingRaw: string | object): NormalizedBotLlmSetting {
+  const raw = typeof llmSettingRaw === 'string' ? JSON.parse(llmSettingRaw) : llmSettingRaw;
+  return {
+    api_key: String(raw.api_key ?? 'ollama'),
+    api_base: String(raw.api_base ?? ''),
+    model: String(raw.model ?? 'gpt-4o-mini'),
+    api_context_length: parseInt_(raw.api_context_length, 4096),
+    max_token: raw.max_token !== null && raw.max_token !== undefined ? parseInt_(raw.max_token) : null,
+    chunk_size: parseInt_(raw.chunk_size, 300),
+    temperature: parseFloat_(raw.temperature, 0.5),
+    top_k: parseInt_(raw.top_k, 8),
+    top_p: parseFloat_(raw.top_p, 0.99),
+    rerank: parseBool(raw.rerank, true),
+    hybrid_search: parseBool(raw.hybrid_search, false),
+    networking: parseBool(raw.networking, false),
+    only_need_search_results: parseBool(raw.only_need_search_results, false),
+  };
+}

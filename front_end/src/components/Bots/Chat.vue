@@ -232,7 +232,7 @@ import { getLanguage } from '@/language/index';
 import { useLanguage } from '@/store/useLanguage';
 import { userId, userPhone } from '@/services/urlConfig';
 import urlResquest from '@/services/urlConfig';
-import { ChatInfoClass, resultControl, throttle } from '@/utils/utils';
+import { ChatInfoClass, resultControl, throttle, normalizeBotLlmSetting, parseBool } from '@/utils/utils';
 import { useChatSetting } from '@/store/useChatSetting';
 import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
@@ -264,6 +264,14 @@ const { chatSettingFormActive } = storeToRefs(useChatSetting());
 const { copy } = useClipboard();
 const { setChatSourceVisible, setSourceType, setSourceUrl, setTextContent } = useChatSource();
 const { language } = storeToRefs(useLanguage());
+
+// 从 Bot 配置中读取 llm_setting 并规范化
+const botLlmSetting = computed(() => {
+  if (props.botInfo?.llm_setting) {
+    return normalizeBotLlmSetting(props.botInfo.llm_setting);
+  }
+  return null;
+});
 
 //当前问的问题
 const question = ref('');
@@ -335,10 +343,11 @@ const addQuestion = q => {
 };
 
 const addAnswer = (question: string) => {
+  const onlySearch = botLlmSetting.value?.only_need_search_results ?? chatSettingFormActive.value.capabilities.onlySearch;
   QA_List.value.push({
     answer: '',
     question,
-    onlySearch: chatSettingFormActive.value.capabilities.onlySearch,
+    onlySearch,
     type: 'ai',
     copied: false,
     like: false,
@@ -434,21 +443,8 @@ const send = async () => {
       bot_id: props.botInfo.bot_id,
       history: history.value,
       question: q,
-      streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
-      // networking: chatSettingFormActive.value.capabilities.networkSearch,
+      streaming: parseBool((botLlmSetting.value?.only_need_search_results ?? chatSettingFormActive.value.capabilities.onlySearch) === false, false),
       product_source: 'saas',
-      // rerank: chatSettingFormActive.value.capabilities.rerank,
-      // only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-      // hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-      // max_token: chatSettingFormActive.value.maxToken,
-      // api_base: chatSettingFormActive.value.apiBase,
-      // api_key: chatSettingFormActive.value.apiKey,
-      // model: chatSettingFormActive.value.apiModelName,
-      // api_context_length: chatSettingFormActive.value.apiContextLength,
-      // chunk_size: chatSettingFormActive.value.chunkSize,
-      // top_p: chatSettingFormActive.value.top_P,
-      // top_k: chatSettingFormActive.value.top_K,
-      // temperature: chatSettingFormActive.value.temperature,
     }),
     signal: ctrl.signal,
     onopen(e: any) {

@@ -234,7 +234,7 @@ import html2canvas from 'html2canvas';
 import { getLanguage } from '@/language/index';
 import { useLanguage } from '@/store/useLanguage';
 import urlResquest from '@/services/urlConfig';
-import { ChatInfoClass, resultControl } from '@/utils/utils';
+import { ChatInfoClass, resultControl, normalizeBotLlmSetting, parseBool, parseInt_, parseFloat_ } from '@/utils/utils';
 import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
 import ChatTextarea from '@/components/ChatTextarea.vue';
@@ -281,7 +281,7 @@ const question = ref('');
 type ShareSettingType = MakePartial<IChatSetting, 'modelType'>;
 // eslint-disable-next-line vue/no-setup-props-destructure
 const { llm_setting } = props.botInfo;
-const chatSetting = JSON.parse(llm_setting);
+const chatSetting = normalizeBotLlmSetting(llm_setting);
 const chatSettingFormActive = ref<ShareSettingType>();
 // 初始化 chatSetting 为自己的格式
 onMounted(() => {
@@ -483,21 +483,23 @@ const send = async () => {
     bot_id: props.botInfo.bot_id,
     history: history.value,
     question: q,
-    streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
-    networking: chatSettingFormActive.value.capabilities.networkSearch,
+    streaming: parseBool(chatSettingFormActive.value.capabilities.onlySearch === false, false),
+    networking: parseBool(chatSettingFormActive.value.capabilities.networkSearch, false),
     product_source: 'saas',
-    rerank: chatSettingFormActive.value.capabilities.rerank,
-    only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-    hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-    max_token: chatSettingFormActive.value.maxToken,
-    api_base: chatSettingFormActive.value.apiBase,
-    api_key: chatSettingFormActive.value.apiKey,
-    model: chatSettingFormActive.value.apiModelName,
-    api_context_length: chatSettingFormActive.value.apiContextLength,
-    chunk_size: chatSettingFormActive.value.chunkSize,
-    top_p: chatSettingFormActive.value.top_P,
-    top_k: chatSettingFormActive.value.top_K,
-    temperature: chatSettingFormActive.value.temperature,
+    rerank: parseBool(chatSettingFormActive.value.capabilities.rerank, true),
+    only_need_search_results: parseBool(chatSettingFormActive.value.capabilities.onlySearch, false),
+    hybrid_search: parseBool(chatSettingFormActive.value.capabilities.mixedSearch, false),
+    max_token: chatSettingFormActive.value.maxToken !== null && chatSettingFormActive.value.maxToken !== undefined
+      ? parseInt_(chatSettingFormActive.value.maxToken)
+      : null,
+    api_base: String(chatSettingFormActive.value.apiBase || ''),
+    api_key: String(chatSettingFormActive.value.apiKey || 'ollama'),
+    model: String(chatSettingFormActive.value.apiModelName || 'gpt-4o-mini'),
+    api_context_length: parseInt_(chatSettingFormActive.value.apiContextLength, 4096),
+    chunk_size: parseInt_(chatSettingFormActive.value.chunkSize, 300),
+    top_p: parseFloat_(chatSettingFormActive.value.top_P, 0.99),
+    top_k: parseInt_(chatSettingFormActive.value.top_K, 8),
+    temperature: parseFloat_(chatSettingFormActive.value.temperature, 0.5),
   };
 
   // 如果是仅检索
