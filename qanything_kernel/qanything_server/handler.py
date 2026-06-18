@@ -76,7 +76,7 @@ async def new_knowledge_base(req: request):
     kb_id = safe_get(req, 'kb_id', default_kb_id)
     kb_id = correct_kb_id(kb_id)
 
-    is_quick = safe_get_bool(req, 'quick', False)
+    is_quick = safe_get(req, 'quick', False)
     if is_quick:
         kb_id += "_QUICK"
 
@@ -143,7 +143,7 @@ async def upload_weblink(req: request):
 
     mode = safe_get(req, 'mode', default='soft')  # soft代表不上传同名文件，strong表示强制上传同名文件
     debug_logger.info("mode: %s", mode)
-    chunk_size = safe_get_int(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
+    chunk_size = safe_get(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
     debug_logger.info("chunk_size: %s", chunk_size)
 
     exist_file_names = []
@@ -194,10 +194,10 @@ async def upload_files(req: request):
     debug_logger.info("kb_id %s", kb_id)
     mode = safe_get(req, 'mode', default='soft')  # soft代表不上传同名文件，strong表示强制上传同名文件
     debug_logger.info("mode: %s", mode)
-    chunk_size = safe_get_int(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
+    chunk_size = safe_get(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
     debug_logger.info("chunk_size: %s", chunk_size)
-    use_local_file = safe_get_bool(req, 'use_local_file', False)
-    if use_local_file:
+    use_local_file = safe_get(req, 'use_local_file', 'false')
+    if use_local_file == 'true':
         files = read_files_with_extensions()
     else:
         files = req.files.getlist('files')
@@ -291,7 +291,7 @@ async def upload_faqs(req: request):
     kb_id = correct_kb_id(kb_id)
     debug_logger.info("kb_id %s", kb_id)
     faqs = safe_get(req, 'faqs')
-    chunk_size = safe_get_int(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
+    chunk_size = safe_get(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
     debug_logger.info("chunk_size: %s", chunk_size)
 
     # 增加上传文件的功能和上传文件的检查解析
@@ -397,8 +397,8 @@ async def list_docs(req: request):
     kb_id = correct_kb_id(kb_id)
     debug_logger.info("kb_id: {}".format(kb_id))
     file_id = safe_get(req, 'file_id')
-    page_id = safe_get_int(req, 'page_id', 1)  # 默认为第一页
-    page_limit = safe_get_int(req, 'page_limit', 10)  # 默认每页显示10条记录
+    page_id = safe_get(req, 'page_id', 1)  # 默认为第一页
+    page_limit = safe_get(req, 'page_limit', 10)  # 默认每页显示10条记录
     data = []
     if file_id is None:
         file_infos = local_doc_qa.milvus_summary.get_files(user_id, kb_id)
@@ -464,9 +464,7 @@ async def delete_knowledge_base(req: request):
         return sanic_json({"code": 2001, "msg": msg})
     user_id = user_id + '__' + user_info
     debug_logger.info("delete_knowledge_base %s", user_id)
-    kb_ids = safe_get_list(req, 'kb_ids')
-    if not kb_ids:
-        return sanic_json({"code": 2001, "msg": "fail, kb_ids is required"})
+    kb_ids = safe_get(req, 'kb_ids')
     kb_ids = [correct_kb_id(kb_id) for kb_id in kb_ids]
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
     if not_exist_kb_ids:
@@ -533,7 +531,7 @@ async def delete_docs(req: request):
     debug_logger.info("delete_docs %s", user_id)
     kb_id = safe_get(req, 'kb_id')
     kb_id = correct_kb_id(kb_id)
-    file_ids = safe_get_list(req, "file_ids")
+    file_ids = safe_get(req, "file_ids")
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, [kb_id])
     if not_exist_kb_ids:
         return sanic_json({"code": 2003, "msg": "fail, knowledge Base {} not found".format(not_exist_kb_ids[0])})
@@ -581,7 +579,7 @@ async def get_total_status(req: request):
         return sanic_json({"code": 2001, "msg": msg})
     user_id = user_id + '__' + user_info
     debug_logger.info('get_total_status %s', user_id)
-    by_date = safe_get_bool(req, 'by_date', False)
+    by_date = safe_get(req, 'by_date', False)
     if not user_id:
         users = local_doc_qa.milvus_summary.get_users()
         users = [user[0] for user in users]
@@ -619,7 +617,7 @@ async def clean_files_by_status(req: request):
     status = safe_get(req, 'status', default='gray')
     if status not in ['gray', 'red', 'yellow']:
         return sanic_json({"code": 2003, "msg": "fail, status {} must be in ['gray', 'red', 'yellow']".format(status)})
-    kb_ids = safe_get_list(req, 'kb_ids')
+    kb_ids = safe_get(req, 'kb_ids')
     kb_ids = [correct_kb_id(kb_id) for kb_id in kb_ids]
     if not kb_ids:
         kbs = local_doc_qa.milvus_summary.get_knowledge_bases(user_id)
@@ -642,21 +640,6 @@ async def clean_files_by_status(req: request):
     return sanic_json({"code": 200, "msg": f"delete {status} files success", "data": gray_file_names})
 
 
-def normalize_llm_params(llm_dict, from_bot=False):
-    """
-    统一规范化 LLM 配置参数，内部调用共享 schema 派生的标准化函数。
-    返回标准字段名（与 LLM_PARAM_SCHEMA keys 一致，含 networking）。
-    from_bot=True 表示参数来自数据库存储的 llm_setting JSON，需要全量规范化（缺字段补默认值）。
-    """
-    return normalize_llm_params_for_bot(llm_dict)
-
-
-def normalize_kb_ids(kb_ids_input):
-    """统一规范化 kb_ids，处理字符串分割、空值、空字符串等情况。"""
-    kb_ids = parse_list(kb_ids_input)
-    return [kb_id for kb_id in kb_ids if kb_id and str(kb_id).strip()]
-
-
 @get_time_async
 async def local_doc_chat(req: request):
     preprocess_start = time.perf_counter()
@@ -671,51 +654,53 @@ async def local_doc_chat(req: request):
     # local_doc_qa.milvus_summary.update_user_cluster(user_id, [get_milvus_cluster_by_user_info(user_info)])
     debug_logger.info('local_doc_chat %s', user_id)
     debug_logger.info('user_info %s', user_info)
-
     bot_id = safe_get(req, 'bot_id')
-    custom_prompt = None
-
     if bot_id:
         if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id):
             return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
         bot_info = local_doc_qa.milvus_summary.get_bot(None, bot_id)[0]
-        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting_raw = bot_info
-        kb_ids = normalize_kb_ids(kb_ids_str)
+        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting = bot_info
+        kb_ids = kb_ids_str.split(',')
         if not kb_ids:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} unbound knowledge base.".format(bot_id)})
         custom_prompt = prompt
-        if not llm_setting_raw:
+        if not llm_setting:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} llm_setting is empty.".format(bot_id)})
-        llm_dict = json.loads(llm_setting_raw)
-        params = normalize_llm_params(llm_dict, from_bot=True)
-        missing_params = []
-        invalid_params = []
+        llm_setting = json.loads(llm_setting)
+        rerank = llm_setting.get('rerank', True)
+        only_need_search_results = llm_setting.get('only_need_search_results', False)
+        need_web_search = llm_setting.get('networking', False)
+        api_base = llm_setting.get('api_base', '')
+        api_key = llm_setting.get('api_key', 'ollama')
+        api_context_length = llm_setting.get('api_context_length', 4096)
+        top_p = llm_setting.get('top_p', 0.99)
+        temperature = llm_setting.get('temperature', 0.5)
+        top_k = llm_setting.get('top_k', VECTOR_SEARCH_TOP_K)
+        model = llm_setting.get('model', 'gpt-4o-mini')
+        max_token = llm_setting.get('max_token')
+        hybrid_search = llm_setting.get('hybrid_search', False)
+        chunk_size = llm_setting.get('chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
     else:
-        kb_ids_raw = safe_get(req, 'kb_ids', None)
-        kb_ids = normalize_kb_ids(kb_ids_raw)
+        kb_ids = safe_get(req, 'kb_ids')
         custom_prompt = safe_get(req, 'custom_prompt', None)
+        rerank = safe_get(req, 'rerank', default=True)
+        only_need_search_results = safe_get(req, 'only_need_search_results', False)
+        need_web_search = safe_get(req, 'networking', False)
+        api_base = safe_get(req, 'api_base', '')
+        # 如果api_base中包含0.0.0.0或127.0.0.1或localhost，替换为GATEWAY_IP
+        api_base = api_base.replace('0.0.0.0', GATEWAY_IP).replace('127.0.0.1', GATEWAY_IP).replace('localhost',
+                                                                                                    GATEWAY_IP)
+        api_key = safe_get(req, 'api_key', 'ollama')
+        api_context_length = safe_get(req, 'api_context_length', 4096)
+        top_p = safe_get(req, 'top_p', 0.99)
+        temperature = safe_get(req, 'temperature', 0.5)
+        top_k = safe_get(req, 'top_k', VECTOR_SEARCH_TOP_K)
 
-        llm_dict = {}
-        for field in LLM_PARAM_SCHEMA.keys():
-            llm_dict[field] = safe_get(req, field, None)
+        model = safe_get(req, 'model', 'gpt-4o-mini')
+        max_token = safe_get(req, 'max_token')
 
-        normalized_params, missing_params, invalid_params = normalize_and_validate_llm_params_for_request(llm_dict)
-        params = normalized_params
-        params['api_base'] = params['api_base'].replace('0.0.0.0', GATEWAY_IP).replace('127.0.0.1', GATEWAY_IP).replace('localhost', GATEWAY_IP)
-
-    rerank = params['rerank']
-    only_need_search_results = params['only_need_search_results']
-    need_web_search = params['networking']
-    api_base = params['api_base']
-    api_key = params['api_key']
-    api_context_length = params['api_context_length']
-    top_p = params['top_p']
-    temperature = params['temperature']
-    top_k = params['top_k']
-    model = params['model']
-    max_token = params['max_token']
-    hybrid_search = params['hybrid_search']
-    chunk_size = params['chunk_size']
+        hybrid_search = safe_get(req, 'hybrid_search', False)
+        chunk_size = safe_get(req, 'chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
 
     debug_logger.info('rerank %s', rerank)
 
@@ -723,19 +708,31 @@ async def local_doc_chat(req: request):
         return sanic_json({"code": 2005, "msg": "fail, kb_ids length should less than or equal to 20"})
     kb_ids = [correct_kb_id(kb_id) for kb_id in kb_ids]
     question = safe_get(req, 'question')
-    streaming = safe_get_bool(req, 'streaming', False)
-    history = safe_get_list(req, 'history', [])
+    streaming = safe_get(req, 'streaming', False)
+    history = safe_get(req, 'history', [])
 
-    if missing_params or invalid_params:
-        error_msgs = []
-        if missing_params:
-            missing_str = " and ".join(missing_params) if len(missing_params) > 1 else missing_params[0]
-            error_msgs.append(f"{missing_str} is required")
-        if invalid_params:
-            invalid_str = ", ".join(invalid_params)
-            error_msgs.append(f"{invalid_str} value is invalid")
-        combined_msg = "; ".join(error_msgs)
-        return sanic_json({"code": 2003, "msg": f"fail, {combined_msg}"})
+    if top_k > 100:
+        return sanic_json({"code": 2003, "msg": "fail, top_k should less than or equal to 100"})
+
+    missing_params = []
+    if not api_base:
+        missing_params.append('api_base')
+    if not api_key:
+        missing_params.append('api_key')
+    if not api_context_length:
+        missing_params.append('api_context_length')
+    if not top_p:
+        missing_params.append('top_p')
+    if not top_k:
+        missing_params.append('top_k')
+    if top_p == 1.0:
+        top_p = 0.99
+    if not temperature:
+        missing_params.append('temperature')
+
+    if missing_params:
+        missing_params_str = " and ".join(missing_params) if len(missing_params) > 1 else missing_params[0]
+        return sanic_json({"code": 2003, "msg": f"fail, {missing_params_str} is required"})
 
     if only_need_search_results and streaming:
         return sanic_json(
@@ -792,82 +789,91 @@ async def local_doc_chat(req: request):
 
         async def generate_answer(response):
             debug_logger.info("start generate...")
-            async for resp, next_history in local_doc_qa.get_knowledge_based_answer(model=model,
-                                                                                    max_token=max_token,
-                                                                                    kb_ids=kb_ids,
-                                                                                    query=question,
-                                                                                    retriever=local_doc_qa.retriever,
-                                                                                    chat_history=history,
-                                                                                    streaming=True,
-                                                                                    rerank=rerank,
-                                                                                    custom_prompt=custom_prompt,
-                                                                                    time_record=time_record,
-                                                                                    need_web_search=need_web_search,
-                                                                                    hybrid_search=hybrid_search,
-                                                                                    web_chunk_size=chunk_size,
-                                                                                    temperature=temperature,
-                                                                                    api_base=api_base,
-                                                                                    api_key=api_key,
-                                                                                    api_context_length=api_context_length,
-                                                                                    top_p=top_p,
-                                                                                    top_k=top_k
-                                                                                    ):
-                chunk_data = resp["result"]
-                if not chunk_data:
-                    continue
-                chunk_str = chunk_data[6:]
-                if chunk_str.startswith("[DONE]"):
-                    retrieval_documents = format_source_documents(resp["retrieval_documents"])
-                    source_documents = format_source_documents(resp["source_documents"])
-                    result = next_history[-1][1]
-                    # result = resp['result']
-                    time_record['chat_completed'] = round(time.perf_counter() - preprocess_start, 2)
-                    if time_record.get('llm_completed', 0) > 0:
-                        time_record['tokens_per_second'] = round(
-                            len(result) / time_record['llm_completed'], 2)
-                    formatted_time_record = format_time_record(time_record)
-                    chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, "model": model,
-                                 "product_source": request_source, 'time_record': formatted_time_record,
-                                 'history': history,
-                                 'condense_question': resp['condense_question'], 'prompt': resp['prompt'],
-                                 'result': result, 'retrieval_documents': retrieval_documents,
-                                 'source_documents': source_documents, 'bot_id': bot_id}
-                    local_doc_qa.milvus_summary.add_qalog(**chat_data)
-                    qa_logger.info("chat_data: %s", chat_data)
-                    debug_logger.info("response: %s", chat_data['result'])
-                    stream_res = {
-                        "code": 200,
-                        "msg": "success stream chat",
-                        "question": question,
-                        "response": result,
-                        "model": model,
-                        "history": next_history,
-                        "condense_question": resp['condense_question'],
-                        "source_documents": source_documents,
-                        "retrieval_documents": retrieval_documents,
-                        "time_record": formatted_time_record,
-                        "show_images": resp.get('show_images', [])
-                    }
-                else:
-                    time_record['rollback_length'] = resp.get('rollback_length', 0)
-                    if 'first_return' not in time_record:
-                        time_record['first_return'] = round(time.perf_counter() - preprocess_start, 2)
-                    chunk_js = json.loads(chunk_str)
-                    delta_answer = chunk_js["answer"]
-                    stream_res = {
-                        "code": 200,
-                        "msg": "success",
-                        "question": "",
-                        "response": delta_answer,
-                        "history": [],
-                        "source_documents": [],
-                        "retrieval_documents": [],
-                        "time_record": format_time_record(time_record),
-                    }
-                await response.write(f"data: {json.dumps(stream_res, ensure_ascii=False)}\n\n")
-                if chunk_str.startswith("[DONE]"):
-                    await response.eof()
-                await asyncio.sleep(0.001)
+            try:
+                async for resp, next_history in local_doc_qa.get_knowledge_based_answer(model=model,
+                                                                                        max_token=max_token,
+                                                                                        kb_ids=kb_ids,
+                                                                                        query=question,
+                                                                                        retriever=local_doc_qa.retriever,
+                                                                                        chat_history=history,
+                                                                                        streaming=True,
+                                                                                        rerank=rerank,
+                                                                                        custom_prompt=custom_prompt,
+                                                                                        time_record=time_record,
+                                                                                        need_web_search=need_web_search,
+                                                                                        hybrid_search=hybrid_search,
+                                                                                        web_chunk_size=chunk_size,
+                                                                                        temperature=temperature,
+                                                                                        api_base=api_base,
+                                                                                        api_key=api_key,
+                                                                                        api_context_length=api_context_length,
+                                                                                        top_p=top_p,
+                                                                                        top_k=top_k
+                                                                                        ):
+                    chunk_data = resp["result"]
+                    if not chunk_data:
+                        continue
+                    chunk_str = chunk_data[6:]
+                    if chunk_str.startswith("[DONE]"):
+                        retrieval_documents = format_source_documents(resp["retrieval_documents"])
+                        source_documents = format_source_documents(resp["source_documents"])
+                        result = next_history[-1][1]
+                        time_record['chat_completed'] = round(time.perf_counter() - preprocess_start, 2)
+                        if time_record.get('llm_completed', 0) > 0:
+                            time_record['tokens_per_second'] = round(
+                                len(result) / time_record['llm_completed'], 2)
+                        formatted_time_record = format_time_record(time_record)
+                        chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, "model": model,
+                                     "product_source": request_source, 'time_record': formatted_time_record,
+                                     'history': history,
+                                     'condense_question': resp['condense_question'], 'prompt': resp['prompt'],
+                                     'result': result, 'retrieval_documents': retrieval_documents,
+                                     'source_documents': source_documents, 'bot_id': bot_id}
+                        local_doc_qa.milvus_summary.add_qalog(**chat_data)
+                        qa_logger.info("chat_data: %s", chat_data)
+                        debug_logger.info("response: %s", chat_data['result'])
+                        final_data = {
+                            "response": result,
+                            "question": question,
+                            "model": model,
+                            "history": next_history,
+                            "condense_question": resp['condense_question'],
+                            "source_documents": source_documents,
+                            "retrieval_documents": retrieval_documents,
+                            "time_record": formatted_time_record,
+                            "show_images": resp.get('show_images', [])
+                        }
+                        stream_res = {"event": "final", "data": final_data}
+                        await response.write(f"data: {json.dumps(stream_res, ensure_ascii=False)}\n\n")
+                        done_res = {"event": "done", "data": {}}
+                        await response.write(f"data: {json.dumps(done_res, ensure_ascii=False)}\n\n")
+                        await response.eof()
+                    else:
+                        time_record['rollback_length'] = resp.get('rollback_length', 0)
+                        if 'first_return' not in time_record:
+                            time_record['first_return'] = round(time.perf_counter() - preprocess_start, 2)
+                        chunk_js = json.loads(chunk_str)
+                        delta_answer = chunk_js["answer"]
+                        delta_data = {
+                            "response": delta_answer,
+                            "time_record": format_time_record(time_record),
+                        }
+                        stream_res = {"event": "delta", "data": delta_data}
+                        await response.write(f"data: {json.dumps(stream_res, ensure_ascii=False)}\n\n")
+                    await asyncio.sleep(0.001)
+            except Exception as e:
+                debug_logger.error(f"stream chat error: {e}")
+                import traceback
+                debug_logger.error(traceback.format_exc())
+                error_data = {
+                    "code": 500,
+                    "msg": str(e)
+                }
+                error_res = {"event": "error", "data": error_data}
+                await response.write(f"data: {json.dumps(error_res, ensure_ascii=False)}\n\n")
+                done_res = {"event": "done", "data": {}}
+                await response.write(f"data: {json.dumps(done_res, ensure_ascii=False)}\n\n")
+                await response.eof()
 
         response_stream = ResponseStream(generate_answer, content_type='text/event-stream')
         return response_stream
@@ -998,8 +1004,8 @@ async def get_doc_completed(req: request):
     if not file_id:
         return sanic_json({"code": 2005, "msg": "fail, file_id is None"})
     debug_logger.info("file_id: {}".format(file_id))
-    page_id = safe_get_int(req, 'page_id', 1)  # 默认为第一页
-    page_limit = safe_get_int(req, 'page_limit', 10)  # 默认每页显示10条记录
+    page_id = safe_get(req, 'page_id', 1)  # 默认为第一页
+    page_limit = safe_get(req, 'page_limit', 10)  # 默认每页显示10条记录
 
     sorted_json_datas = local_doc_qa.milvus_summary.get_document_by_file_id(file_id)
     # completed_doc = local_doc_qa.get_completed_document(file_id)
@@ -1051,13 +1057,13 @@ async def get_qa_info(req: request):
         debug_logger.info("get_qa_info %s", user_id)
     query = safe_get(req, 'query')
     bot_id = safe_get(req, 'bot_id')
-    qa_ids = safe_get_list(req, "qa_ids")
+    qa_ids = safe_get(req, "qa_ids")
     time_start = safe_get(req, 'time_start')
     time_end = safe_get(req, 'time_end')
     time_range = get_time_range(time_start, time_end)
     if not time_range:
         return {"code": 2002, "msg": f'输入非法！time_start格式错误，time_start: {time_start}，示例：2024-10-05，请检查！'}
-    only_need_count = safe_get_bool(req, 'only_need_count', False)
+    only_need_count = safe_get(req, 'only_need_count', False)
     debug_logger.info(f"only_need_count: {only_need_count}")
     if only_need_count:
         need_info = ["timestamp"]
@@ -1070,13 +1076,13 @@ async def get_qa_info(req: request):
         qa_infos_by_day = dict(Counter(qa_infos))
         return sanic_json({"code": 200, "msg": "success", "qa_infos_by_day": qa_infos_by_day})
 
-    page_id = safe_get_int(req, 'page_id', 1)
-    page_limit = safe_get_int(req, 'page_limit', 10)
+    page_id = safe_get(req, 'page_id', 1)
+    page_limit = safe_get(req, 'page_limit', 10)
     default_need_info = ["qa_id", "user_id", "bot_id", "kb_ids", "query", "model", "product_source", "time_record",
                          "history", "condense_question", "prompt", "result", "retrieval_documents", "source_documents",
                          "timestamp"]
-    need_info = safe_get_list(req, 'need_info', default_need_info)
-    save_to_excel = safe_get_bool(req, 'save_to_excel', False)
+    need_info = safe_get(req, 'need_info', default_need_info)
+    save_to_excel = safe_get(req, 'save_to_excel', False)
     qa_infos = local_doc_qa.milvus_summary.get_qalog_by_filter(need_info=need_info, user_id=user_id, query=query,
                                                                bot_id=bot_id, time_range=time_range,
                                                                any_kb_id=any_kb_id, qa_ids=qa_ids)
@@ -1123,10 +1129,10 @@ async def get_qa_info(req: request):
 @get_time_async
 async def get_random_qa(req: request):
     local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
-    limit = safe_get_int(req, 'limit', 10)
+    limit = safe_get(req, 'limit', 10)
     time_start = safe_get(req, 'time_start')
     time_end = safe_get(req, 'time_end')
-    need_info = safe_get_list(req, 'need_info')
+    need_info = safe_get(req, 'need_info')
     time_range = get_time_range(time_start, time_end)
     if not time_range:
         return {"code": 2002, "msg": f'输入非法！time_start格式错误，time_start: {time_start}，示例：2024-10-05，请检查！'}
@@ -1145,8 +1151,8 @@ async def get_related_qa(req: request):
     qa_id = safe_get(req, 'qa_id')
     if not qa_id:
         return sanic_json({"code": 2005, "msg": "fail, qa_id is None"})
-    need_info = safe_get_list(req, 'need_info')
-    need_more = safe_get_bool(req, 'need_more', False)
+    need_info = safe_get(req, 'need_info')
+    need_more = safe_get(req, 'need_more', False)
     debug_logger.info("get_related_qa %s", qa_id)
     qa_log, recent_logs, older_logs = local_doc_qa.milvus_summary.get_related_qa_infos(qa_id, need_info, need_more)
     # 按kb_ids划分sections
@@ -1263,9 +1269,8 @@ async def get_bot_info(req: request):
     bot_infos = local_doc_qa.milvus_summary.get_bot(user_id, bot_id)
     data = []
     for bot_info in bot_infos:
-        kb_ids_str = bot_info[6] if bot_info[6] else ""
-        kb_ids = normalize_kb_ids(kb_ids_str)
-        if kb_ids:
+        if bot_info[6] != "":
+            kb_ids = bot_info[6].split(',')
             kb_infos = local_doc_qa.milvus_summary.get_knowledge_base_name(kb_ids)
             kb_names = []
             for kb_id in kb_ids:
@@ -1276,22 +1281,10 @@ async def get_bot_info(req: request):
         else:
             kb_ids = []
             kb_names = []
-
-        llm_setting_raw = bot_info[9]
-        if llm_setting_raw:
-            try:
-                llm_dict = json.loads(llm_setting_raw)
-                normalized_params = normalize_llm_params(llm_dict, from_bot=True)
-                llm_setting_out = json.dumps(normalized_params)
-            except (json.JSONDecodeError, KeyError):
-                llm_setting_out = llm_setting_raw
-        else:
-            llm_setting_out = llm_setting_raw
-
         info = {"bot_id": bot_info[0], "user_id": user_id, "bot_name": bot_info[1], "description": bot_info[2],
                 "head_image": bot_info[3], "prompt_setting": bot_info[4], "welcome_message": bot_info[5],
                 "kb_ids": kb_ids, "kb_names": kb_names,
-                "update_time": bot_info[7].strftime("%Y-%m-%d %H:%M:%S"), "llm_setting": llm_setting_out}
+                "update_time": bot_info[7].strftime("%Y-%m-%d %H:%M:%S"), "llm_setting": bot_info[9]}
         data.append(info)
     return sanic_json({"code": 200, "msg": "success", "data": data})
 
@@ -1310,7 +1303,7 @@ async def new_bot(req: request):
     head_image = safe_get(req, "head_image", BOT_IMAGE)
     prompt_setting = safe_get(req, "prompt_setting", BOT_PROMPT)
     welcome_message = safe_get(req, "welcome_message", BOT_WELCOME)
-    kb_ids = safe_get_list(req, "kb_ids", [])
+    kb_ids = safe_get(req, "kb_ids", [])
     kb_ids_str = ",".join(kb_ids)
 
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
@@ -1319,21 +1312,8 @@ async def new_bot(req: request):
         return sanic_json({"code": 2001, "msg": msg, "data": [{}]})
     debug_logger.info("new_bot %s", user_id)
     bot_id = 'BOT' + uuid.uuid4().hex
-
-    llm_raw_dict = {}
-    for field in LLM_PARAM_SCHEMA.keys():
-        raw_val = safe_get(req, field, None)
-        if raw_val is not None:
-            llm_raw_dict[field] = raw_val
-
-    if llm_raw_dict:
-        llm_setting = normalize_llm_params_for_bot(llm_raw_dict)
-    else:
-        llm_setting = get_default_llm_setting_for_bot()
-    llm_setting_json = json.dumps(llm_setting)
-
     local_doc_qa.milvus_summary.new_qanything_bot(bot_id, user_id, bot_name, desc, head_image, prompt_setting,
-                                                  welcome_message, kb_ids_str, llm_setting_json)
+                                                  welcome_message, kb_ids_str)
     create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return sanic_json({"code": 200, "msg": "success create qanything bot {}".format(bot_id),
                        "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time}})
@@ -1375,9 +1355,8 @@ async def update_bot(req: request):
     head_image = safe_get(req, "head_image", bot_info[3])
     prompt_setting = safe_get(req, "prompt_setting", bot_info[4])
     welcome_message = safe_get(req, "welcome_message", bot_info[5])
-    kb_ids_raw = safe_get(req, "kb_ids", None)
-    if kb_ids_raw is not None:
-        kb_ids = normalize_kb_ids(kb_ids_raw)
+    kb_ids = safe_get(req, "kb_ids")
+    if kb_ids is not None:
         not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
         if not_exist_kb_ids:
             msg = "invalid kb_id: {}, please check...".format(not_exist_kb_ids)
@@ -1386,28 +1365,38 @@ async def update_bot(req: request):
     else:
         kb_ids_str = bot_info[6]
 
-    llm_setting_raw = bot_info[9]
-    if llm_setting_raw:
-        old_llm_dict = json.loads(llm_setting_raw)
-        llm_setting = normalize_llm_params_for_bot(old_llm_dict)
-    else:
-        llm_setting = get_default_llm_setting_for_bot()
-
-    submitted_params = {}
-    for field, schema in LLM_PARAM_SCHEMA.items():
-        raw_val = safe_get(req, field, None)
-        if raw_val is not None:
-            submitted_params[field] = raw_val
-
-    if submitted_params:
-        _, missing_fields, invalid_fields = normalize_and_validate_llm_params_for_request(submitted_params)
-        if invalid_fields:
-            error_msg_parts = [f"{f} value is invalid" for f in invalid_fields]
-            return sanic_json({"code": 2003, "msg": "fail, " + "; ".join(error_msg_parts)})
-
-        for field, raw_val in submitted_params.items():
-            schema = LLM_PARAM_SCHEMA[field]
-            llm_setting[field] = parse_param_by_schema(raw_val, schema, fill_default=True)
+    llm_setting = json.loads(bot_info[9])
+    if api_base := safe_get(req, "api_base"):
+        llm_setting["api_base"] = api_base
+    if api_key := safe_get(req, "api_key"):
+        llm_setting["api_key"] = api_key
+    if api_context_length := safe_get(req, "api_context_length"):
+        llm_setting["api_context_length"] = api_context_length
+    if top_p := safe_get(req, "top_p"):
+        llm_setting["top_p"] = top_p
+    if top_k := safe_get(req, "top_k"):
+        llm_setting["top_k"] = top_k
+    if chunk_size := safe_get(req, "chunk_size"):
+        llm_setting["chunk_size"] = chunk_size
+    if temperature := safe_get(req, "temperature"):
+        llm_setting["temperature"] = temperature
+    if model := safe_get(req, "model"):
+        llm_setting["model"] = model
+    if max_token := safe_get(req, "max_token"):
+        llm_setting["max_token"] = max_token
+    # 如果rerank不是None，赋值，false也可以
+    rerank = safe_get(req, "rerank")
+    if rerank is not None:
+        llm_setting["rerank"] = rerank
+    hybrid_search = safe_get(req, "hybrid_search")
+    if hybrid_search is not None:
+        llm_setting["hybrid_search"] = hybrid_search
+    networking = safe_get(req, "networking")
+    if networking is not None:
+        llm_setting["networking"] = networking
+    only_need_search_results = safe_get(req, "only_need_search_results")
+    if only_need_search_results is not None:
+        llm_setting["only_need_search_results"] = only_need_search_results
 
     debug_logger.info(f"update llm_setting: {llm_setting}")
 
@@ -1449,7 +1438,7 @@ async def update_chunks(req: request):
         return sanic_json({"code": 2002, "msg": f"fail, currently, there are {len(yellow_files)} files being parsed, please wait for all files to finish parsing before updating the chunk."})
     update_content = safe_get(req, 'update_content')
     debug_logger.info(f"update_content: {update_content}")
-    chunk_size = safe_get_int(req, 'chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
+    chunk_size = safe_get(req, 'chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
     debug_logger.info(f"chunk_size: {chunk_size}")
     update_content_tokens = num_tokens_embed(update_content)
     if update_content_tokens > chunk_size:

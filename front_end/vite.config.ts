@@ -5,30 +5,6 @@ import viteImagemin from 'vite-plugin-imagemin';
 import { visualizer } from 'rollup-plugin-visualizer';
 import path from 'path';
 import fs from 'fs';
-
-function copySharedSchemaPlugin() {
-  const sharedSchemaPath = path.resolve(__dirname, '../shared_configs/llm_param_schema.json');
-  const publicSchemaPath = path.resolve(__dirname, './public/llm_param_schema.json');
-
-  function copySchema() {
-    if (!fs.existsSync(sharedSchemaPath)) {
-      console.warn('[shared-schema] 共享 schema 文件不存在:', sharedSchemaPath);
-      return;
-    }
-    fs.copyFileSync(sharedSchemaPath, publicSchemaPath);
-    console.log('[shared-schema] 已拷贝到 public 目录:', sharedSchemaPath, '→', publicSchemaPath);
-  }
-
-  return {
-    name: 'copy-shared-schema',
-    buildStart() {
-      copySchema();
-    },
-    configureServer() {
-      copySchema();
-    },
-  };
-}
 //按需加载antdvue
 import Components from 'unplugin-vue-components/vite';
 import { AntDesignVueResolver } from 'unplugin-vue-components/resolvers';
@@ -103,7 +79,6 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [
-      copySharedSchemaPlugin(),
       Components({
         resolvers: [
           AntDesignVueResolver({

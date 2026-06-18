@@ -842,14 +842,11 @@ class KnowledgeBaseManager:
         return result is not None and len(result) > 0
 
     def new_qanything_bot(self, bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message,
-                          kb_ids_str, llm_setting=None):
-        if llm_setting is None:
-            query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
-            params = (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str)
-        else:
-            query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, llm_setting) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-            params = (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, llm_setting)
-        self.execute_query_(query, params, commit=True)
+                          kb_ids_str):
+        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+        self.execute_query_(query, (
+        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str),
+                            commit=True)
         return bot_id, "success"
 
     def delete_bot(self, user_id, bot_id):

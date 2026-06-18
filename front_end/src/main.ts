@@ -14,9 +14,6 @@ import pinia from './store/index';
 import '@/styles/common/global.scss';
 import 'virtual:svg-icons-register';
 import SvgIcon from '@/components/SvgIcon.vue';
-import { loadSchemaFromSharedAsync } from '@/utils/utils';
-
-loadSchemaFromSharedAsync();
 
 const vueApp = createApp(App);
 vueApp.use(pinia).use(router);
