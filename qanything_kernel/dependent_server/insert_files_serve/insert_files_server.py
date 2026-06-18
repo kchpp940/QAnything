@@ -132,6 +132,7 @@ async def process_data(retriever, milvus_kb, mysql_client, file_info, time_recor
     time_record['upload_total_time'] = round(time.perf_counter() - process_start, 2)
     mysql_client.update_file_upload_infos(file_id, time_record)
     insert_logger.info(f'insert_files_to_milvus: {user_id}, {kb_id}, {file_id}, {file_name}, {status}')
+    msg = json.dumps(time_record, ensure_ascii=False)
     return status, content_length, chunks_number, msg
 
 
@@ -202,13 +203,10 @@ async def check_and_process(pool):
             try:
                 async with pool.acquire() as conn:
                     async with conn.cursor() as cur:
-                        error_msg = f"process_files Error: {traceback.format_exc()}"
-                        insert_logger.error(error_msg)
+                        insert_logger.error(f"process_files Error {traceback.format_exc()}")
+                        # 如果file的status是yellow，就改为red
                         if id is not None:
-                            await cur.execute(
-                                "UPDATE File SET status='red', content_length=-1, msg=%s "
-                                "WHERE id=%s AND status='yellow'",
-                                (f"service exception: {str(e)}", id))
+                            await cur.execute("UPDATE File SET status='red' WHERE id=%s AND status='yellow'", (id,))
                             await conn.commit()
 
                             await cur.execute(
@@ -218,6 +216,7 @@ async def check_and_process(pool):
 
                             insert_logger.info(f"UPDATE FILE: {timestamp}, {file_id}, {file_name}, yellow2red")
                             _, file_id, user_id, file_name, kb_id, file_location, file_size = file_info
+                            # await post_data(user_id=user_id, charsize=-1, docid=file_id, status='red', msg="Milvus service exception")
             except Exception as e:
                 insert_logger.error('MySQL 二次连接异常：' + str(e))
         finally:

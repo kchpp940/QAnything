@@ -45,67 +45,6 @@ async def run_in_background(func, *args):
         await loop.run_in_executor(pool, func, *args)
 
 
-def safe_delete_es_files(es_client, mysql_summary, file_ids, op_name="delete"):
-    if not file_ids:
-        return {"success": True, "deleted": 0, "failed": 0, "method": "no-op"}
-    total = len(file_ids)
-    deleted = es_client.delete_files_by_file_id(file_ids)
-    if deleted >= 0:
-        debug_logger.info(
-            f"[ES {op_name}] delete_by_query succeeded: {deleted} docs deleted "
-            f"for {total} files"
-        )
-        return {"success": True, "deleted": deleted, "failed": 0,
-                "method": "delete_by_query" if deleted > 0 else "no-docs"}
-    debug_logger.warning(
-        f"[ES {op_name}] delete_by_query failed, fallback to chunks_number from MySQL "
-        f"for {total} files"
-    )
-    try:
-        chunks_numbers = mysql_summary.get_chunks_number(file_ids)
-        valid_chunks = []
-        valid_file_ids = []
-        unknown_chunk_files = []
-        for fid, cn in zip(file_ids, chunks_numbers):
-            if cn is not None and cn > 0:
-                valid_file_ids.append(fid)
-                valid_chunks.append(cn)
-            else:
-                unknown_chunk_files.append(fid)
-        if valid_file_ids:
-            es_client.delete_files(valid_file_ids, valid_chunks)
-            deleted_count = sum(valid_chunks)
-            debug_logger.info(
-                f"[ES {op_name}] fallback delete_files succeeded: "
-                f"{deleted_count} docs for {len(valid_file_ids)} files"
-            )
-        else:
-            deleted_count = 0
-            debug_logger.warning(
-                f"[ES {op_name}] fallback delete_files: no valid chunks_number "
-                f"for any of {total} files, ES documents may be leftover"
-            )
-        if unknown_chunk_files:
-            debug_logger.error(
-                f"[ES {op_name}] files with unknown chunks_number (ES may have residuals): "
-                f"{unknown_chunk_files}"
-            )
-        return {
-            "success": len(unknown_chunk_files) == 0,
-            "deleted": deleted_count,
-            "failed": len(unknown_chunk_files),
-            "unknown_files": unknown_chunk_files,
-            "method": "chunks_number_fallback"
-        }
-    except Exception as e:
-        debug_logger.error(
-            f"[ES {op_name}] ALL delete paths failed for {total} files: {e}. "
-            f"ES documents will be leftover. file_ids sample: {file_ids[:3]}"
-        )
-        return {"success": False, "deleted": 0, "failed": total, "method": "all-failed",
-                "error": str(e)}
-
-
 # 使用aiohttp异步请求另一个API
 async def fetch(session, url, input_json):
     headers = {'Content-Type': 'application/json'}
@@ -137,7 +76,7 @@ async def new_knowledge_base(req: request):
     kb_id = safe_get(req, 'kb_id', default_kb_id)
     kb_id = correct_kb_id(kb_id)
 
-    is_quick = safe_get(req, 'quick', False)
+    is_quick = safe_get_bool(req, 'quick', False)
     if is_quick:
         kb_id += "_QUICK"
 
@@ -204,7 +143,7 @@ async def upload_weblink(req: request):
 
     mode = safe_get(req, 'mode', default='soft')  # soft代表不上传同名文件，strong表示强制上传同名文件
     debug_logger.info("mode: %s", mode)
-    chunk_size = safe_get(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
+    chunk_size = safe_get_int(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
     debug_logger.info("chunk_size: %s", chunk_size)
 
     exist_file_names = []
@@ -255,10 +194,10 @@ async def upload_files(req: request):
     debug_logger.info("kb_id %s", kb_id)
     mode = safe_get(req, 'mode', default='soft')  # soft代表不上传同名文件，strong表示强制上传同名文件
     debug_logger.info("mode: %s", mode)
-    chunk_size = safe_get(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
+    chunk_size = safe_get_int(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
     debug_logger.info("chunk_size: %s", chunk_size)
-    use_local_file = safe_get(req, 'use_local_file', 'false')
-    if use_local_file == 'true':
+    use_local_file = safe_get_bool(req, 'use_local_file', False)
+    if use_local_file:
         files = read_files_with_extensions()
     else:
         files = req.files.getlist('files')
@@ -352,7 +291,7 @@ async def upload_faqs(req: request):
     kb_id = correct_kb_id(kb_id)
     debug_logger.info("kb_id %s", kb_id)
     faqs = safe_get(req, 'faqs')
-    chunk_size = safe_get(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
+    chunk_size = safe_get_int(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
     debug_logger.info("chunk_size: %s", chunk_size)
 
     # 增加上传文件的功能和上传文件的检查解析
@@ -458,8 +397,8 @@ async def list_docs(req: request):
     kb_id = correct_kb_id(kb_id)
     debug_logger.info("kb_id: {}".format(kb_id))
     file_id = safe_get(req, 'file_id')
-    page_id = safe_get(req, 'page_id', 1)  # 默认为第一页
-    page_limit = safe_get(req, 'page_limit', 10)  # 默认每页显示10条记录
+    page_id = safe_get_int(req, 'page_id', 1)  # 默认为第一页
+    page_limit = safe_get_int(req, 'page_limit', 10)  # 默认每页显示10条记录
     data = []
     if file_id is None:
         file_infos = local_doc_qa.milvus_summary.get_files(user_id, kb_id)
@@ -525,7 +464,9 @@ async def delete_knowledge_base(req: request):
         return sanic_json({"code": 2001, "msg": msg})
     user_id = user_id + '__' + user_info
     debug_logger.info("delete_knowledge_base %s", user_id)
-    kb_ids = safe_get(req, 'kb_ids')
+    kb_ids = safe_get_list(req, 'kb_ids')
+    if not kb_ids:
+        return sanic_json({"code": 2001, "msg": "fail, kb_ids is required"})
     kb_ids = [correct_kb_id(kb_id) for kb_id in kb_ids]
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
     if not_exist_kb_ids:
@@ -535,22 +476,17 @@ async def delete_knowledge_base(req: request):
     for kb_id in kb_ids:
         expr = f"kb_id == \"{kb_id}\""
         asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
-    total_es_deleted = 0
-    total_es_failed_files = 0
-    all_es_failed_files = []
+        # local_doc_qa.milvus_kb.delete_expr(expr)
+        # milvus.delete_partition(kb_id)
     for kb_id in kb_ids:
         file_infos = local_doc_qa.milvus_summary.get_files(user_id, kb_id)
         file_ids = [file_info[0] for file_info in file_infos]
-        es_res = await run_in_background(
-            safe_delete_es_files, local_doc_qa.es_client,
-            local_doc_qa.milvus_summary, file_ids, "delete_kb")
-        total_es_deleted += es_res.get("deleted", 0)
-        total_es_failed_files += es_res.get("failed", 0)
-        if es_res.get("unknown_files"):
-            all_es_failed_files.extend(es_res["unknown_files"])
+        file_chunks = [file_info[8] for file_info in file_infos]
+        asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files, file_ids, file_chunks))
         local_doc_qa.milvus_summary.delete_documents(file_ids)
         local_doc_qa.milvus_summary.delete_faqs(file_ids)
 
+        # delete kb_id file dir
         try:
             upload_path = os.path.join(UPLOAD_ROOT_PATH, user_id)
             file_dir = os.path.join(upload_path, kb_id)
@@ -559,18 +495,10 @@ async def delete_knowledge_base(req: request):
         except Exception as e:
             debug_logger.error("An error occurred while constructing file paths: %s", str(e))
 
+
         debug_logger.info(f"""delete knowledge base {kb_id} success""")
     local_doc_qa.milvus_summary.delete_knowledge_base(user_id, kb_ids)
-    return sanic_json({
-        "code": 200,
-        "msg": "Knowledge Base {} delete success".format(kb_ids),
-        "es_delete": {
-            "success": total_es_failed_files == 0,
-            "deleted_docs": total_es_deleted,
-            "failed_files": total_es_failed_files,
-            "failed_file_ids": all_es_failed_files
-        }
-    })
+    return sanic_json({"code": 200, "msg": "Knowledge Base {} delete success".format(kb_ids)})
 
 
 @get_time_async
@@ -605,7 +533,7 @@ async def delete_docs(req: request):
     debug_logger.info("delete_docs %s", user_id)
     kb_id = safe_get(req, 'kb_id')
     kb_id = correct_kb_id(kb_id)
-    file_ids = safe_get(req, "file_ids")
+    file_ids = safe_get_list(req, "file_ids")
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, [kb_id])
     if not_exist_kb_ids:
         return sanic_json({"code": 2003, "msg": "fail, knowledge Base {} not found".format(not_exist_kb_ids[0])})
@@ -616,11 +544,11 @@ async def delete_docs(req: request):
     debug_logger.info("delete_docs valid_file_ids %s", valid_file_ids)
     # milvus_kb = local_doc_qa.match_milvus_kb(user_id, [kb_id])
     # milvus_kb.delete_files(file_ids)
-    expr = f"""kb_id == "{kb_id}" and file_id in {valid_file_ids}"""
+    expr = f"""kb_id == "{kb_id}" and file_id in {valid_file_ids}"""  # 删除数据库中的记录
     asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
-    es_delete_result = await run_in_background(
-        safe_delete_es_files, local_doc_qa.es_client,
-        local_doc_qa.milvus_summary, valid_file_ids, "delete_docs")
+    # local_doc_qa.milvus_kb.delete_expr(expr)
+    file_chunks = local_doc_qa.milvus_summary.get_chunk_size(valid_file_ids)
+    asyncio.create_task(run_in_background(local_doc_qa.es_client.delete_files, valid_file_ids, file_chunks))
 
     local_doc_qa.milvus_summary.delete_files(kb_id, valid_file_ids)
     local_doc_qa.milvus_summary.delete_documents(valid_file_ids)
@@ -640,17 +568,7 @@ async def delete_docs(req: request):
         except Exception as e:
             debug_logger.error("An error occurred while constructing file paths: %s", str(e))
 
-    return sanic_json({
-        "code": 200,
-        "msg": "documents {} delete success".format(valid_file_ids),
-        "es_delete": {
-            "success": es_delete_result["success"],
-            "method": es_delete_result["method"],
-            "deleted_docs": es_delete_result.get("deleted", 0),
-            "failed_files": es_delete_result.get("failed", 0),
-            "failed_file_ids": es_delete_result.get("unknown_files", [])
-        }
-    })
+    return sanic_json({"code": 200, "msg": "documents {} delete success".format(valid_file_ids)})
 
 
 @get_time_async
@@ -663,7 +581,7 @@ async def get_total_status(req: request):
         return sanic_json({"code": 2001, "msg": msg})
     user_id = user_id + '__' + user_info
     debug_logger.info('get_total_status %s', user_id)
-    by_date = safe_get(req, 'by_date', False)
+    by_date = safe_get_bool(req, 'by_date', False)
     if not user_id:
         users = local_doc_qa.milvus_summary.get_users()
         users = [user[0] for user in users]
@@ -701,7 +619,7 @@ async def clean_files_by_status(req: request):
     status = safe_get(req, 'status', default='gray')
     if status not in ['gray', 'red', 'yellow']:
         return sanic_json({"code": 2003, "msg": "fail, status {} must be in ['gray', 'red', 'yellow']".format(status)})
-    kb_ids = safe_get(req, 'kb_ids')
+    kb_ids = safe_get_list(req, 'kb_ids')
     kb_ids = [correct_kb_id(kb_id) for kb_id in kb_ids]
     if not kb_ids:
         kbs = local_doc_qa.milvus_summary.get_knowledge_bases(user_id)
@@ -711,34 +629,17 @@ async def clean_files_by_status(req: request):
         if not_exist_kb_ids:
             return sanic_json({"code": 2003, "msg": "fail, knowledge Base {} not found".format(not_exist_kb_ids)})
 
-    file_infos = local_doc_qa.milvus_summary.get_file_by_status(kb_ids, status)
-    file_ids = [f[0] for f in file_infos]
-    file_names = [f[1] for f in file_infos]
-    debug_logger.info(f'{status} files number: {len(file_names)}')
-    es_delete_result = {"success": True, "deleted": 0, "failed": 0, "method": "skipped"}
-    if file_ids:
-        if status in ('red', 'yellow'):
-            for kb_id in kb_ids:
-                expr = f"""kb_id == "{kb_id}" and file_id in {file_ids}"""
-                asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
-            es_delete_result = await run_in_background(
-                safe_delete_es_files, local_doc_qa.es_client,
-                local_doc_qa.milvus_summary, file_ids, f"clean_{status}")
-            local_doc_qa.milvus_summary.delete_documents(file_ids)
+    gray_file_infos = local_doc_qa.milvus_summary.get_file_by_status(kb_ids, status)
+    gray_file_ids = [f[0] for f in gray_file_infos]
+    gray_file_names = [f[1] for f in gray_file_infos]
+    debug_logger.info(f'{status} files number: {len(gray_file_names)}')
+    # 删除milvus中的file
+    if gray_file_ids:
+        # expr = f"file_id in \"{gray_file_ids}\""
+        # asyncio.create_task(run_in_background(local_doc_qa.milvus_kb.delete_expr, expr))
         for kb_id in kb_ids:
-            local_doc_qa.milvus_summary.delete_files(kb_id, file_ids)
-    return sanic_json({
-        "code": 200,
-        "msg": f"delete {status} files success",
-        "data": file_names,
-        "es_delete": {
-            "success": es_delete_result["success"],
-            "method": es_delete_result["method"],
-            "deleted_docs": es_delete_result.get("deleted", 0),
-            "failed_files": es_delete_result.get("failed", 0),
-            "failed_file_ids": es_delete_result.get("unknown_files", [])
-        }
-    })
+            local_doc_qa.milvus_summary.delete_files(kb_id, gray_file_ids)
+    return sanic_json({"code": 200, "msg": f"delete {status} files success", "data": gray_file_names})
 
 
 @get_time_async
@@ -782,26 +683,27 @@ async def local_doc_chat(req: request):
         hybrid_search = llm_setting.get('hybrid_search', False)
         chunk_size = llm_setting.get('chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
     else:
-        kb_ids = safe_get(req, 'kb_ids')
+        kb_ids = safe_get_list(req, 'kb_ids')
         custom_prompt = safe_get(req, 'custom_prompt', None)
-        rerank = safe_get(req, 'rerank', default=True)
-        only_need_search_results = safe_get(req, 'only_need_search_results', False)
-        need_web_search = safe_get(req, 'networking', False)
+        rerank = safe_get_bool(req, 'rerank', True)
+        only_need_search_results = safe_get_bool(req, 'only_need_search_results', False)
+        need_web_search = safe_get_bool(req, 'networking', False)
         api_base = safe_get(req, 'api_base', '')
         # 如果api_base中包含0.0.0.0或127.0.0.1或localhost，替换为GATEWAY_IP
         api_base = api_base.replace('0.0.0.0', GATEWAY_IP).replace('127.0.0.1', GATEWAY_IP).replace('localhost',
                                                                                                     GATEWAY_IP)
         api_key = safe_get(req, 'api_key', 'ollama')
-        api_context_length = safe_get(req, 'api_context_length', 4096)
-        top_p = safe_get(req, 'top_p', 0.99)
-        temperature = safe_get(req, 'temperature', 0.5)
-        top_k = safe_get(req, 'top_k', VECTOR_SEARCH_TOP_K)
+        api_context_length = safe_get_int(req, 'api_context_length', 4096)
+        top_p = safe_get_float(req, 'top_p', 0.99)
+        temperature = safe_get_float(req, 'temperature', 0.5)
+        top_k = safe_get_int(req, 'top_k', VECTOR_SEARCH_TOP_K)
 
         model = safe_get(req, 'model', 'gpt-4o-mini')
-        max_token = safe_get(req, 'max_token')
+        max_token_raw = safe_get(req, 'max_token', None)
+        max_token = safe_get_int(req, 'max_token') if max_token_raw is not None else None
 
-        hybrid_search = safe_get(req, 'hybrid_search', False)
-        chunk_size = safe_get(req, 'chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
+        hybrid_search = safe_get_bool(req, 'hybrid_search', False)
+        chunk_size = safe_get_int(req, 'chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
 
     debug_logger.info('rerank %s', rerank)
 
@@ -809,8 +711,8 @@ async def local_doc_chat(req: request):
         return sanic_json({"code": 2005, "msg": "fail, kb_ids length should less than or equal to 20"})
     kb_ids = [correct_kb_id(kb_id) for kb_id in kb_ids]
     question = safe_get(req, 'question')
-    streaming = safe_get(req, 'streaming', False)
-    history = safe_get(req, 'history', [])
+    streaming = safe_get_bool(req, 'streaming', False)
+    history = safe_get_list(req, 'history', [])
 
     if top_k > 100:
         return sanic_json({"code": 2003, "msg": "fail, top_k should less than or equal to 100"})
@@ -820,15 +722,15 @@ async def local_doc_chat(req: request):
         missing_params.append('api_base')
     if not api_key:
         missing_params.append('api_key')
-    if not api_context_length:
+    if api_context_length is None or api_context_length <= 0:
         missing_params.append('api_context_length')
-    if not top_p:
+    if top_p is None or top_p <= 0:
         missing_params.append('top_p')
-    if not top_k:
+    if top_k is None or top_k <= 0:
         missing_params.append('top_k')
     if top_p == 1.0:
         top_p = 0.99
-    if not temperature:
+    if temperature is None:
         missing_params.append('temperature')
 
     if missing_params:
@@ -1096,8 +998,8 @@ async def get_doc_completed(req: request):
     if not file_id:
         return sanic_json({"code": 2005, "msg": "fail, file_id is None"})
     debug_logger.info("file_id: {}".format(file_id))
-    page_id = safe_get(req, 'page_id', 1)  # 默认为第一页
-    page_limit = safe_get(req, 'page_limit', 10)  # 默认每页显示10条记录
+    page_id = safe_get_int(req, 'page_id', 1)  # 默认为第一页
+    page_limit = safe_get_int(req, 'page_limit', 10)  # 默认每页显示10条记录
 
     sorted_json_datas = local_doc_qa.milvus_summary.get_document_by_file_id(file_id)
     # completed_doc = local_doc_qa.get_completed_document(file_id)
@@ -1149,13 +1051,13 @@ async def get_qa_info(req: request):
         debug_logger.info("get_qa_info %s", user_id)
     query = safe_get(req, 'query')
     bot_id = safe_get(req, 'bot_id')
-    qa_ids = safe_get(req, "qa_ids")
+    qa_ids = safe_get_list(req, "qa_ids")
     time_start = safe_get(req, 'time_start')
     time_end = safe_get(req, 'time_end')
     time_range = get_time_range(time_start, time_end)
     if not time_range:
         return {"code": 2002, "msg": f'输入非法！time_start格式错误，time_start: {time_start}，示例：2024-10-05，请检查！'}
-    only_need_count = safe_get(req, 'only_need_count', False)
+    only_need_count = safe_get_bool(req, 'only_need_count', False)
     debug_logger.info(f"only_need_count: {only_need_count}")
     if only_need_count:
         need_info = ["timestamp"]
@@ -1168,13 +1070,13 @@ async def get_qa_info(req: request):
         qa_infos_by_day = dict(Counter(qa_infos))
         return sanic_json({"code": 200, "msg": "success", "qa_infos_by_day": qa_infos_by_day})
 
-    page_id = safe_get(req, 'page_id', 1)
-    page_limit = safe_get(req, 'page_limit', 10)
+    page_id = safe_get_int(req, 'page_id', 1)
+    page_limit = safe_get_int(req, 'page_limit', 10)
     default_need_info = ["qa_id", "user_id", "bot_id", "kb_ids", "query", "model", "product_source", "time_record",
                          "history", "condense_question", "prompt", "result", "retrieval_documents", "source_documents",
                          "timestamp"]
-    need_info = safe_get(req, 'need_info', default_need_info)
-    save_to_excel = safe_get(req, 'save_to_excel', False)
+    need_info = safe_get_list(req, 'need_info', default_need_info)
+    save_to_excel = safe_get_bool(req, 'save_to_excel', False)
     qa_infos = local_doc_qa.milvus_summary.get_qalog_by_filter(need_info=need_info, user_id=user_id, query=query,
                                                                bot_id=bot_id, time_range=time_range,
                                                                any_kb_id=any_kb_id, qa_ids=qa_ids)
@@ -1221,10 +1123,10 @@ async def get_qa_info(req: request):
 @get_time_async
 async def get_random_qa(req: request):
     local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
-    limit = safe_get(req, 'limit', 10)
+    limit = safe_get_int(req, 'limit', 10)
     time_start = safe_get(req, 'time_start')
     time_end = safe_get(req, 'time_end')
-    need_info = safe_get(req, 'need_info')
+    need_info = safe_get_list(req, 'need_info')
     time_range = get_time_range(time_start, time_end)
     if not time_range:
         return {"code": 2002, "msg": f'输入非法！time_start格式错误，time_start: {time_start}，示例：2024-10-05，请检查！'}
@@ -1243,8 +1145,8 @@ async def get_related_qa(req: request):
     qa_id = safe_get(req, 'qa_id')
     if not qa_id:
         return sanic_json({"code": 2005, "msg": "fail, qa_id is None"})
-    need_info = safe_get(req, 'need_info')
-    need_more = safe_get(req, 'need_more', False)
+    need_info = safe_get_list(req, 'need_info')
+    need_more = safe_get_bool(req, 'need_more', False)
     debug_logger.info("get_related_qa %s", qa_id)
     qa_log, recent_logs, older_logs = local_doc_qa.milvus_summary.get_related_qa_infos(qa_id, need_info, need_more)
     # 按kb_ids划分sections
@@ -1395,7 +1297,7 @@ async def new_bot(req: request):
     head_image = safe_get(req, "head_image", BOT_IMAGE)
     prompt_setting = safe_get(req, "prompt_setting", BOT_PROMPT)
     welcome_message = safe_get(req, "welcome_message", BOT_WELCOME)
-    kb_ids = safe_get(req, "kb_ids", [])
+    kb_ids = safe_get_list(req, "kb_ids", [])
     kb_ids_str = ",".join(kb_ids)
 
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
@@ -1447,8 +1349,9 @@ async def update_bot(req: request):
     head_image = safe_get(req, "head_image", bot_info[3])
     prompt_setting = safe_get(req, "prompt_setting", bot_info[4])
     welcome_message = safe_get(req, "welcome_message", bot_info[5])
-    kb_ids = safe_get(req, "kb_ids")
-    if kb_ids is not None:
+    kb_ids_raw = safe_get(req, "kb_ids", None)
+    if kb_ids_raw is not None:
+        kb_ids = safe_get_list(req, "kb_ids")
         not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
         if not_exist_kb_ids:
             msg = "invalid kb_id: {}, please check...".format(not_exist_kb_ids)
@@ -1458,37 +1361,48 @@ async def update_bot(req: request):
         kb_ids_str = bot_info[6]
 
     llm_setting = json.loads(bot_info[9])
-    if api_base := safe_get(req, "api_base"):
-        llm_setting["api_base"] = api_base
-    if api_key := safe_get(req, "api_key"):
-        llm_setting["api_key"] = api_key
-    if api_context_length := safe_get(req, "api_context_length"):
-        llm_setting["api_context_length"] = api_context_length
-    if top_p := safe_get(req, "top_p"):
-        llm_setting["top_p"] = top_p
-    if top_k := safe_get(req, "top_k"):
-        llm_setting["top_k"] = top_k
-    if chunk_size := safe_get(req, "chunk_size"):
-        llm_setting["chunk_size"] = chunk_size
-    if temperature := safe_get(req, "temperature"):
-        llm_setting["temperature"] = temperature
-    if model := safe_get(req, "model"):
-        llm_setting["model"] = model
-    if max_token := safe_get(req, "max_token"):
-        llm_setting["max_token"] = max_token
-    # 如果rerank不是None，赋值，false也可以
-    rerank = safe_get(req, "rerank")
-    if rerank is not None:
-        llm_setting["rerank"] = rerank
-    hybrid_search = safe_get(req, "hybrid_search")
-    if hybrid_search is not None:
-        llm_setting["hybrid_search"] = hybrid_search
-    networking = safe_get(req, "networking")
-    if networking is not None:
-        llm_setting["networking"] = networking
-    only_need_search_results = safe_get(req, "only_need_search_results")
-    if only_need_search_results is not None:
-        llm_setting["only_need_search_results"] = only_need_search_results
+
+    api_base_raw = safe_get(req, "api_base", None)
+    if api_base_raw is not None:
+        llm_setting["api_base"] = api_base_raw
+    api_key_raw = safe_get(req, "api_key", None)
+    if api_key_raw is not None:
+        llm_setting["api_key"] = api_key_raw
+
+    api_context_length_raw = safe_get(req, "api_context_length", None)
+    if api_context_length_raw is not None:
+        llm_setting["api_context_length"] = parse_int(api_context_length_raw)
+    top_p_raw = safe_get(req, "top_p", None)
+    if top_p_raw is not None:
+        llm_setting["top_p"] = parse_float(top_p_raw)
+    top_k_raw = safe_get(req, "top_k", None)
+    if top_k_raw is not None:
+        llm_setting["top_k"] = parse_int(top_k_raw)
+    chunk_size_raw = safe_get(req, "chunk_size", None)
+    if chunk_size_raw is not None:
+        llm_setting["chunk_size"] = parse_int(chunk_size_raw)
+    temperature_raw = safe_get(req, "temperature", None)
+    if temperature_raw is not None:
+        llm_setting["temperature"] = parse_float(temperature_raw)
+    model_raw = safe_get(req, "model", None)
+    if model_raw is not None:
+        llm_setting["model"] = model_raw
+    max_token_raw = safe_get(req, "max_token", None)
+    if max_token_raw is not None:
+        llm_setting["max_token"] = parse_int(max_token_raw)
+
+    rerank_raw = safe_get(req, "rerank", None)
+    if rerank_raw is not None:
+        llm_setting["rerank"] = parse_bool(rerank_raw)
+    hybrid_search_raw = safe_get(req, "hybrid_search", None)
+    if hybrid_search_raw is not None:
+        llm_setting["hybrid_search"] = parse_bool(hybrid_search_raw)
+    networking_raw = safe_get(req, "networking", None)
+    if networking_raw is not None:
+        llm_setting["networking"] = parse_bool(networking_raw)
+    only_need_search_results_raw = safe_get(req, "only_need_search_results", None)
+    if only_need_search_results_raw is not None:
+        llm_setting["only_need_search_results"] = parse_bool(only_need_search_results_raw)
 
     debug_logger.info(f"update llm_setting: {llm_setting}")
 
@@ -1530,7 +1444,7 @@ async def update_chunks(req: request):
         return sanic_json({"code": 2002, "msg": f"fail, currently, there are {len(yellow_files)} files being parsed, please wait for all files to finish parsing before updating the chunk."})
     update_content = safe_get(req, 'update_content')
     debug_logger.info(f"update_content: {update_content}")
-    chunk_size = safe_get(req, 'chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
+    chunk_size = safe_get_int(req, 'chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
     debug_logger.info(f"chunk_size: {chunk_size}")
     update_content_tokens = num_tokens_embed(update_content)
     if update_content_tokens > chunk_size:

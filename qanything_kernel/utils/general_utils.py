@@ -11,6 +11,7 @@ import time
 import os
 import logging
 import re
+import json
 import requests
 import aiohttp
 from functools import wraps
@@ -38,7 +39,9 @@ __all__ = ['isURL', 'get_time', 'get_time_async', 'format_source_documents', 'sa
            'clear_string', 'simplify_filename', 'string_bytes_length', 'correct_kb_id', 'clear_kb_id',
            'clear_string_is_equal', 'export_qalogs_to_excel', 'deduplicate_documents', 'fast_estimate_file_char_count',
            'check_user_id_and_user_info', 'get_table_infos', 'format_time_record', 'get_time_range',
-           'html_to_markdown', "num_tokens_embed", "num_tokens_rerank", "get_all_subpages", "replace_image_references", 'check_and_transform_excel']
+           'html_to_markdown', "num_tokens_embed", "num_tokens_rerank", "get_all_subpages", "replace_image_references",
+           'check_and_transform_excel', 'parse_bool', 'parse_int', 'parse_float', 'parse_list',
+           'safe_get_bool', 'safe_get_int', 'safe_get_float', 'safe_get_list']
 
 
 def get_invalid_user_id_msg(user_id):
@@ -113,6 +116,107 @@ def safe_get(req: Request, attr: str, default=None):
         logging.warning(f"get {attr} from request failed:")
         logging.warning(traceback.format_exc())
     return default
+
+
+def parse_bool(value, default=False):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ('true', '1', 'yes', 'on', 'y', 't'):
+            return True
+        if s in ('false', '0', 'no', 'off', 'n', 'f', ''):
+            return False
+    return default
+
+
+def parse_int(value, default=0):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if s == '':
+            return default
+        try:
+            return int(s)
+        except (ValueError, TypeError):
+            try:
+                return int(float(s))
+            except (ValueError, TypeError):
+                return default
+    return default
+
+
+def parse_float(value, default=0.0):
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if s == '':
+            return default
+        try:
+            return float(s)
+        except (ValueError, TypeError):
+            return default
+    return default
+
+
+def parse_list(value, default=None, item_separator=','):
+    if default is None:
+        default = []
+    if value is None:
+        return list(default)
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, str):
+        s = value.strip()
+        if s == '':
+            return list(default)
+        if s.startswith('[') and s.endswith(']'):
+            try:
+                parsed = json.loads(s)
+                if isinstance(parsed, list):
+                    return parsed
+            except (ValueError, TypeError, json.JSONDecodeError):
+                pass
+        return [item.strip() for item in s.split(item_separator) if item.strip()]
+    return list(default)
+
+
+def safe_get_bool(req: Request, attr: str, default=False):
+    value = safe_get(req, attr, None)
+    return parse_bool(value, default)
+
+
+def safe_get_int(req: Request, attr: str, default=0):
+    value = safe_get(req, attr, None)
+    return parse_int(value, default)
+
+
+def safe_get_float(req: Request, attr: str, default=0.0):
+    value = safe_get(req, attr, None)
+    return parse_float(value, default)
+
+
+def safe_get_list(req: Request, attr: str, default=None, item_separator=','):
+    value = safe_get(req, attr, None)
+    return parse_list(value, default, item_separator)
 
 
 def truncate_filename(filename, max_length=200):

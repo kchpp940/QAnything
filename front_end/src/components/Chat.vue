@@ -503,10 +503,11 @@ const send = async () => {
   }
 
   checkKbSelect();
-  if (!selectList.value.length) {
+  const onlySearch = chatSettingFormActive.value.capabilities.onlySearch;
+  if (onlySearch && !selectList.value.length) {
     return message.warning(common.chooseError);
-  } else {
-    // 校验选中的知识库
+  }
+  if (selectList.value.length) {
     message.info({
       content:
         common.type === 'zh'
