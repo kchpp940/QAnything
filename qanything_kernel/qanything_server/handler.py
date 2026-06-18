@@ -644,25 +644,11 @@ async def clean_files_by_status(req: request):
 
 def normalize_llm_params(llm_dict, from_bot=False):
     """
-    统一规范化 LLM 配置参数，内部调用 LLM_PARAM_SCHEMA 派生的标准化函数。
-    from_bot=True 表示参数来自数据库存储的 llm_setting JSON，需要全量规范化。
+    统一规范化 LLM 配置参数，内部调用共享 schema 派生的标准化函数。
+    返回标准字段名（与 LLM_PARAM_SCHEMA keys 一致，含 networking）。
+    from_bot=True 表示参数来自数据库存储的 llm_setting JSON，需要全量规范化（缺字段补默认值）。
     """
-    params = normalize_llm_params_from_schema(llm_dict)
-    return {
-        'rerank': params['rerank'],
-        'only_need_search_results': params['only_need_search_results'],
-        'need_web_search': params['networking'],
-        'api_base': params['api_base'],
-        'api_key': params['api_key'],
-        'api_context_length': params['api_context_length'],
-        'top_p': params['top_p'],
-        'temperature': params['temperature'],
-        'top_k': params['top_k'],
-        'model': params['model'],
-        'max_token': params['max_token'],
-        'hybrid_search': params['hybrid_search'],
-        'chunk_size': params['chunk_size'],
-    }
+    return normalize_llm_params_for_bot(llm_dict)
 
 
 def normalize_kb_ids(kb_ids_input):
@@ -702,32 +688,24 @@ async def local_doc_chat(req: request):
             return sanic_json({"code": 2003, "msg": "fail, Bot {} llm_setting is empty.".format(bot_id)})
         llm_dict = json.loads(llm_setting_raw)
         params = normalize_llm_params(llm_dict, from_bot=True)
+        missing_params = []
+        invalid_params = []
     else:
         kb_ids_raw = safe_get(req, 'kb_ids', None)
         kb_ids = normalize_kb_ids(kb_ids_raw)
         custom_prompt = safe_get(req, 'custom_prompt', None)
 
-        llm_dict = {
-            'rerank': safe_get(req, 'rerank', None),
-            'only_need_search_results': safe_get(req, 'only_need_search_results', None),
-            'networking': safe_get(req, 'networking', None),
-            'api_base': safe_get(req, 'api_base', ''),
-            'api_key': safe_get(req, 'api_key', 'ollama'),
-            'api_context_length': safe_get(req, 'api_context_length', None),
-            'top_p': safe_get(req, 'top_p', None),
-            'temperature': safe_get(req, 'temperature', None),
-            'top_k': safe_get(req, 'top_k', None),
-            'model': safe_get(req, 'model', 'gpt-4o-mini'),
-            'max_token': safe_get(req, 'max_token', None),
-            'hybrid_search': safe_get(req, 'hybrid_search', None),
-            'chunk_size': safe_get(req, 'chunk_size', None),
-        }
-        params = normalize_llm_params(llm_dict, from_bot=False)
+        llm_dict = {}
+        for field in LLM_PARAM_SCHEMA.keys():
+            llm_dict[field] = safe_get(req, field, None)
+
+        normalized_params, missing_params, invalid_params = normalize_and_validate_llm_params_for_request(llm_dict)
+        params = normalized_params
         params['api_base'] = params['api_base'].replace('0.0.0.0', GATEWAY_IP).replace('127.0.0.1', GATEWAY_IP).replace('localhost', GATEWAY_IP)
 
     rerank = params['rerank']
     only_need_search_results = params['only_need_search_results']
-    need_web_search = params['need_web_search']
+    need_web_search = params['networking']
     api_base = params['api_base']
     api_key = params['api_key']
     api_context_length = params['api_context_length']
@@ -748,26 +726,16 @@ async def local_doc_chat(req: request):
     streaming = safe_get_bool(req, 'streaming', False)
     history = safe_get_list(req, 'history', [])
 
-    validate_params = {
-        'api_key': api_key,
-        'api_base': api_base,
-        'api_context_length': api_context_length,
-        'top_p': top_p,
-        'top_k': top_k,
-        'temperature': temperature,
-        'model': model,
-        'max_token': max_token,
-        'chunk_size': chunk_size,
-        'rerank': rerank,
-        'hybrid_search': hybrid_search,
-        'networking': need_web_search,
-        'only_need_search_results': only_need_search_results,
-    }
-    missing_params = validate_llm_params_from_schema(validate_params)
-
-    if missing_params:
-        missing_params_str = " and ".join(missing_params) if len(missing_params) > 1 else missing_params[0]
-        return sanic_json({"code": 2003, "msg": f"fail, {missing_params_str} is required"})
+    if missing_params or invalid_params:
+        error_msgs = []
+        if missing_params:
+            missing_str = " and ".join(missing_params) if len(missing_params) > 1 else missing_params[0]
+            error_msgs.append(f"{missing_str} is required")
+        if invalid_params:
+            invalid_str = ", ".join(invalid_params)
+            error_msgs.append(f"{invalid_str} value is invalid")
+        combined_msg = "; ".join(error_msgs)
+        return sanic_json({"code": 2003, "msg": f"fail, {combined_msg}"})
 
     if only_need_search_results and streaming:
         return sanic_json(
@@ -1359,9 +1327,9 @@ async def new_bot(req: request):
             llm_raw_dict[field] = raw_val
 
     if llm_raw_dict:
-        llm_setting = normalize_llm_params_from_schema(llm_raw_dict)
+        llm_setting = normalize_llm_params_for_bot(llm_raw_dict)
     else:
-        llm_setting = get_default_llm_setting()
+        llm_setting = get_default_llm_setting_for_bot()
     llm_setting_json = json.dumps(llm_setting)
 
     local_doc_qa.milvus_summary.new_qanything_bot(bot_id, user_id, bot_name, desc, head_image, prompt_setting,
@@ -1421,14 +1389,14 @@ async def update_bot(req: request):
     llm_setting_raw = bot_info[9]
     if llm_setting_raw:
         old_llm_dict = json.loads(llm_setting_raw)
-        llm_setting = normalize_llm_params(old_llm_dict, from_bot=True)
+        llm_setting = normalize_llm_params_for_bot(old_llm_dict)
     else:
-        llm_setting = normalize_llm_params({}, from_bot=True)
+        llm_setting = get_default_llm_setting_for_bot()
 
     for field, schema in LLM_PARAM_SCHEMA.items():
         raw_val = safe_get(req, field, None)
         if raw_val is not None:
-            llm_setting[field] = parse_param_by_schema(raw_val, schema)
+            llm_setting[field] = parse_param_by_schema(raw_val, schema, fill_default=True)
 
     debug_logger.info(f"update llm_setting: {llm_setting}")
 

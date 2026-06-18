@@ -42,8 +42,10 @@ __all__ = ['isURL', 'get_time', 'get_time_async', 'format_source_documents', 'sa
            'html_to_markdown', "num_tokens_embed", "num_tokens_rerank", "get_all_subpages", "replace_image_references",
            'check_and_transform_excel', 'parse_bool', 'parse_int', 'parse_float', 'parse_list',
            'safe_get_bool', 'safe_get_int', 'safe_get_float', 'safe_get_list',
-           'LLM_PARAM_SCHEMA', 'normalize_llm_params_from_schema', 'validate_llm_params_from_schema',
-           'get_default_llm_setting', 'parse_param_by_schema']
+           'LLM_PARAM_SCHEMA', 'LLM_SCHEMA_META', 'load_shared_llm_schema',
+           'normalize_llm_params_for_bot', 'normalize_and_validate_llm_params_for_request',
+           'get_default_llm_setting_for_bot', 'parse_param_by_schema',
+           'LLM_SCHEMA_SHARED_PATH']
 
 
 def get_invalid_user_id_msg(user_id):
@@ -120,99 +122,71 @@ def safe_get(req: Request, attr: str, default=None):
     return default
 
 
-LLM_PARAM_SCHEMA = {
-    'api_key': {
-        'type': 'str',
-        'default': 'ollama',
-        'required': True,
-        'description': 'LLM API Key',
-    },
-    'api_base': {
-        'type': 'str',
-        'default': '',
-        'required': True,
-        'description': 'LLM API Base URL',
-    },
-    'model': {
-        'type': 'str',
-        'default': 'gpt-4o-mini',
-        'required': False,
-        'description': 'LLM Model Name',
-    },
-    'api_context_length': {
-        'type': 'int',
-        'default': 4096,
-        'min': 1,
-        'required': True,
-        'description': 'LLM Context Window Size',
-    },
-    'max_token': {
-        'type': 'int',
-        'default': None,
-        'allow_null': True,
-        'required': False,
-        'description': 'Max Output Tokens',
-    },
-    'chunk_size': {
-        'type': 'int',
-        'default': 300,
-        'min': 50,
-        'required': False,
-        'description': 'Document Chunk Size',
-    },
-    'temperature': {
-        'type': 'float',
-        'default': 0.5,
-        'min': 0.0,
-        'max': 2.0,
-        'required': True,
-        'description': 'Sampling Temperature',
-    },
-    'top_k': {
-        'type': 'int',
-        'default': 8,
-        'min': 1,
-        'max': 100,
-        'required': True,
-        'description': 'Vector Search Top-K',
-    },
-    'top_p': {
-        'type': 'float',
-        'default': 0.99,
-        'min': 0.0,
-        'max': 1.0,
-        'required': True,
-        'description': 'Nucleus Sampling Top-P',
-    },
-    'rerank': {
-        'type': 'bool',
-        'default': True,
-        'required': False,
-        'description': 'Enable Rerank',
-    },
-    'hybrid_search': {
-        'type': 'bool',
-        'default': False,
-        'required': False,
-        'description': 'Enable Hybrid Search',
-    },
-    'networking': {
-        'type': 'bool',
-        'default': False,
-        'required': False,
-        'description': 'Enable Web Search',
-    },
-    'only_need_search_results': {
-        'type': 'bool',
-        'default': False,
-        'required': False,
-        'description': 'Return Search Results Only',
-    },
-}
+LLM_SCHEMA_SHARED_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    'front_end', 'public', 'llm_param_schema.json'
+)
 
 
-def parse_param_by_schema(value, field_schema):
-    """根据 schema 定义解析单个参数值"""
+def load_shared_llm_schema():
+    """
+    从共享的 JSON 文件加载 LLM 参数 schema（真理来源唯一）。
+    失败时回退到内置 schema，保证进程可以启动。
+    """
+    fallback_schema = {
+        'api_key':                {'type': 'str',   'default': 'ollama',       'required_for_request': True,  'fill_default_for_bot': True,  'description': 'LLM API Key'},
+        'api_base':               {'type': 'str',   'default': '',             'required_for_request': True,  'fill_default_for_bot': True,  'description': 'LLM API Base URL'},
+        'model':                  {'type': 'str',   'default': 'gpt-4o-mini',  'required_for_request': False, 'fill_default_for_bot': True,  'description': 'LLM Model Name'},
+        'api_context_length':     {'type': 'int',   'default': 4096, 'min': 1, 'required_for_request': True,  'fill_default_for_bot': True,  'description': 'LLM Context Window Size'},
+        'max_token':              {'type': 'int',   'default': None, 'allow_null': True,  'required_for_request': False, 'fill_default_for_bot': True, 'description': 'Max Output Tokens'},
+        'chunk_size':             {'type': 'int',   'default': 300,  'min': 50, 'required_for_request': False, 'fill_default_for_bot': True, 'description': 'Document Chunk Size'},
+        'temperature':            {'type': 'float', 'default': 0.5,  'min': 0.0, 'max': 2.0, 'required_for_request': True, 'fill_default_for_bot': True, 'description': 'Sampling Temperature'},
+        'top_k':                  {'type': 'int',   'default': 8,    'min': 1,   'max': 100, 'required_for_request': True, 'fill_default_for_bot': True, 'description': 'Vector Search Top-K'},
+        'top_p':                  {'type': 'float', 'default': 0.99, 'min': 0.0, 'max': 0.999, 'required_for_request': True, 'fill_default_for_bot': True, 'description': 'Nucleus Sampling Top-P (max 0.999, 1.0 is invalid)'},
+        'rerank':                 {'type': 'bool',  'default': True,  'required_for_request': False, 'fill_default_for_bot': True, 'description': 'Enable Rerank'},
+        'hybrid_search':          {'type': 'bool',  'default': False, 'required_for_request': False, 'fill_default_for_bot': True, 'description': 'Enable Hybrid Search'},
+        'networking':             {'type': 'bool',  'default': False, 'required_for_request': False, 'fill_default_for_bot': True, 'description': 'Enable Web Search'},
+        'only_need_search_results': {'type': 'bool', 'default': False, 'required_for_request': False, 'fill_default_for_bot': True, 'description': 'Return Search Results Only'},
+    }
+    fallback_meta = {
+        'post_process': {
+            'top_p_1_0_correction': {'enabled': True, 'from': 1.0, 'to': 0.99,
+                                     'description': 'LLM 采样 API 通常拒绝 top_p=1.0，修正为 0.99'},
+        }
+    }
+
+    try:
+        with open(LLM_SCHEMA_SHARED_PATH, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+        fields = raw.get('fields', {})
+        meta = {k: v for k, v in raw.items() if k != 'fields'}
+        return fields, meta
+    except Exception as e:
+        logging.warning(f"[load_shared_llm_schema] 加载共享 schema 失败，使用内置回退: {e}")
+        return fallback_schema, fallback_meta
+
+
+LLM_PARAM_SCHEMA, LLM_SCHEMA_META = load_shared_llm_schema()
+
+
+def _apply_post_process(params_dict):
+    """应用 schema meta 中定义的后处理规则"""
+    correction = (LLM_SCHEMA_META.get('post_process', {})
+                               .get('top_p_1_0_correction', {}))
+    if correction.get('enabled'):
+        from_val = correction.get('from', 1.0)
+        to_val = correction.get('to', 0.99)
+        if params_dict.get('top_p') == from_val:
+            params_dict['top_p'] = to_val
+    return params_dict
+
+
+def parse_param_by_schema(value, field_schema, fill_default=True):
+    """
+    根据 schema 定义解析单个参数值。
+    fill_default=True:  值缺失/解析失败时填默认值（用于 Bot 默认值补全）
+    fill_default=False: 值缺失时返回 None，保留原始失败态（用于请求校验，区分"没传"和"传了非法值"）
+    """
     param_type = field_schema['type']
     default = field_schema['default']
     allow_null = field_schema.get('allow_null', False)
@@ -220,68 +194,94 @@ def parse_param_by_schema(value, field_schema):
     if value is None and allow_null:
         return None
 
+    if value is None:
+        return default if fill_default else None
+
+    parsed = None
     if param_type == 'bool':
-        return parse_bool(value, default)
+        parsed = parse_bool(value, None)
     elif param_type == 'int':
-        return parse_int(value, default)
+        parsed = parse_int(value, None)
     elif param_type == 'float':
-        return parse_float(value, default)
+        parsed = parse_float(value, None)
     elif param_type == 'str':
-        if value is None:
-            return default
-        return str(value)
+        parsed = str(value) if value is not None else None
     elif param_type == 'list':
-        return parse_list(value, default if default is not None else [])
+        parsed = parse_list(value, None)
     else:
         raise ValueError(f"Unknown param type: {param_type}")
 
+    if parsed is None:
+        return default if fill_default else None
 
-def normalize_llm_params_from_schema(llm_dict):
-    """根据 LLM_PARAM_SCHEMA 规范化所有参数"""
+    min_val = field_schema.get('min', None)
+    max_val = field_schema.get('max', None)
+    if param_type in ('int', 'float') and parsed is not None:
+        if (min_val is not None and parsed < min_val) or (max_val is not None and parsed > max_val):
+            if fill_default:
+                return default
+            else:
+                return None
+
+    return parsed
+
+
+def normalize_llm_params_for_bot(llm_dict):
+    """
+    场景: Bot 默认值补全（new_bot / update_bot / 旧库数据修复）
+    语义: 缺字段 → 填默认值；非法值 → 填默认值；最终所有字段都有合法值
+    """
     result = {}
     for field, schema in LLM_PARAM_SCHEMA.items():
         raw_value = llm_dict.get(field, None)
-        result[field] = parse_param_by_schema(raw_value, schema)
-
-    if result['top_p'] == 1.0:
-        result['top_p'] = 0.99
-
-    return result
+        result[field] = parse_param_by_schema(raw_value, schema, fill_default=True)
+    return _apply_post_process(result)
 
 
-def validate_llm_params_from_schema(normalized_params):
-    """根据 LLM_PARAM_SCHEMA 验证参数，返回缺失/非法字段列表"""
-    errors = []
+def normalize_and_validate_llm_params_for_request(llm_dict):
+    """
+    场景: 请求参数校验（local_doc_chat 非 Bot 分支 / 非 Bot update_bot 新值）
+    语义: 缺字段 → 标记 missing；非法值 → 标记 invalid；不静默掩盖！
+    返回: (normalized_dict, missing_fields, invalid_fields)
+      - normalized_dict: 成功解析出的合法值（missing/invalid 字段值为 None，调用方应检查）
+      - missing_fields:   required_for_request=True 且完全没传的字段
+      - invalid_fields:   传了但解析失败 / 越界的字段
+    """
+    normalized = {}
+    missing = []
+    invalid = []
+
     for field, schema in LLM_PARAM_SCHEMA.items():
-        value = normalized_params[field]
-        required = schema['required']
+        required = schema.get('required_for_request', False)
+        raw_value = llm_dict.get(field, None)
         allow_null = schema.get('allow_null', False)
-        min_val = schema.get('min', None)
-        max_val = schema.get('max', None)
 
-        if required and (value is None or (isinstance(value, str) and not value.strip())):
-            if not (allow_null and value is None):
-                errors.append(field)
-                continue
+        value_absent = False
+        if raw_value is None:
+            value_absent = True
+        elif isinstance(raw_value, str) and not raw_value.strip() and not allow_null:
+            value_absent = True
 
-        if value is None and not allow_null:
-            errors.append(field)
+        if value_absent:
+            if required:
+                missing.append(field)
+            normalized[field] = schema['default']
             continue
 
-        if value is not None:
-            if min_val is not None and value < min_val:
-                errors.append(field)
-                continue
-            if max_val is not None and value > max_val:
-                errors.append(field)
-                continue
+        parsed = parse_param_by_schema(raw_value, schema, fill_default=False)
+        if parsed is None and not allow_null:
+            invalid.append(field)
+            normalized[field] = schema['default']
+        else:
+            normalized[field] = parsed
 
-    return errors
+    normalized = _apply_post_process(normalized)
+    return normalized, missing, invalid
 
 
-def get_default_llm_setting():
-    """根据 schema 获取默认 LLM 配置"""
-    return normalize_llm_params_from_schema({})
+def get_default_llm_setting_for_bot():
+    """根据 schema 获取完整默认 LLM 配置（用于创建新 Bot）"""
+    return normalize_llm_params_for_bot({})
 
 
 def parse_bool(value, default=False):

@@ -277,31 +277,51 @@ export function getContentDispositionByHeader(headers: Headers): string {
   );
 }
 
+import LlmSchemaRaw from '/llm_param_schema.json';
+
 export interface LlmParamSchema {
   type: 'bool' | 'int' | 'float' | 'str' | 'list';
   default: any;
-  required: boolean;
-  allowNull?: boolean;
+  required_for_request: boolean;
+  fill_default_for_bot: boolean;
+  allow_null?: boolean;
   min?: number;
   max?: number;
   description: string;
 }
 
-export const LLM_PARAM_SCHEMA: Record<string, LlmParamSchema> = {
-  api_key: { type: 'str', default: 'ollama', required: true, description: 'LLM API Key' },
-  api_base: { type: 'str', default: '', required: true, description: 'LLM API Base URL' },
-  model: { type: 'str', default: 'gpt-4o-mini', required: false, description: 'LLM Model Name' },
-  api_context_length: { type: 'int', default: 4096, min: 1, required: true, description: 'LLM Context Window Size' },
-  max_token: { type: 'int', default: null, allowNull: true, required: false, description: 'Max Output Tokens' },
-  chunk_size: { type: 'int', default: 300, min: 50, required: false, description: 'Document Chunk Size' },
-  temperature: { type: 'float', default: 0.5, min: 0.0, max: 2.0, required: true, description: 'Sampling Temperature' },
-  top_k: { type: 'int', default: 8, min: 1, max: 100, required: true, description: 'Vector Search Top-K' },
-  top_p: { type: 'float', default: 0.99, min: 0.0, max: 1.0, required: true, description: 'Nucleus Sampling Top-P' },
-  rerank: { type: 'bool', default: true, required: false, description: 'Enable Rerank' },
-  hybrid_search: { type: 'bool', default: false, required: false, description: 'Enable Hybrid Search' },
-  networking: { type: 'bool', default: false, required: false, description: 'Enable Web Search' },
-  only_need_search_results: { type: 'bool', default: false, required: false, description: 'Return Search Results Only' },
+const FALLBACK_SCHEMA: Record<string, LlmParamSchema> = {
+  api_key: { type: 'str', default: 'ollama', required_for_request: true, fill_default_for_bot: true, description: 'LLM API Key' },
+  api_base: { type: 'str', default: '', required_for_request: true, fill_default_for_bot: true, description: 'LLM API Base URL' },
+  model: { type: 'str', default: 'gpt-4o-mini', required_for_request: false, fill_default_for_bot: true, description: 'LLM Model Name' },
+  api_context_length: { type: 'int', default: 4096, min: 1, required_for_request: true, fill_default_for_bot: true, description: 'LLM Context Window Size' },
+  max_token: { type: 'int', default: null, allow_null: true, required_for_request: false, fill_default_for_bot: true, description: 'Max Output Tokens' },
+  chunk_size: { type: 'int', default: 300, min: 50, required_for_request: false, fill_default_for_bot: true, description: 'Document Chunk Size' },
+  temperature: { type: 'float', default: 0.5, min: 0.0, max: 2.0, required_for_request: true, fill_default_for_bot: true, description: 'Sampling Temperature' },
+  top_k: { type: 'int', default: 8, min: 1, max: 100, required_for_request: true, fill_default_for_bot: true, description: 'Vector Search Top-K' },
+  top_p: { type: 'float', default: 0.99, min: 0.0, max: 0.999, required_for_request: true, fill_default_for_bot: true, description: 'Nucleus Sampling Top-P (max 0.999, 1.0 is invalid)' },
+  rerank: { type: 'bool', default: true, required_for_request: false, fill_default_for_bot: true, description: 'Enable Rerank' },
+  hybrid_search: { type: 'bool', default: false, required_for_request: false, fill_default_for_bot: true, description: 'Enable Hybrid Search' },
+  networking: { type: 'bool', default: false, required_for_request: false, fill_default_for_bot: true, description: 'Enable Web Search' },
+  only_need_search_results: { type: 'bool', default: false, required_for_request: false, fill_default_for_bot: true, description: 'Return Search Results Only' },
 };
+
+export const LLM_SCHEMA_META = (LlmSchemaRaw as any)?.post_process || {
+  top_p_1_0_correction: { enabled: true, from: 1.0, to: 0.99 },
+};
+
+function loadSchemaFromShared(): Record<string, LlmParamSchema> {
+  try {
+    const rawFields = (LlmSchemaRaw as any)?.fields;
+    if (!rawFields || typeof rawFields !== 'object') return FALLBACK_SCHEMA;
+    return rawFields as Record<string, LlmParamSchema>;
+  } catch (e) {
+    console.warn('[loadSchemaFromShared] 加载共享 schema 失败，使用内置回退:', e);
+    return FALLBACK_SCHEMA;
+  }
+}
+
+export const LLM_PARAM_SCHEMA: Record<string, LlmParamSchema> = loadSchemaFromShared();
 
 export function parseParamBySchema(value: any, schema: LlmParamSchema): any {
   const paramType = schema.type;
@@ -476,4 +496,48 @@ export function buildChatSendData(options: BuildChatSendDataOptions): Record<str
   }
 
   return sendData;
+}
+
+export interface BuildUpdateBotParamsOptions {
+  bot_id: string;
+  kb_ids?: string[];
+  chatSetting: IChatSettingCore;
+  bot_name?: string;
+  description?: string;
+  head_image?: string;
+  prompt_setting?: string;
+  welcome_message?: string;
+}
+
+export function buildUpdateBotParams(options: BuildUpdateBotParamsOptions): Record<string, any> {
+  const { bot_id, kb_ids, chatSetting } = options;
+  const { capabilities } = chatSetting;
+
+  const params: Record<string, any> = {
+    bot_id,
+    rerank: parseBool(capabilities.rerank),
+    only_need_search_results: parseBool(capabilities.onlySearch),
+    hybrid_search: parseBool(capabilities.mixedSearch),
+    networking: parseBool(capabilities.networkSearch),
+    max_token: chatSetting.maxToken !== null && chatSetting.maxToken !== undefined
+      ? parseInt_(chatSetting.maxToken)
+      : LLM_PARAM_SCHEMA.max_token.default,
+    api_base: String(chatSetting.apiBase || ''),
+    api_key: String(chatSetting.apiKey || ''),
+    model: String(chatSetting.apiModelName || ''),
+    api_context_length: parseInt_(chatSetting.apiContextLength),
+    chunk_size: parseInt_(chatSetting.chunkSize),
+    top_p: parseFloat_(chatSetting.top_P),
+    top_k: parseInt_(chatSetting.top_K),
+    temperature: parseFloat_(chatSetting.temperature),
+  };
+
+  if (kb_ids !== undefined) params.kb_ids = kb_ids;
+  if (options.bot_name !== undefined) params.bot_name = options.bot_name;
+  if (options.description !== undefined) params.description = options.description;
+  if (options.head_image !== undefined) params.head_image = options.head_image;
+  if (options.prompt_setting !== undefined) params.prompt_setting = options.prompt_setting;
+  if (options.welcome_message !== undefined) params.welcome_message = options.welcome_message;
+
+  return params;
 }

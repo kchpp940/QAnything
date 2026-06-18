@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "llm_param_schema_v1",
+  "title": "QAnything LLM Parameter Schema",
+  "description": "共享的 LLM 参数 schema，前后端共同读取，禁止各自复制硬编码",
+  "version": "1.0.0",
+  "fields": {
+    "api_key": {
+      "type": "str",
+      "default": "ollama",
+      "required_for_request": true,
+      "fill_default_for_bot": true,
+      "description": "LLM API Key"
+    },
+    "api_base": {
+      "type": "str",
+      "default": "",
+      "required_for_request": true,
+      "fill_default_for_bot": true,
+      "description": "LLM API Base URL"
+    },
+    "model": {
+      "type": "str",
+      "default": "gpt-4o-mini",
+      "required_for_request": false,
+      "fill_default_for_bot": true,
+      "description": "LLM Model Name"
+    },
+    "api_context_length": {
+      "type": "int",
+      "default": 4096,
+      "min": 1,
+      "required_for_request": true,
+      "fill_default_for_bot": true,
+      "description": "LLM Context Window Size"
+    },
+    "max_token": {
+      "type": "int",
+      "default": null,
+      "allow_null": true,
+      "required_for_request": false,
+      "fill_default_for_bot": true,
+      "description": "Max Output Tokens"
+    },
+    "chunk_size": {
+      "type": "int",
+      "default": 300,
+      "min": 50,
+      "required_for_request": false,
+      "fill_default_for_bot": true,
+      "description": "Document Chunk Size"
+    },
+    "temperature": {
+      "type": "float",
+      "default": 0.5,
+      "min": 0.0,
+      "max": 2.0,
+      "required_for_request": true,
+      "fill_default_for_bot": true,
+      "description": "Sampling Temperature"
+    },
+    "top_k": {
+      "type": "int",
+      "default": 8,
+      "min": 1,
+      "max": 100,
+      "required_for_request": true,
+      "fill_default_for_bot": true,
+      "description": "Vector Search Top-K"
+    },
+    "top_p": {
+      "type": "float",
+      "default": 0.99,
+      "min": 0.0,
+      "max": 0.999,
+      "required_for_request": true,
+      "fill_default_for_bot": true,
+      "description": "Nucleus Sampling Top-P (max 0.999, 1.0 is invalid)"
+    },
+    "rerank": {
+      "type": "bool",
+      "default": true,
+      "required_for_request": false,
+      "fill_default_for_bot": true,
+      "description": "Enable Rerank"
+    },
+    "hybrid_search": {
+      "type": "bool",
+      "default": false,
+      "required_for_request": false,
+      "fill_default_for_bot": true,
+      "description": "Enable Hybrid Search"
+    },
+    "networking": {
+      "type": "bool",
+      "default": false,
+      "required_for_request": false,
+      "fill_default_for_bot": true,
+      "description": "Enable Web Search"
+    },
+    "only_need_search_results": {
+      "type": "bool",
+      "default": false,
+      "required_for_request": false,
+      "fill_default_for_bot": true,
+      "description": "Return Search Results Only"
+    }
+  },
+  "post_process": {
+    "top_p_1_0_correction": {
+      "enabled": true,
+      "from": 1.0,
+      "to": 0.99,
+      "description": "LLM 采样 API 通常拒绝 top_p=1.0，修正为 0.99"
+    }
+  }
+}

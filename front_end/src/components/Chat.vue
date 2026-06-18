@@ -228,7 +228,7 @@ import html2canvas from 'html2canvas';
 import urlResquest, { userId, userPhone } from '@/services/urlConfig';
 import { getLanguage } from '@/language';
 import { useLanguage } from '@/store/useLanguage';
-import { ChatInfoClass, formatTimestamp, resultControl, parseBool, parseInt_, parseFloat_ } from '@/utils/utils';
+import { ChatInfoClass, formatTimestamp, resultControl, buildChatSendData, buildUpdateBotParams } from '@/utils/utils';
 import ChatSettingDialog from '@/components/ChatSettingDialog.vue';
 import HistoryChat from '@/components/Home/HistoryChat.vue';
 import { useHomeChat } from '@/store/useHomeChat';
@@ -525,28 +525,14 @@ const send = async () => {
   showLoading.value = true;
   ctrl = new AbortController();
 
-  const sendData = {
+  const sendData = buildChatSendData({
     kb_ids: selectList.value,
     history: history.value,
     question: q,
-    streaming: parseBool(chatSettingFormActive.value.capabilities.onlySearch === false, false),
-    networking: parseBool(chatSettingFormActive.value.capabilities.networkSearch, false),
-    product_source: 'saas',
-    rerank: parseBool(chatSettingFormActive.value.capabilities.rerank, true),
-    only_need_search_results: parseBool(chatSettingFormActive.value.capabilities.onlySearch, false),
-    hybrid_search: parseBool(chatSettingFormActive.value.capabilities.mixedSearch, false),
-    max_token: chatSettingFormActive.value.maxToken !== null && chatSettingFormActive.value.maxToken !== undefined
-      ? parseInt_(chatSettingFormActive.value.maxToken)
-      : null,
-    api_base: String(chatSettingFormActive.value.apiBase || ''),
-    api_key: String(chatSettingFormActive.value.apiKey || 'ollama'),
-    model: String(chatSettingFormActive.value.apiModelName || 'gpt-4o-mini'),
-    api_context_length: parseInt_(chatSettingFormActive.value.apiContextLength, 4096),
-    chunk_size: parseInt_(chatSettingFormActive.value.chunkSize, 300),
-    top_p: parseFloat_(chatSettingFormActive.value.top_P, 0.99),
-    top_k: parseInt_(chatSettingFormActive.value.top_K, 8),
-    temperature: parseFloat_(chatSettingFormActive.value.temperature, 0.5),
-  };
+    user_id: userId,
+    user_info: userPhone,
+    chatSetting: chatSettingFormActive.value,
+  });
 
   // 如果是仅检索
   if (chatSettingFormActive.value.capabilities.onlySearch) {
@@ -698,25 +684,13 @@ const shareChat = async () => {
     )) as any;
     // 将知识库变为现在这个
     await resultControl(
-      await urlResquest.updateBot({
-        bot_id,
-        kb_ids: [...selectList.value],
-        only_need_search_results: parseBool(chatSettingFormActive.value.capabilities.onlySearch, false),
-        networking: parseBool(chatSettingFormActive.value.capabilities.networkSearch, false),
-        api_base: String(chatSettingFormActive.value.apiBase || ''),
-        api_key: String(chatSettingFormActive.value.apiKey || 'ollama'),
-        api_context_length: parseInt_(chatSettingFormActive.value.apiContextLength, 4096),
-        top_p: parseFloat_(chatSettingFormActive.value.top_P, 0.99),
-        temperature: parseFloat_(chatSettingFormActive.value.temperature, 0.5),
-        top_k: parseInt_(chatSettingFormActive.value.top_K, 8),
-        model: String(chatSettingFormActive.value.apiModelName || 'gpt-4o-mini'),
-        max_token: chatSettingFormActive.value.maxToken !== null && chatSettingFormActive.value.maxToken !== undefined
-          ? parseInt_(chatSettingFormActive.value.maxToken)
-          : null,
-        hybrid_search: parseBool(chatSettingFormActive.value.capabilities.mixedSearch, false),
-        chunk_size: parseInt_(chatSettingFormActive.value.chunkSize, 300),
-        rerank: parseBool(chatSettingFormActive.value.capabilities.rerank, true),
-      })
+      await urlResquest.updateBot(
+        buildUpdateBotParams({
+          bot_id,
+          kb_ids: [...selectList.value],
+          chatSetting: chatSettingFormActive.value,
+        })
+      )
     );
     setCopyUrlVisible(true);
     const { origin, pathname } = window.location;

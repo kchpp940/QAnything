@@ -234,7 +234,7 @@ import html2canvas from 'html2canvas';
 import { getLanguage } from '@/language/index';
 import { useLanguage } from '@/store/useLanguage';
 import urlResquest from '@/services/urlConfig';
-import { ChatInfoClass, resultControl, normalizeBotLlmSetting, parseBool, parseInt_, parseFloat_ } from '@/utils/utils';
+import { ChatInfoClass, resultControl, normalizeBotLlmSetting, buildChatSendData } from '@/utils/utils';
 import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
 import ChatTextarea from '@/components/ChatTextarea.vue';
@@ -477,30 +477,14 @@ const send = async () => {
   showLoading.value = true;
   ctrl = new AbortController();
 
-  const sendData = {
-    user_id: props.virtualUserId,
-    user_info: userInfo.phoneNumber,
+  const sendData = buildChatSendData({
     bot_id: props.botInfo.bot_id,
     history: history.value,
     question: q,
-    streaming: parseBool(chatSettingFormActive.value.capabilities.onlySearch === false, false),
-    networking: parseBool(chatSettingFormActive.value.capabilities.networkSearch, false),
-    product_source: 'saas',
-    rerank: parseBool(chatSettingFormActive.value.capabilities.rerank, true),
-    only_need_search_results: parseBool(chatSettingFormActive.value.capabilities.onlySearch, false),
-    hybrid_search: parseBool(chatSettingFormActive.value.capabilities.mixedSearch, false),
-    max_token: chatSettingFormActive.value.maxToken !== null && chatSettingFormActive.value.maxToken !== undefined
-      ? parseInt_(chatSettingFormActive.value.maxToken)
-      : null,
-    api_base: String(chatSettingFormActive.value.apiBase || ''),
-    api_key: String(chatSettingFormActive.value.apiKey || 'ollama'),
-    model: String(chatSettingFormActive.value.apiModelName || 'gpt-4o-mini'),
-    api_context_length: parseInt_(chatSettingFormActive.value.apiContextLength, 4096),
-    chunk_size: parseInt_(chatSettingFormActive.value.chunkSize, 300),
-    top_p: parseFloat_(chatSettingFormActive.value.top_P, 0.99),
-    top_k: parseInt_(chatSettingFormActive.value.top_K, 8),
-    temperature: parseFloat_(chatSettingFormActive.value.temperature, 0.5),
-  };
+    user_id: props.virtualUserId,
+    user_info: userInfo.phoneNumber,
+    chatSetting: chatSettingFormActive.value,
+  });
 
   // 如果是仅检索
   if (chatSettingFormActive.value.capabilities.onlySearch) {
