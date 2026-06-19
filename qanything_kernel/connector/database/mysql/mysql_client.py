@@ -208,20 +208,10 @@ class KnowledgeBaseManager:
                 result TEXT NOT NULL,
                 retrieval_documents MEDIUMTEXT NOT NULL,
                 source_documents MEDIUMTEXT NOT NULL,
-                retrieval_trace MEDIUMTEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
         self.execute_query_(query, (), commit=True)
-
-        try:
-            self.execute_query_(
-                "ALTER TABLE QaLogs ADD COLUMN retrieval_trace MEDIUMTEXT",
-                (), commit=True
-            )
-        except Exception as e:
-            if "Duplicate column name" not in str(e):
-                debug_logger.warning(f"Add column retrieval_trace warning: {e}")
 
         # create_index_query = "CREATE INDEX IF NOT EXISTS index_bot_id ON QaLogs (bot_id);"
         # self.execute_query_(create_index_query, (), commit=True)
@@ -272,6 +262,8 @@ class KnowledgeBaseManager:
             # 如果没有的话，给QanythingBot添加一列：llm_setting VARCHAR(512)
             "ALTER TABLE QanythingBot ADD COLUMN llm_setting VARCHAR(512) DEFAULT '{}'",
             "ALTER TABLE QanythingBot DROP COLUMN model",
+            "ALTER TABLE QanythingBot ADD COLUMN template_id VARCHAR(64) DEFAULT ''",
+            "ALTER TABLE QanythingBot ADD COLUMN user_overrides MEDIUMTEXT",
         ]
 
         for query in index_queries:
@@ -681,7 +673,7 @@ class KnowledgeBaseManager:
         debug_logger.info(f"delete_faqs count: {total_deleted}")
 
     def add_qalog(self, user_id, bot_id, kb_ids, query, model, product_source, time_record, history, condense_question,
-                  prompt, result, retrieval_documents, source_documents, retrieval_trace=None):
+                  prompt, result, retrieval_documents, source_documents):
         debug_logger.info("add_qalog: {}".format(query))
         qa_id = uuid.uuid4().hex
         kb_ids = json.dumps(kb_ids, ensure_ascii=False)
@@ -689,14 +681,13 @@ class KnowledgeBaseManager:
         source_documents = json.dumps(source_documents, ensure_ascii=False)
         history = json.dumps(history, ensure_ascii=False)
         time_record = json.dumps(time_record, ensure_ascii=False)
-        retrieval_trace_json = json.dumps(retrieval_trace, ensure_ascii=False) if retrieval_trace is not None else None
         insert_query = (
             "INSERT INTO QaLogs (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record, "
-            "history, condense_question, prompt, result, retrieval_documents, source_documents, retrieval_trace) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            "history, condense_question, prompt, result, retrieval_documents, source_documents) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
         self.execute_query_(insert_query, (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record,
                                            history, condense_question, prompt, result, retrieval_documents,
-                                           source_documents, retrieval_trace_json), commit=True)
+                                           source_documents), commit=True)
 
     def get_qalog_by_filter(self, need_info, user_id=None, query=None, bot_id=None, time_range=None, any_kb_id=None, qa_ids=None):
         # 判断哪些条件不是None，构建搜索query
@@ -736,8 +727,6 @@ class KnowledgeBaseManager:
                 qa_info['source_documents'] = json.loads(qa_info['source_documents'])
             if 'history' in qa_info:
                 qa_info['history'] = json.loads(qa_info['history'])
-            if 'retrieval_trace' in qa_info and qa_info['retrieval_trace'] is not None:
-                qa_info['retrieval_trace'] = json.loads(qa_info['retrieval_trace'])
         if 'timestamp' in need_info:
             qa_infos = sorted(qa_infos, key=lambda x: x["timestamp"], reverse=True)
         return qa_infos
@@ -855,10 +844,10 @@ class KnowledgeBaseManager:
         return result is not None and len(result) > 0
 
     def new_qanything_bot(self, bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message,
-                          kb_ids_str):
-        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+                          kb_ids_str, template_id='', user_overrides='{}'):
+        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, template_id, user_overrides) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         self.execute_query_(query, (
-        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str),
+        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, template_id, user_overrides),
                             commit=True)
         return bot_id, "success"
 
@@ -869,21 +858,21 @@ class KnowledgeBaseManager:
 
     def get_bot(self, user_id, bot_id):
         if not bot_id:
-            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting FROM QanythingBot WHERE user_id = %s AND deleted = 0"
+            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting, template_id, user_overrides FROM QanythingBot WHERE user_id = %s AND deleted = 0"
             return self.execute_query_(query, (user_id,), fetch=True)
         elif not user_id:
-            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting FROM QanythingBot WHERE bot_id = %s AND deleted = 0"
+            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting, template_id, user_overrides FROM QanythingBot WHERE bot_id = %s AND deleted = 0"
             return self.execute_query_(query, (bot_id,), fetch=True)
         else:
-            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting FROM QanythingBot WHERE user_id = %s AND bot_id = %s AND deleted = 0"
+            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting, template_id, user_overrides FROM QanythingBot WHERE user_id = %s AND bot_id = %s AND deleted = 0"
             return self.execute_query_(query, (user_id, bot_id), fetch=True)
 
     def update_bot(self, user_id, bot_id, bot_name, description, head_image, prompt_setting, welcome_message,
-                   kb_ids_str, update_time, llm_setting):
+                   kb_ids_str, update_time, llm_setting, template_id='', user_overrides='{}'):
         llm_setting = json.dumps(llm_setting, ensure_ascii=False)
-        query = "UPDATE QanythingBot SET bot_name = %s, description = %s, head_image = %s, prompt_setting = %s, welcome_message = %s, kb_ids_str = %s, update_time = %s, llm_setting = %s WHERE user_id = %s AND bot_id = %s AND deleted = 0"
+        query = "UPDATE QanythingBot SET bot_name = %s, description = %s, head_image = %s, prompt_setting = %s, welcome_message = %s, kb_ids_str = %s, update_time = %s, llm_setting = %s, template_id = %s, user_overrides = %s WHERE user_id = %s AND bot_id = %s AND deleted = 0"
         self.execute_query_(query, (
-        bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, llm_setting, user_id,
+        bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, llm_setting, template_id, user_overrides, user_id,
         bot_id), commit=True)
 
     def get_files_by_status(self, status):

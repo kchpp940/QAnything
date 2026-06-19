@@ -1,4 +1,5 @@
 import { useRouter } from 'vue-router';
+import { computeUserOverrides, getTemplateById } from '@/config/sceneTemplates';
 
 export const useBots = defineStore('useBots', () => {
   const route = useRouter();
@@ -59,6 +60,75 @@ export const useBots = defineStore('useBots', () => {
     webUrl.value = value;
   };
 
+  const selectedTemplateId = ref('');
+  const setSelectedTemplateId = (value: string) => {
+    selectedTemplateId.value = value;
+  };
+
+  const userOverrides = ref<Record<string, any>>({});
+  const setUserOverrides = (value: Record<string, any>) => {
+    userOverrides.value = value;
+  };
+
+  const overriddenFields = ref<Set<string>>(new Set());
+  const markFieldOverridden = (field: string) => {
+    overriddenFields.value = new Set([...overriddenFields.value, field]);
+  };
+  const unmarkFieldOverridden = (field: string) => {
+    const s = new Set(overriddenFields.value);
+    s.delete(field);
+    overriddenFields.value = s;
+  };
+  const isFieldOverridden = (field: string): boolean => {
+    return overriddenFields.value.has(field);
+  };
+  const resetFieldToDefault = (field: string) => {
+    const tpl = getTemplateById(selectedTemplateId.value);
+    if (tpl) {
+      const newVal = tpl.defaults[field];
+      if (newVal !== undefined) {
+        unmarkFieldOverridden(field);
+        const newOverrides = { ...userOverrides.value };
+        delete newOverrides[field];
+        userOverrides.value = newOverrides;
+      }
+    }
+  };
+
+  const applyTemplate = (templateId: string) => {
+    selectedTemplateId.value = templateId;
+    userOverrides.value = {};
+    overriddenFields.value = new Set();
+  };
+
+  const syncOverridesFromValues = (currentValues: Record<string, any>) => {
+    if (!selectedTemplateId.value) return;
+    const overrides = computeUserOverrides(selectedTemplateId.value, currentValues);
+    userOverrides.value = overrides;
+    const newOverridden = new Set<string>();
+    for (const key of Object.keys(overrides)) {
+      newOverridden.add(key);
+    }
+    overriddenFields.value = newOverridden;
+  };
+
+  const loadBotTemplateState = (botData: any) => {
+    if (botData) {
+      selectedTemplateId.value = botData.template_id || '';
+      const raw = botData.user_overrides;
+      userOverrides.value = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : {};
+      const newOverridden = new Set<string>();
+      for (const key of Object.keys(userOverrides.value)) {
+        newOverridden.add(key);
+      }
+      overriddenFields.value = newOverridden;
+    } else {
+      selectedTemplateId.value = '';
+      userOverrides.value = {};
+      overriddenFields.value = new Set();
+    }
+  };
+
   return {
     newBotsVisible,
     setNewBotsVisible,
@@ -80,5 +150,17 @@ export const useBots = defineStore('useBots', () => {
     setCurBot,
     QA_List,
     setQaList,
+    selectedTemplateId,
+    setSelectedTemplateId,
+    userOverrides,
+    setUserOverrides,
+    overriddenFields,
+    markFieldOverridden,
+    unmarkFieldOverridden,
+    isFieldOverridden,
+    resetFieldToDefault,
+    applyTemplate,
+    syncOverridesFromValues,
+    loadBotTemplateState,
   };
 });

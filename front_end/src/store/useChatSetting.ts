@@ -26,6 +26,7 @@ export const useChatSetting = defineStore(
         rerank: false,
       },
       active: false,
+      answerStyle: '',
     };
 
     // 配置好的模型，包括 openAi Ollama 自定义

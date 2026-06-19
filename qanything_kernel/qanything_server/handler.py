@@ -659,7 +659,7 @@ async def local_doc_chat(req: request):
         if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id):
             return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
         bot_info = local_doc_qa.milvus_summary.get_bot(None, bot_id)[0]
-        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting = bot_info
+        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting, template_id, user_overrides = bot_info
         kb_ids = kb_ids_str.split(',')
         if not kb_ids:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} unbound knowledge base.".format(bot_id)})
@@ -828,8 +828,7 @@ async def local_doc_chat(req: request):
                                  'history': history,
                                  'condense_question': resp['condense_question'], 'prompt': resp['prompt'],
                                  'result': result, 'retrieval_documents': retrieval_documents,
-                                 'source_documents': source_documents, 'bot_id': bot_id,
-                                 'retrieval_trace': resp.get('retrieval_trace', None)}
+                                 'source_documents': source_documents, 'bot_id': bot_id}
                     local_doc_qa.milvus_summary.add_qalog(**chat_data)
                     qa_logger.info("chat_data: %s", chat_data)
                     debug_logger.info("response: %s", chat_data['result'])
@@ -844,8 +843,7 @@ async def local_doc_chat(req: request):
                         "source_documents": source_documents,
                         "retrieval_documents": retrieval_documents,
                         "time_record": formatted_time_record,
-                        "show_images": resp.get('show_images', []),
-                        "retrieval_trace": resp.get('retrieval_trace', None)
+                        "show_images": resp.get('show_images', [])
                     }
                 else:
                     time_record['rollback_length'] = resp.get('rollback_length', 0)
@@ -895,9 +893,7 @@ async def local_doc_chat(req: request):
             pass
         if only_need_search_results:
             return sanic_json(
-                {"code": 200, "question": question,
-                 "source_documents": format_source_documents(resp["source_documents"]),
-                 "retrieval_trace": resp.get("retrieval_trace", None)})
+                {"code": 200, "question": question, "source_documents": format_source_documents(resp)})
         retrieval_documents = format_source_documents(resp["retrieval_documents"])
         source_documents = format_source_documents(resp["source_documents"])
         formatted_time_record = format_time_record(time_record)
@@ -905,8 +901,7 @@ async def local_doc_chat(req: request):
                      'history': history, "condense_question": resp['condense_question'], "model": model,
                      "product_source": request_source,
                      'retrieval_documents': retrieval_documents, 'prompt': resp['prompt'], 'result': resp['result'],
-                     'source_documents': source_documents, 'bot_id': bot_id,
-                     'retrieval_trace': resp.get('retrieval_trace', None)}
+                     'source_documents': source_documents, 'bot_id': bot_id}
         local_doc_qa.milvus_summary.add_qalog(**chat_data)
         qa_logger.info("chat_data: %s", chat_data)
         debug_logger.info("response: %s", chat_data['result'])
@@ -914,8 +909,7 @@ async def local_doc_chat(req: request):
                            "response": resp["result"], "model": model,
                            "history": history, "condense_question": resp['condense_question'],
                            "source_documents": source_documents, "retrieval_documents": retrieval_documents,
-                           "time_record": formatted_time_record,
-                           "retrieval_trace": resp.get('retrieval_trace', None)})
+                           "time_record": formatted_time_record})
 
 
 @get_time_async
@@ -1281,7 +1275,9 @@ async def get_bot_info(req: request):
         info = {"bot_id": bot_info[0], "user_id": user_id, "bot_name": bot_info[1], "description": bot_info[2],
                 "head_image": bot_info[3], "prompt_setting": bot_info[4], "welcome_message": bot_info[5],
                 "kb_ids": kb_ids, "kb_names": kb_names,
-                "update_time": bot_info[7].strftime("%Y-%m-%d %H:%M:%S"), "llm_setting": bot_info[9]}
+                "update_time": bot_info[7].strftime("%Y-%m-%d %H:%M:%S"), "llm_setting": bot_info[9],
+                "template_id": bot_info[10] if len(bot_info) > 10 else '',
+                "user_overrides": bot_info[11] if len(bot_info) > 11 else '{}'}
         data.append(info)
     return sanic_json({"code": 200, "msg": "success", "data": data})
 
@@ -1302,6 +1298,7 @@ async def new_bot(req: request):
     welcome_message = safe_get(req, "welcome_message", BOT_WELCOME)
     kb_ids = safe_get(req, "kb_ids", [])
     kb_ids_str = ",".join(kb_ids)
+    template_id = safe_get(req, "template_id", "")
 
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
     if not_exist_kb_ids:
@@ -1310,7 +1307,7 @@ async def new_bot(req: request):
     debug_logger.info("new_bot %s", user_id)
     bot_id = 'BOT' + uuid.uuid4().hex
     local_doc_qa.milvus_summary.new_qanything_bot(bot_id, user_id, bot_name, desc, head_image, prompt_setting,
-                                                  welcome_message, kb_ids_str)
+                                                  welcome_message, kb_ids_str, template_id=template_id)
     create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return sanic_json({"code": 200, "msg": "success create qanything bot {}".format(bot_id),
                        "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time}})
@@ -1381,7 +1378,6 @@ async def update_bot(req: request):
         llm_setting["model"] = model
     if max_token := safe_get(req, "max_token"):
         llm_setting["max_token"] = max_token
-    # 如果rerank不是None，赋值，false也可以
     rerank = safe_get(req, "rerank")
     if rerank is not None:
         llm_setting["rerank"] = rerank
@@ -1394,10 +1390,26 @@ async def update_bot(req: request):
     only_need_search_results = safe_get(req, "only_need_search_results")
     if only_need_search_results is not None:
         llm_setting["only_need_search_results"] = only_need_search_results
+    answer_style = safe_get(req, "answer_style")
+    if answer_style is not None:
+        llm_setting["answer_style"] = answer_style
+
+    template_id = safe_get(req, "template_id")
+    if template_id is not None:
+        template_id_val = template_id
+    else:
+        template_id_val = bot_info[10] if len(bot_info) > 10 else ''
+
+    user_overrides_val = safe_get(req, "user_overrides")
+    if user_overrides_val is not None:
+        user_overrides_str = user_overrides_val if isinstance(user_overrides_val, str) else json.dumps(user_overrides_val, ensure_ascii=False)
+    else:
+        user_overrides_str = bot_info[11] if len(bot_info) > 11 else '{}'
 
     debug_logger.info(f"update llm_setting: {llm_setting}")
+    debug_logger.info(f"update template_id: {template_id_val}")
+    debug_logger.info(f"update user_overrides: {user_overrides_str}")
 
-    # 判断哪些项修改了
     if bot_name != bot_info[1]:
         debug_logger.info(f"update bot name from {bot_info[1]} to {bot_name}")
     if description != bot_info[2]:
@@ -1410,11 +1422,11 @@ async def update_bot(req: request):
         debug_logger.info(f"update bot welcome_message from {bot_info[5]} to {welcome_message}")
     if kb_ids_str != bot_info[6]:
         debug_logger.info(f"update bot kb_ids from {bot_info[6]} to {kb_ids_str}")
-    #  update_time     TIMESTAMP DEFAULT CURRENT_TIMESTAMP 根据这个mysql的格式获取现在的时间
     update_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     debug_logger.info(f"update_time: {update_time}")
     local_doc_qa.milvus_summary.update_bot(user_id, bot_id, bot_name, description, head_image, prompt_setting,
-                                           welcome_message, kb_ids_str, update_time, llm_setting)
+                                           welcome_message, kb_ids_str, update_time, llm_setting,
+                                           template_id=template_id_val, user_overrides=user_overrides_str)
     return sanic_json({"code": 200, "msg": "Bot {} update success".format(bot_id)})
 
 

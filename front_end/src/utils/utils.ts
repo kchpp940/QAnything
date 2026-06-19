@@ -8,18 +8,7 @@
  */
 
 import { useUser } from '@/store/useUser';
-import {
-  IChatSetting,
-  IFileListItem,
-  ITimeInfo,
-  ITokenInfo,
-  IRetrievalTrace,
-  ITraceDisplayData,
-  ICandidateTraceInfo,
-  IDataSourceItem,
-  TraceStageKey,
-} from './types';
-import { getLanguage } from '@/language';
+import { IChatSetting, IFileListItem, ITimeInfo, ITokenInfo } from './types';
 
 export function addWindowsAttr(name, value) {
   window[name] = value;
@@ -286,80 +275,4 @@ export function getContentDispositionByHeader(headers: Headers): string {
   return decodeURIComponent(
     (headers['content-disposition']?.split('filename=') || [])[1].slice(1, -1) || ''
   );
-}
-
-const getStageName = (stage: string): string => {
-  const common = getLanguage().common;
-  const stageMap: { [key: string]: string } = {
-    retrieval: common.traceStageRetrieval || '向量检索',
-    web_search: common.traceStageWebSearch || '联网搜索',
-    rerank: common.traceStageRerank || '重排序',
-    topk_filter: common.traceStageTopK || 'TopK截断',
-    faq_match: common.traceStageFAQ || 'FAQ匹配',
-    prompt_assembly: common.traceStagePrompt || 'Prompt拼接',
-  };
-  return stageMap[stage] || stage;
-};
-
-const getStageDescription = (stage: string): string => {
-  const descMap: { [key: string]: string } = {
-    retrieval: '向量相似度检索阶段',
-    web_search: '联网搜索阶段',
-    rerank: 'Rerank重排序阶段',
-    topk_filter: 'TopK截断阶段',
-    faq_match: 'FAQ匹配阶段',
-    prompt_assembly: 'Prompt拼接阶段',
-  };
-  return descMap[stage] || stage;
-};
-
-const STAGE_ORDER: TraceStageKey[] = [
-  'retrieval',
-  'web_search',
-  'rerank',
-  'topk_filter',
-  'faq_match',
-  'prompt_assembly',
-];
-
-export function processRetrievalTrace(
-  trace: IRetrievalTrace,
-  _sourceDocs: IDataSourceItem[]
-): ITraceDisplayData {
-  const candidates: ICandidateTraceInfo[] = (trace.candidates || []).map(cand => ({
-    doc_id: cand.doc_id,
-    file_id: cand.file_id,
-    file_name: cand.file_name,
-    content: cand.content,
-    final_selected: cand.final_selected,
-    final_filter_reason: cand.final_filter_reason,
-    prompt_position: cand.prompt_position,
-    retrieval_sources: cand.retrieval_sources,
-    stage_traces: STAGE_ORDER.map(stageKey => ({
-      stage: stageKey,
-      stage_name: getStageName(stageKey),
-      stage_description: getStageDescription(stageKey),
-      trace: cand.stage_traces[stageKey] || null,
-    })),
-  }));
-
-  const selectedCandidates = candidates
-    .filter(c => c.final_selected)
-    .sort((a, b) => {
-      const aPos = a.prompt_position;
-      const bPos = b.prompt_position;
-      if (aPos != null && bPos != null) {
-        return aPos - bPos;
-      }
-      return 0;
-    });
-
-  const filteredCandidates = candidates.filter(c => !c.final_selected);
-
-  return {
-    selected_candidates: selectedCandidates,
-    filtered_candidates: filteredCandidates,
-    original_query: trace.original_query,
-    retrieval_query: trace.retrieval_query,
-  };
 }

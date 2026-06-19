@@ -22,7 +22,6 @@ from qanything_kernel.utils.general_utils import (get_time, clear_string, get_ti
 from qanything_kernel.utils.custom_log import debug_logger, qa_logger, rerank_logger
 from qanything_kernel.core.chains.condense_q_chain import RewriteQuestionChain
 from qanything_kernel.core.tools.web_search_tool import duckduckgo_search
-import hashlib
 import copy
 import requests
 import json
@@ -33,98 +32,7 @@ import traceback
 import re
 
 
-STAGE_ORDER = ["retrieval", "web_search", "rerank", "topk_filter", "faq_match", "prompt_assembly"]
-
-
-def _generate_stable_trace_id(doc):
-    doc_id = doc.metadata.get("doc_id", "")
-    file_id = doc.metadata.get("file_id", "")
-    content_hash = hashlib.md5(doc.page_content.encode("utf-8")).hexdigest()
-    raw = f"{doc_id}|{file_id}|{content_hash}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
-
-
-def _get_chunk_fingerprint(doc):
-    return _generate_stable_trace_id(doc)
-
-
-class TraceCandidate:
-    __slots__ = (
-        "trace_id", "doc_id", "file_id", "file_name", "content",
-        "final_selected", "final_filter_reason", "prompt_position",
-        "retrieval_sources", "stage_traces", "_fingerprint",
-    )
-
-    def __init__(self, doc):
-        self._fingerprint = _get_chunk_fingerprint(doc)
-        self.trace_id = _generate_stable_trace_id(doc)
-        self.doc_id = doc.metadata.get("doc_id", "")
-        self.file_id = doc.metadata.get("file_id", "")
-        self.file_name = doc.metadata.get("file_name", "")
-        self.content = doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content
-        self.final_selected = False
-        self.final_filter_reason = None
-        self.prompt_position = None
-        self.retrieval_sources = []
-        self.stage_traces = {s: None for s in STAGE_ORDER}
-        doc.metadata["trace_id"] = self.trace_id
-        self._add_retrieval_source(doc)
-
-    def _add_retrieval_source(self, doc):
-        source = doc.metadata.get("retrieval_source", "")
-        score = doc.metadata.get("score")
-        source_info = {"source": source, "score": score}
-        if source_info not in self.retrieval_sources:
-            self.retrieval_sources.append(source_info)
-
-    def merge_from(self, other_doc):
-        self._add_retrieval_source(other_doc)
-
-    def record_stage(self, doc, stage, retrieval_score=None, rerank_score=None,
-                     selected=True, filter_reason=None, prompt_position=None):
-        entry = {
-            "trace_id": self.trace_id,
-            "doc_id": doc.metadata.get("doc_id", ""),
-            "file_id": doc.metadata.get("file_id", ""),
-            "file_name": doc.metadata.get("file_name", ""),
-            "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
-            "stage": stage,
-            "retrieval_score": retrieval_score,
-            "rerank_score": rerank_score,
-            "selected": selected,
-            "filter_reason": filter_reason,
-            "prompt_position": prompt_position,
-        }
-        self.stage_traces[stage] = entry
-        return entry
-
-    def finalize(self, last_stage=None):
-        if last_stage is None:
-            for s in reversed(STAGE_ORDER):
-                if self.stage_traces[s] is not None:
-                    last_stage = self.stage_traces[s]
-                    break
-        if last_stage is not None:
-            self.final_selected = last_stage["selected"]
-            self.final_filter_reason = None if last_stage["selected"] else last_stage["filter_reason"]
-
-    def to_dict(self):
-        return {
-            "trace_id": self.trace_id,
-            "doc_id": self.doc_id,
-            "file_id": self.file_id,
-            "file_name": self.file_name,
-            "content": self.content,
-            "final_selected": self.final_selected,
-            "final_filter_reason": self.final_filter_reason,
-            "prompt_position": self.prompt_position,
-            "retrieval_sources": list(self.retrieval_sources),
-            "stage_traces": dict(self.stage_traces),
-        }
-
-
 class LocalDocQA:
-
     def __init__(self, port):
         self.port = port
         self.milvus_cache = None
@@ -463,7 +371,7 @@ class LocalDocQA:
         return relevant_docs
 
     @staticmethod
-    async def generate_response(query, res, condense_question, source_documents, time_record, chat_history, streaming, prompt, retrieval_trace=None):
+    async def generate_response(query, res, condense_question, source_documents, time_record, chat_history, streaming, prompt):
         """
         生成response并使用yield返回。
 
@@ -475,7 +383,6 @@ class LocalDocQA:
         :param chat_history: 聊天历史
         :param streaming: 是否启用流式输出
         :param prompt: 生成response时的prompt类型
-        :param retrieval_trace: 检索溯源信息
         """
         history = chat_history + [[query, res]]
 
@@ -488,8 +395,7 @@ class LocalDocQA:
             "result": res,
             "condense_question": condense_question,
             "retrieval_documents": source_documents,
-            "source_documents": source_documents,
-            "retrieval_trace": retrieval_trace
+            "source_documents": source_documents
         }
 
         if 'llm_completed' not in time_record:
@@ -519,22 +425,6 @@ class LocalDocQA:
             chat_history = []
         retrieval_query = query
         condense_question = query
-
-        retrieval_trace = {
-            "original_query": query,
-            "retrieval_query": query,
-            "stages": [],
-            "candidates": []
-        }
-
-        candidate_traces = {}
-
-        def _finalize_and_serialize_candidates():
-            for cand in candidate_traces.values():
-                if not cand.final_selected and cand.final_filter_reason is None:
-                    cand.finalize()
-            retrieval_trace["candidates"] = [c.to_dict() for c in candidate_traces.values()]
-
         if chat_history:
             formatted_chat_history = []
             for msg in chat_history:
@@ -584,38 +474,13 @@ class LocalDocQA:
             # 判断两个字符串是否相似：只保留中文，英文和数字
             if clear_string(condense_question) != clear_string(query):
                 retrieval_query = condense_question
-                retrieval_trace["retrieval_query"] = retrieval_query
 
-        retrieval_stage_docs = []
-        chunk_to_cand = {}
         if kb_ids:
             source_documents = await self.get_source_documents(retrieval_query, retriever, kb_ids, time_record,
                                                                hybrid_search, top_k)
-            for doc in source_documents:
-                fp = _get_chunk_fingerprint(doc)
-                if fp in chunk_to_cand:
-                    chunk_to_cand[fp].merge_from(doc)
-                    doc.metadata["trace_id"] = chunk_to_cand[fp].trace_id
-                else:
-                    cand = TraceCandidate(doc)
-                    chunk_to_cand[fp] = cand
-                    candidate_traces[cand.trace_id] = cand
-                entry = chunk_to_cand[fp].record_stage(
-                    doc, "retrieval",
-                    retrieval_score=doc.metadata.get('score'),
-                    selected=True
-                )
-                retrieval_stage_docs.append(entry)
         else:
             source_documents = []
 
-        retrieval_trace["stages"].append({
-            "stage": "retrieval",
-            "description": "向量检索阶段",
-            "docs": retrieval_stage_docs
-        })
-
-        web_search_stage_docs = []
         if need_web_search:
             t1 = time.perf_counter()
             web_search_results = self.web_page_search(query, top_k=3)
@@ -638,35 +503,14 @@ class LocalDocQA:
                     current_doc_id = 0
                     doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
                     current_doc_id += 1
-                doc.metadata['retrieval_source'] = 'web'
-                fp = _get_chunk_fingerprint(doc)
-                if fp in chunk_to_cand:
-                    chunk_to_cand[fp].merge_from(doc)
-                    doc.metadata["trace_id"] = chunk_to_cand[fp].trace_id
-                else:
-                    cand = TraceCandidate(doc)
-                    chunk_to_cand[fp] = cand
-                    candidate_traces[cand.trace_id] = cand
                 doc_json = doc.to_json()
                 if doc_json['kwargs'].get('metadata') is None:
                     doc_json['kwargs']['metadata'] = doc.metadata
                 self.milvus_summary.add_document(doc_id=doc.metadata['doc_id'], json_data=doc_json)
-                entry = chunk_to_cand[fp].record_stage(
-                    doc, "web_search",
-                    retrieval_score=doc.metadata.get('score'),
-                    selected=True
-                )
-                web_search_stage_docs.append(entry)
 
             t2 = time.perf_counter()
             time_record['web_search'] = round(t2 - t1, 2)
             source_documents += web_search_results
-
-        retrieval_trace["stages"].append({
-            "stage": "web_search",
-            "description": "联网搜索阶段",
-            "docs": web_search_stage_docs
-        })
 
         # if kb_ids and not source_documents:
         #     res = "数据库检索失败，请检查logs/debug_logs/debug.log日志！"
@@ -676,9 +520,6 @@ class LocalDocQA:
         #     return
 
         source_documents = deduplicate_documents(source_documents)
-        rerank_stage_docs = []
-        docs_before_rerank = copy.deepcopy(source_documents)
-
         if rerank and len(source_documents) > 1 and num_tokens_rerank(query) <= 300:
             try:
                 t1 = time.perf_counter()
@@ -686,25 +527,14 @@ class LocalDocQA:
                 source_documents = await self.rerank.arerank_documents(condense_question, source_documents)
                 t2 = time.perf_counter()
                 time_record['rerank'] = round(t2 - t1, 2)
-
+                # 过滤掉低分的文档
                 debug_logger.info(f"rerank step1 num: {len(source_documents)}")
                 debug_logger.info(f"rerank step1 scores: {[doc.metadata['score'] for doc in source_documents]}")
-
-                doc_rerank_scores = {doc.metadata.get('doc_id', ''): doc.metadata.get('score') for doc in source_documents}
-                filtered_docs_step2 = []
                 if len(source_documents) > 1:
-                    for doc in docs_before_rerank:
-                        doc_id = doc.metadata.get('doc_id', '')
-                        rerank_score = doc_rerank_scores.get(doc_id)
-                        if rerank_score is not None and rerank_score >= 0.28:
-                            filtered_docs_step2.append(doc)
-
                     if filtered_documents := [doc for doc in source_documents if doc.metadata['score'] >= 0.28]:
                         source_documents = filtered_documents
                     debug_logger.info(f"rerank step2 num: {len(source_documents)}")
-
                     saved_docs = [source_documents[0]]
-                    step2_doc_ids = {doc.metadata.get('doc_id') for doc in source_documents}
                     for doc in source_documents[1:]:
                         debug_logger.info(f"rerank doc score: {doc.metadata['score']}")
                         relative_difference = (saved_docs[0].metadata['score'] - doc.metadata['score']) / saved_docs[0].metadata['score']
@@ -714,203 +544,34 @@ class LocalDocQA:
                             saved_docs.append(doc)
                     source_documents = saved_docs
                     debug_logger.info(f"rerank step3 num: {len(source_documents)}")
-
-                selected_doc_ids_step3 = {doc.metadata.get('doc_id') for doc in source_documents}
-                for doc in docs_before_rerank:
-                    doc_id = doc.metadata.get('doc_id', '')
-                    trace_id = doc.metadata.get('trace_id', '')
-                    rerank_score = doc_rerank_scores.get(doc_id)
-                    filter_reason = None
-                    selected = True
-
-                    if rerank_score is None:
-                        selected = False
-                        filter_reason = "未参与rerank"
-                    elif rerank_score < 0.28:
-                        selected = False
-                        filter_reason = f"rerank分数({rerank_score:.4f})低于阈值(0.28)"
-                    elif doc_id not in selected_doc_ids_step3:
-                        selected = False
-                        top_score = source_documents[0].metadata['score'] if source_documents else 0
-                        relative_diff = (top_score - rerank_score) / top_score if top_score > 0 else 0
-                        filter_reason = f"与最高分({top_score:.4f})相对差异({relative_diff:.4f})超过50%"
-
-                    if trace_id and trace_id in candidate_traces:
-                        entry = candidate_traces[trace_id].record_stage(
-                            doc, "rerank",
-                            retrieval_score=doc.metadata.get('score'),
-                            rerank_score=rerank_score,
-                            selected=selected,
-                            filter_reason=filter_reason
-                        )
-                        rerank_stage_docs.append(entry)
-                    else:
-                        rerank_stage_docs.append({
-                            "trace_id": trace_id, "doc_id": doc_id,
-                            "file_id": doc.metadata.get("file_id", ""),
-                            "file_name": doc.metadata.get("file_name", ""),
-                            "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
-                            "stage": "rerank", "retrieval_score": doc.metadata.get('score'),
-                            "rerank_score": rerank_score, "selected": selected,
-                            "filter_reason": filter_reason,
-                        })
             except Exception as e:
                 time_record['rerank'] = 0.0
                 debug_logger.error(f"query {query}: kb_ids: {kb_ids}, rerank error: {traceback.format_exc()}")
-                for doc in docs_before_rerank:
-                    trace_id = doc.metadata.get('trace_id', '')
-                    if trace_id and trace_id in candidate_traces:
-                        entry = candidate_traces[trace_id].record_stage(
-                            doc, "rerank",
-                            retrieval_score=doc.metadata.get('score'),
-                            selected=True,
-                            filter_reason="rerank失败，使用原始检索结果"
-                        )
-                        rerank_stage_docs.append(entry)
-                    else:
-                        rerank_stage_docs.append({
-                            "trace_id": trace_id, "doc_id": doc.metadata.get("doc_id", ""),
-                            "file_id": doc.metadata.get("file_id", ""),
-                            "file_name": doc.metadata.get("file_name", ""),
-                            "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
-                            "stage": "rerank", "retrieval_score": doc.metadata.get('score'),
-                            "selected": True, "filter_reason": "rerank失败，使用原始检索结果",
-                        })
-        else:
-            for doc in source_documents:
-                trace_id = doc.metadata.get('trace_id', '')
-                if trace_id and trace_id in candidate_traces:
-                    entry = candidate_traces[trace_id].record_stage(
-                        doc, "rerank",
-                        retrieval_score=doc.metadata.get('score'),
-                        selected=True,
-                        filter_reason="未启用rerank或不满足rerank条件"
-                    )
-                    rerank_stage_docs.append(entry)
-                else:
-                    rerank_stage_docs.append({
-                        "trace_id": trace_id, "doc_id": doc.metadata.get("doc_id", ""),
-                        "file_id": doc.metadata.get("file_id", ""),
-                        "file_name": doc.metadata.get("file_name", ""),
-                        "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
-                        "stage": "rerank", "retrieval_score": doc.metadata.get('score'),
-                        "selected": True, "filter_reason": "未启用rerank或不满足rerank条件",
-                    })
 
-        retrieval_trace["stages"].append({
-            "stage": "rerank",
-            "description": "二阶段检索增强(rerank)阶段",
-            "docs": rerank_stage_docs
-        })
-
-        docs_before_topk = copy.deepcopy(source_documents)
+        # es检索+milvus检索结果最多可能是2k
         source_documents = source_documents[:top_k]
-
-        topk_stage_docs = []
-        selected_doc_ids = {doc.metadata.get('doc_id') for doc in source_documents}
-        for doc in docs_before_topk:
-            doc_id = doc.metadata.get('doc_id', '')
-            trace_id = doc.metadata.get('trace_id', '')
-            selected = doc_id in selected_doc_ids
-            filter_reason = None if selected else f"排名超出top_k({top_k})限制"
-            if trace_id and trace_id in candidate_traces:
-                entry = candidate_traces[trace_id].record_stage(
-                    doc, "topk_filter",
-                    retrieval_score=doc.metadata.get('score'),
-                    rerank_score=doc.metadata.get('score') if rerank else None,
-                    selected=selected,
-                    filter_reason=filter_reason
-                )
-                topk_stage_docs.append(entry)
-            else:
-                topk_stage_docs.append({
-                    "trace_id": trace_id, "doc_id": doc_id,
-                    "file_id": doc.metadata.get("file_id", ""),
-                    "file_name": doc.metadata.get("file_name", ""),
-                    "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
-                    "stage": "topk_filter", "retrieval_score": doc.metadata.get('score'),
-                    "rerank_score": doc.metadata.get('score') if rerank else None,
-                    "selected": selected, "filter_reason": filter_reason,
-                })
-
-        retrieval_trace["stages"].append({
-            "stage": "topk_filter",
-            "description": f"top_k({top_k})截断阶段",
-            "docs": topk_stage_docs
-        })
 
         # rerank之后删除headers，只保留文本内容，用于后续处理
         for doc in source_documents:
             doc.page_content = re.sub(r'^\[headers]\(.*?\)\n', '', doc.page_content)
 
-        faq_stage_docs = []
-        docs_before_faq = copy.deepcopy(source_documents)
-        faq_matched = False
-        faq_filter_reason = None
-
         high_score_faq_documents = [doc for doc in source_documents if
                                     doc.metadata['file_name'].endswith('.faq') and doc.metadata['score'] >= 0.9]
         if high_score_faq_documents:
             source_documents = high_score_faq_documents
-            faq_filter_reason = f"FAQ高分数(>=0.9)命中，共{len(high_score_faq_documents)}个"
-            faq_matched = True
-
-        faq_exact_match_doc = None
+        # FAQ完全匹配处理逻辑
         for doc in source_documents:
             if doc.metadata['file_name'].endswith('.faq') and clear_string_is_equal(
                     doc.metadata['faq_dict']['question'], query):
-                faq_exact_match_doc = doc
-                break
-
-        selected_doc_ids_faq = {doc.metadata.get('doc_id') for doc in source_documents}
-        for doc in docs_before_faq:
-            doc_id = doc.metadata.get('doc_id', '')
-            trace_id = doc.metadata.get('trace_id', '')
-            selected = doc_id in selected_doc_ids_faq
-            filter_reason = None
-            if faq_matched and not selected:
-                filter_reason = faq_filter_reason
-
-            if trace_id and trace_id in candidate_traces:
-                entry = candidate_traces[trace_id].record_stage(
-                    doc, "faq_match",
-                    retrieval_score=doc.metadata.get('score'),
-                    rerank_score=doc.metadata.get('score') if rerank else None,
-                    selected=selected,
-                    filter_reason=filter_reason
-                )
-                faq_stage_docs.append(entry)
-            else:
-                faq_stage_docs.append({
-                    "trace_id": trace_id, "doc_id": doc_id,
-                    "file_id": doc.metadata.get("file_id", ""),
-                    "file_name": doc.metadata.get("file_name", ""),
-                    "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
-                    "stage": "faq_match", "retrieval_score": doc.metadata.get('score'),
-                    "rerank_score": doc.metadata.get('score') if rerank else None,
-                    "selected": selected, "filter_reason": filter_reason,
-                })
-
-        retrieval_trace["stages"].append({
-            "stage": "faq_match",
-            "description": "FAQ匹配阶段",
-            "docs": faq_stage_docs
-        })
-
-        if faq_exact_match_doc:
-            debug_logger.info(f"match faq question: {query}")
-            _finalize_and_serialize_candidates()
-            if only_need_search_results:
-                yield {
-                    "source_documents": source_documents,
-                    "retrieval_trace": retrieval_trace
-                }, None
+                debug_logger.info(f"match faq question: {query}")
+                if only_need_search_results:
+                    yield source_documents, None
+                    return
+                res = doc.metadata['faq_dict']['answer']
+                async for response, history in self.generate_response(query, res, condense_question, source_documents,
+                                                                      time_record, chat_history, streaming, 'MATCH_FAQ'):
+                    yield response, history
                 return
-            res = faq_exact_match_doc.metadata['faq_dict']['answer']
-            async for response, history in self.generate_response(query, res, condense_question, source_documents,
-                                                                  time_record, chat_history, streaming, 'MATCH_FAQ', retrieval_trace):
-                yield response, history
-            return
 
         # 获取今日日期
         today = time.strftime("%Y-%m-%d", time.localtime())
@@ -933,59 +594,15 @@ class LocalDocQA:
                                                                                                INSTRUCTIONS)
 
             t1 = time.perf_counter()
-            docs_before_reprocess = copy.deepcopy(source_documents)
             retrieval_documents, limited_token_nums, tokens_msg = self.reprocess_source_documents(custom_llm=custom_llm,
                                                                                                   query=query,
                                                                                                   source_docs=source_documents,
                                                                                                   history=chat_history,
                                                                                                   prompt_template=prompt_template)
 
-            prompt_stage_docs = []
-            selected_doc_ids_prompt = {doc.metadata.get('doc_id'): idx + 1 for idx, doc in enumerate(retrieval_documents)}
-            for doc in docs_before_reprocess:
-                doc_id = doc.metadata.get('doc_id', '')
-                trace_id = doc.metadata.get('trace_id', '')
-                selected = doc_id in selected_doc_ids_prompt
-                filter_reason = None if selected else f"token限制裁剪(可用token:{limited_token_nums})"
-                prompt_position = selected_doc_ids_prompt.get(doc_id) if selected else None
-
-                if trace_id and trace_id in candidate_traces:
-                    cand = candidate_traces[trace_id]
-                    entry = cand.record_stage(
-                        doc, "prompt_assembly",
-                        retrieval_score=doc.metadata.get('score'),
-                        rerank_score=doc.metadata.get('score') if rerank else None,
-                        selected=selected,
-                        filter_reason=filter_reason,
-                        prompt_position=prompt_position
-                    )
-                    prompt_stage_docs.append(entry)
-                    cand.final_selected = selected
-                    cand.prompt_position = prompt_position
-                    if not selected:
-                        cand.final_filter_reason = filter_reason
-                else:
-                    prompt_stage_docs.append({
-                        "trace_id": trace_id, "doc_id": doc_id,
-                        "file_id": doc.metadata.get("file_id", ""),
-                        "file_name": doc.metadata.get("file_name", ""),
-                        "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
-                        "stage": "prompt_assembly", "retrieval_score": doc.metadata.get('score'),
-                        "rerank_score": doc.metadata.get('score') if rerank else None,
-                        "selected": selected, "filter_reason": filter_reason,
-                        "prompt_position": prompt_position,
-                    })
-
-            retrieval_trace["stages"].append({
-                "stage": "prompt_assembly",
-                "description": f"Prompt拼接阶段(可用token:{limited_token_nums})",
-                "docs": prompt_stage_docs
-            })
-
-            _finalize_and_serialize_candidates()
-
             if len(retrieval_documents) < len(source_documents):
-                if len(retrieval_documents) == 0:
+                # 重新处理后文档数量减少，说明由于tokens不足而被裁切
+                if len(retrieval_documents) == 0:  # 说明被裁切后文档数量为0
                     debug_logger.error(f"limited_token_nums: {limited_token_nums} < {web_chunk_size}!")
                     res = (
                         f"抱歉，由于留给相关文档使用的token数量不足(docs_available_token_nums: {limited_token_nums} < 文本分片大小: {web_chunk_size})，"
@@ -993,7 +610,7 @@ class LocalDocQA:
                         f"\n计算方式：{tokens_msg}")
                     async for response, history in self.generate_response(query, res, condense_question, source_documents,
                                                                           time_record, chat_history, streaming,
-                                                                          'TOKENS_NOT_ENOUGH', retrieval_trace):
+                                                                          'TOKENS_NOT_ENOUGH'):
                         yield response, history
                     return
 
@@ -1032,14 +649,8 @@ class LocalDocQA:
 
 
 
-        if "candidates" not in retrieval_trace or not retrieval_trace["candidates"]:
-            _finalize_and_serialize_candidates()
-
         if only_need_search_results:
-            yield {
-                "source_documents": source_documents,
-                "retrieval_trace": retrieval_trace
-            }, None
+            yield source_documents, None
             return
 
         t1 = time.perf_counter()
@@ -1076,15 +687,13 @@ class LocalDocQA:
                 has_first_return = True
                 time_record['llm_first_return'] = round(first_return_time - t1, 2)
             if resp[6:].startswith("[DONE]"):
-                response["retrieval_trace"] = retrieval_trace
                 if extra_msg is not None:
                     msg_response = {"query": query,
                                 "prompt": prompt,
                                 "result": f"data: {json.dumps({'answer': extra_msg}, ensure_ascii=False)}",
                                 "condense_question": condense_question,
                                 "retrieval_documents": retrieval_documents,
-                                "source_documents": source_documents,
-                                "retrieval_trace": retrieval_trace}
+                                "source_documents": source_documents}
                     yield msg_response, history
                 last_return_time = time.perf_counter()
                 time_record['llm_completed'] = round(last_return_time - t1, 2) - time_record['llm_first_return']

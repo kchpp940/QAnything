@@ -67,7 +67,7 @@
                         <p v-show="sourceItem.file_name" class="control">
                           <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
                           <a
-                            v-if="sourceItem.file_url && sourceItem.file_url.startsWith('http')"
+                            v-if="sourceItem.file_url.startsWith('http')"
                             :href="sourceItem.file_url"
                             target="_blank"
                           >
@@ -96,6 +96,7 @@
                         </p>
                         <Transition name="sourceitem">
                           <div v-show="sourceItem.showDetailDataSource" class="source-content">
+                            <!--                            <p v-html="sourceItem.content?.replaceAll('\n', '<br/>')"></p>-->
                             <HighLightMarkDown :content="sourceItem.content" />
                             <p class="score">
                               <span class="tips">{{ common.correlation }}</span>
@@ -103,184 +104,6 @@
                             </p>
                           </div>
                         </Transition>
-                      </div>
-
-                      <div v-if="item.trace_data?.displayData" class="trace-panel">
-                        <div class="trace-tabs">
-                          <div
-                            :class="[
-                              'trace-tab',
-                              item.trace_data.activeTab === 'selected' ? 'trace-tab-active' : '',
-                            ]"
-                            @click="switchTraceTab(item, 'selected')"
-                          >
-                            {{ common.traceSelectedSources }}
-                            <span class="trace-tab-count">
-                              ({{ item.trace_data.displayData.selected_candidates.length }})
-                            </span>
-                          </div>
-                          <div
-                            :class="[
-                              'trace-tab',
-                              item.trace_data.activeTab === 'filtered' ? 'trace-tab-active' : '',
-                            ]"
-                            @click="switchTraceTab(item, 'filtered')"
-                          >
-                            {{ common.traceFilteredCandidates }}
-                            <span class="trace-tab-count">
-                              ({{ item.trace_data.displayData.filtered_candidates.length }})
-                            </span>
-                          </div>
-                        </div>
-
-                        <div
-                          v-if="item.trace_data.displayData.original_query"
-                          class="trace-query-info"
-                        >
-                          <p class="trace-query-item">
-                            <span class="tips">{{ common.traceOriginalQuery }}:</span>
-                            {{ item.trace_data.displayData.original_query }}
-                          </p>
-                          <p
-                            v-if="
-                              item.trace_data.displayData.retrieval_query !==
-                              item.trace_data.displayData.original_query
-                            "
-                            class="trace-query-item"
-                          >
-                            <span class="tips">{{ common.traceRetrievalQuery }}:</span>
-                            {{ item.trace_data.displayData.retrieval_query }}
-                          </p>
-                        </div>
-
-                        <div class="trace-candidate-list">
-                          <div
-                            v-if="getCurrentTraceCandidates(item).length === 0"
-                            class="trace-empty"
-                          >
-                            {{ common.traceNoCandidates }}
-                          </div>
-                          <div
-                            v-for="(candidate, candIndex) in getCurrentTraceCandidates(item)"
-                            :key="candidate.doc_id || candidate.file_id || candIndex"
-                            :class="[
-                              'trace-candidate-item',
-                              candidate.final_selected
-                                ? 'candidate-selected'
-                                : 'candidate-filtered',
-                            ]"
-                          >
-                            <div class="candidate-header" @click="toggleCandidateDetail(candidate)">
-                              <span class="candidate-index">#{{ candIndex + 1 }}</span>
-                              <span class="candidate-name">{{ candidate.file_name }}</span>
-                              <span
-                                :class="[
-                                  'candidate-status',
-                                  candidate.final_selected
-                                    ? 'status-final-selected'
-                                    : 'status-final-filtered',
-                                ]"
-                              >
-                                {{
-                                  candidate.final_selected
-                                    ? common.traceFinalSelected
-                                    : common.traceFinalFiltered
-                                }}
-                              </span>
-                              <SvgIcon
-                                :name="candidate.showDetail ? 'iconup' : 'icondown'"
-                                class="candidate-arrow"
-                              />
-                            </div>
-
-                            <div
-                              v-if="!candidate.final_selected && candidate.final_filter_reason"
-                              class="candidate-final-reason"
-                            >
-                              <span class="tips">{{ common.traceFilterReason }}:</span>
-                              {{ candidate.final_filter_reason }}
-                            </div>
-
-                            <Transition name="sourceitem">
-                              <div v-show="candidate.showDetail" class="candidate-detail">
-                                <div class="candidate-content">
-                                  <HighLightMarkDown :content="candidate.content" />
-                                </div>
-
-                                <div class="candidate-stages">
-                                  <div
-                                    v-for="(stageTrace, stageIndex) in candidate.stage_traces"
-                                    :key="stageTrace.stage"
-                                    :class="[
-                                      'trace-stage-item',
-                                      stageTrace.trace?.selected
-                                        ? 'trace-selected'
-                                        : 'trace-filtered',
-                                      !stageTrace.trace ? 'trace-not-in-stage' : '',
-                                    ]"
-                                  >
-                                    <div class="trace-stage-header">
-                                      <span class="trace-stage-name">
-                                        {{ stageTrace.stage_name }}
-                                      </span>
-                                      <span
-                                        :class="[
-                                          'trace-status-badge',
-                                          stageTrace.trace?.selected
-                                            ? 'status-selected'
-                                            : 'status-filtered',
-                                          !stageTrace.trace ? 'status-not-in-stage' : '',
-                                        ]"
-                                      >
-                                        {{
-                                          !stageTrace.trace
-                                            ? common.traceNotInStage
-                                            : stageTrace.trace.selected
-                                            ? common.traceSelectedInStage
-                                            : common.traceFilteredInStage
-                                        }}
-                                      </span>
-                                    </div>
-                                    <div v-if="stageTrace.trace" class="trace-stage-scores">
-                                      <span
-                                        v-if="stageTrace.trace.retrieval_score !== null"
-                                        class="trace-score"
-                                      >
-                                        {{ common.traceRetrievalScore }}:
-                                        {{ Number(stageTrace.trace.retrieval_score).toFixed(4) }}
-                                      </span>
-                                      <span
-                                        v-if="stageTrace.trace.rerank_score !== null"
-                                        class="trace-score"
-                                      >
-                                        {{ common.traceRerankScore }}:
-                                        {{ Number(stageTrace.trace.rerank_score).toFixed(4) }}
-                                      </span>
-                                      <span
-                                        v-if="
-                                          stageTrace.trace.prompt_position !== null &&
-                                          stageTrace.trace.prompt_position !== undefined
-                                        "
-                                        class="trace-score"
-                                      >
-                                        {{ common.tracePromptPosition }}: #{{
-                                          stageTrace.trace.prompt_position
-                                        }}
-                                      </span>
-                                    </div>
-                                    <div
-                                      v-if="stageTrace.trace?.filter_reason"
-                                      class="trace-filter-reason"
-                                    >
-                                      <span class="tips">{{ common.traceFilterReason }}:</span>
-                                      {{ stageTrace.trace.filter_reason }}
-                                    </div>
-                                  </div>
-                                </div>
-                              </div>
-                            </Transition>
-                          </div>
-                        </div>
                       </div>
                     </div>
                   </template>
@@ -405,12 +228,7 @@ import html2canvas from 'html2canvas';
 import urlResquest, { userId, userPhone } from '@/services/urlConfig';
 import { getLanguage } from '@/language';
 import { useLanguage } from '@/store/useLanguage';
-import {
-  ChatInfoClass,
-  formatTimestamp,
-  resultControl,
-  processRetrievalTrace,
-} from '@/utils/utils';
+import { ChatInfoClass, formatTimestamp, resultControl } from '@/utils/utils';
 import ChatSettingDialog from '@/components/ChatSettingDialog.vue';
 import HistoryChat from '@/components/Home/HistoryChat.vue';
 import { useHomeChat } from '@/store/useHomeChat';
@@ -741,21 +559,10 @@ const send = async () => {
           ? common.searchCompleted
           : common.searchNotFound;
         QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
-
-        if (res?.retrieval_trace) {
-          QA_List.value[QA_List.value.length - 1].retrieval_trace = res.retrieval_trace;
-          const displayData = processRetrievalTrace(
-            res.retrieval_trace,
-            QA_List.value[QA_List.value.length - 1].source
-          );
-          QA_List.value[QA_List.value.length - 1].trace_data = {
-            activeTab: 'selected',
-            displayData: displayData,
-          };
-        }
       }
     } catch (e) {
       console.log('出错', e);
+      // message.error(e.msg || '出错了');
       QA_List.value[QA_List.value.length - 1].answer = e.msg || 'error';
     }
     // 无论成不成功,结束后的操作
@@ -813,18 +620,6 @@ const send = async () => {
           QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
         }
 
-        if (res?.retrieval_trace) {
-          QA_List.value[QA_List.value.length - 1].retrieval_trace = res.retrieval_trace;
-          const displayData = processRetrievalTrace(
-            res.retrieval_trace,
-            QA_List.value[QA_List.value.length - 1].source
-          );
-          QA_List.value[QA_List.value.length - 1].trace_data = {
-            activeTab: 'selected',
-            displayData: displayData,
-          };
-        }
-
         if (res?.show_images?.length) {
           res?.show_images.map(item => {
             typewriter.add(item);
@@ -877,39 +672,6 @@ const showDetail = (item: IChatItem, index) => {
 
 const hideDetail = (item: IChatItem, index) => {
   item.source[index].showDetailDataSource = false;
-};
-
-const toggleTraceDetail = (sourceItem: any) => {
-  sourceItem.showTraceDetail = !sourceItem.showTraceDetail;
-};
-
-const getStageDisplayName = (stageName: string) => {
-  const stageMap: Record<string, string> = {
-    retrieval: common.traceStageRetrieval,
-    web_search: common.traceStageWebSearch,
-    rerank: common.traceStageRerank,
-    topk_filter: common.traceStageTopK,
-    faq_match: common.traceStageFAQ,
-    prompt_assembly: common.traceStagePrompt,
-  };
-  return stageMap[stageName] || stageName;
-};
-
-const switchTraceTab = (chatItem: any, tab: 'selected' | 'filtered') => {
-  if (chatItem.trace_data) {
-    chatItem.trace_data.activeTab = tab;
-  }
-};
-
-const toggleCandidateDetail = (candidate: any) => {
-  candidate.showDetail = !candidate.showDetail;
-};
-
-const getCurrentTraceCandidates = (chatItem: any) => {
-  if (!chatItem.trace_data?.displayData) return [];
-  return chatItem.trace_data.activeTab === 'selected'
-    ? chatItem.trace_data.displayData.selected_candidates
-    : chatItem.trace_data.displayData.filtered_candidates;
 };
 
 const showSourceList = index => {
@@ -1320,272 +1082,6 @@ $avatar-width: 96px;
         color: #5a47e5;
         text-decoration: underline;
         cursor: pointer;
-      }
-
-      .trace-panel {
-        margin-top: 24px;
-        padding-top: 20px;
-        border-top: 1px solid #e8e8e8;
-
-        .trace-tabs {
-          display: flex;
-          gap: 8px;
-          margin-bottom: 16px;
-
-          .trace-tab {
-            flex: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            padding: 10px 16px;
-            background: #f5f7fa;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 14px;
-            color: #606266;
-            transition: all 0.2s ease;
-
-            &:hover {
-              background: #ebeef5;
-            }
-
-            &.trace-tab-active {
-              background: #5a47e5;
-              color: #fff;
-
-              .trace-tab-count {
-                background: rgba(255, 255, 255, 0.3);
-              }
-            }
-
-            .trace-tab-count {
-              background: #e4e7ed;
-              padding: 1px 8px;
-              border-radius: 10px;
-              font-size: 12px;
-            }
-          }
-        }
-
-        .trace-query-info {
-          margin-bottom: 16px;
-          padding: 12px 16px;
-          background: #f5f7fa;
-          border-radius: 8px;
-
-          .trace-query-item {
-            margin: 0;
-            font-size: 13px;
-            line-height: 1.8;
-            color: #606266;
-
-            &:not(:last-child) {
-              margin-bottom: 4px;
-            }
-
-            .tips {
-              min-width: auto;
-              font-weight: 500;
-              color: #5a47e5;
-            }
-          }
-        }
-
-        .trace-candidate-list {
-          display: flex;
-          flex-direction: column;
-          gap: 12px;
-
-          .trace-empty {
-            text-align: center;
-            padding: 30px;
-            color: #909399;
-            font-size: 14px;
-            background: #fafafa;
-            border-radius: 8px;
-          }
-
-          .trace-candidate-item {
-            border: 1px solid #e8e8e8;
-            border-radius: 8px;
-            overflow: hidden;
-
-            &.candidate-selected {
-              border-color: #c2e7b0;
-            }
-
-            &.candidate-filtered {
-              border-color: #fbc4c4;
-            }
-
-            .candidate-header {
-              display: flex;
-              align-items: center;
-              gap: 12px;
-              padding: 12px 16px;
-              cursor: pointer;
-              transition: background 0.2s ease;
-
-              &:hover {
-                background: #fafafa;
-              }
-
-              .candidate-index {
-                font-weight: 600;
-                color: #5a47e5;
-                font-size: 14px;
-              }
-
-              .candidate-name {
-                flex: 1;
-                font-weight: 500;
-                color: #303133;
-                font-size: 14px;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-              }
-
-              .candidate-status {
-                padding: 2px 8px;
-                border-radius: 4px;
-                font-size: 12px;
-
-                &.status-final-selected {
-                  background: #67c23a;
-                  color: #fff;
-                }
-
-                &.status-final-filtered {
-                  background: #f56c6c;
-                  color: #fff;
-                }
-              }
-
-              .candidate-arrow {
-                width: 14px;
-                height: 14px;
-                color: #909399;
-              }
-            }
-
-            .candidate-final-reason {
-              padding: 0 16px 12px;
-              font-size: 13px;
-              color: #f56c6c;
-
-              .tips {
-                min-width: auto;
-                color: #909399;
-              }
-            }
-
-            .candidate-detail {
-              padding: 0 16px 16px;
-              border-top: 1px solid #f0f0f0;
-
-              .candidate-content {
-                padding: 12px 0;
-                font-size: 13px;
-                color: #606266;
-                line-height: 1.6;
-              }
-
-              .candidate-stages {
-                display: flex;
-                flex-direction: column;
-                gap: 10px;
-                margin-top: 12px;
-              }
-            }
-          }
-        }
-
-        .trace-stage-item {
-          padding: 12px 16px;
-          border-radius: 8px;
-          border: 1px solid #e8e8e8;
-
-          &.trace-selected {
-            background: #f0f9eb;
-            border-color: #c2e7b0;
-          }
-
-          &.trace-filtered {
-            background: #fef0f0;
-            border-color: #fbc4c4;
-            opacity: 0.85;
-          }
-
-          &.trace-not-in-stage {
-            background: #f5f7fa;
-            border-color: #e4e7ed;
-            opacity: 0.6;
-          }
-
-          .trace-stage-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 8px;
-
-            .trace-stage-name {
-              font-weight: 500;
-              color: #333;
-              font-size: 13px;
-            }
-
-            .trace-status-badge {
-              padding: 2px 8px;
-              border-radius: 4px;
-              font-size: 11px;
-
-              &.status-selected {
-                background: #67c23a;
-                color: #fff;
-              }
-
-              &.status-filtered {
-                background: #f56c6c;
-                color: #fff;
-              }
-
-              &.status-not-in-stage {
-                background: #909399;
-                color: #fff;
-              }
-            }
-          }
-
-          .trace-stage-scores {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-bottom: 8px;
-            font-size: 12px;
-            color: #666;
-
-            .trace-score {
-              background: #fff;
-              padding: 2px 8px;
-              border-radius: 4px;
-              border: 1px solid #e4e7ed;
-            }
-          }
-
-          .trace-filter-reason {
-            font-size: 12px;
-            color: #f56c6c;
-            line-height: 1.6;
-
-            .tips {
-              min-width: auto;
-              color: #909399;
-              margin-right: 4px;
-            }
-          }
-        }
       }
     }
 
