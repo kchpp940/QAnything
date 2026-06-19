@@ -122,21 +122,27 @@ class LocalDocQA:
         end_time = time.perf_counter()
         time_record['retriever_search'] = round(end_time - start_time, 2)
         debug_logger.info(f"retriever_search time: {time_record['retriever_search']}s")
-        # debug_logger.info(f"query_docs num: {len(query_docs)}, query_docs: {query_docs}")
+
+        milvus_hit_count = sum(1 for d in query_docs if d.metadata.get('retrieval_source') == 'milvus')
+        es_hit_count = sum(1 for d in query_docs if d.metadata.get('retrieval_source') == 'es')
+
         for idx, doc in enumerate(query_docs):
             if retriever.mysql_client.is_deleted_file(doc.metadata['file_id']):
                 debug_logger.warning(f"file_id: {doc.metadata['file_id']} is deleted")
                 continue
-            doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
+            doc.metadata['retrieval_query'] = query
             doc.metadata['embed_version'] = self.embeddings.embed_version
             if 'score' not in doc.metadata:
-                doc.metadata['score'] = 1 - (idx / len(query_docs))  # TODO 这个score怎么获取呢
+                doc.metadata['score'] = 1 - (idx / len(query_docs))
             source_documents.append(doc)
         debug_logger.info(f"embed scores: {[doc.metadata['score'] for doc in source_documents]}")
-        # if cosine_thresh:
-        #     source_documents = [item for item in source_documents if float(item.metadata['score']) > cosine_thresh]
 
-        return source_documents
+        retrieval_source_info = {
+            'milvus_hit_count': milvus_hit_count,
+            'es_hit_count': es_hit_count,
+            'retrieval_time_ms': int((end_time - start_time) * 1000),
+        }
+        return source_documents, retrieval_source_info
 
     def reprocess_source_documents(self, custom_llm: OpenAILLM, query: str,
                                    source_docs: List[Document],
@@ -419,7 +425,7 @@ class LocalDocQA:
                                          temperature, api_base, api_key, api_context_length, top_p, top_k, web_chunk_size,
                                          chat_history=None, streaming: bool = STREAMING, rerank: bool = False,
                                          only_need_search_results: bool = False, need_web_search=False,
-                                         hybrid_search=False):
+                                         hybrid_search=False, user_id=None, bot_id=None):
         custom_llm = OpenAILLM(model, max_token, api_base, api_key, api_context_length, top_p, temperature)
         if chat_history is None:
             chat_history = []
@@ -476,10 +482,11 @@ class LocalDocQA:
                 retrieval_query = condense_question
 
         if kb_ids:
-            source_documents = await self.get_source_documents(retrieval_query, retriever, kb_ids, time_record,
+            source_documents, retrieval_source_info = await self.get_source_documents(retrieval_query, retriever, kb_ids, time_record,
                                                                hybrid_search, top_k)
         else:
             source_documents = []
+            retrieval_source_info = {'milvus_hit_count': 0, 'es_hit_count': 0, 'retrieval_time_ms': 0}
 
         if need_web_search:
             t1 = time.perf_counter()
@@ -520,6 +527,12 @@ class LocalDocQA:
         #     return
 
         source_documents = deduplicate_documents(source_documents)
+
+        rerank_before_order = [{'doc_id': doc.metadata.get('doc_id', ''), 'file_id': doc.metadata.get('file_id', ''),
+                                'score': float(doc.metadata.get('score', 0))} for doc in source_documents]
+        rerank_after_order = []
+        rerank_actually_used = False
+
         if rerank and len(source_documents) > 1 and num_tokens_rerank(query) <= 300:
             try:
                 t1 = time.perf_counter()
@@ -527,7 +540,9 @@ class LocalDocQA:
                 source_documents = await self.rerank.arerank_documents(condense_question, source_documents)
                 t2 = time.perf_counter()
                 time_record['rerank'] = round(t2 - t1, 2)
-                # 过滤掉低分的文档
+                rerank_actually_used = True
+                rerank_after_order = [{'doc_id': doc.metadata.get('doc_id', ''), 'file_id': doc.metadata.get('file_id', ''),
+                                       'score': float(doc.metadata.get('score', 0))} for doc in source_documents]
                 debug_logger.info(f"rerank step1 num: {len(source_documents)}")
                 debug_logger.info(f"rerank step1 scores: {[doc.metadata['score'] for doc in source_documents]}")
                 if len(source_documents) > 1:
@@ -550,6 +565,45 @@ class LocalDocQA:
 
         # es检索+milvus检索结果最多可能是2k
         source_documents = source_documents[:top_k]
+
+        empty_recall_reason = ''
+        if not source_documents:
+            if not kb_ids:
+                empty_recall_reason = 'no_knowledge_base'
+            elif retrieval_source_info.get('milvus_hit_count', 0) == 0 and retrieval_source_info.get('es_hit_count', 0) == 0:
+                empty_recall_reason = 'vector_and_es_empty'
+            elif rerank_actually_used:
+                empty_recall_reason = 'rerank_filtered_all'
+            else:
+                empty_recall_reason = 'unknown_empty_recall'
+
+        candidate_count = len(source_documents)
+        final_citation_count = candidate_count
+        top_score = float(source_documents[0].metadata.get('score', 0)) if source_documents else 0
+
+        diagnosis_data = {
+            'user_id': user_id,
+            'bot_id': bot_id,
+            'kb_ids': kb_ids,
+            'query': query,
+            'condense_question': condense_question,
+            'retrieval_time_ms': retrieval_source_info.get('retrieval_time_ms', 0),
+            'candidate_count': candidate_count,
+            'milvus_hit_count': retrieval_source_info.get('milvus_hit_count', 0),
+            'es_hit_count': retrieval_source_info.get('es_hit_count', 0),
+            'rerank_before_order': rerank_before_order,
+            'rerank_after_order': rerank_after_order,
+            'rerank_used': rerank_actually_used,
+            'empty_recall_reason': empty_recall_reason,
+            'final_citation_count': final_citation_count,
+            'top_score': top_score,
+            'time_record': time_record,
+        }
+
+        try:
+            self.milvus_summary.add_retrieval_diagnosis(**diagnosis_data)
+        except Exception as e:
+            debug_logger.error(f"Failed to save retrieval diagnosis: {e}")
 
         # rerank之后删除headers，只保留文本内容，用于后续处理
         for doc in source_documents:

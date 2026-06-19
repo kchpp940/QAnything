@@ -5,7 +5,7 @@
       :title="bots.createBots"
       centered
       :destroyOnClose="true"
-      width="520px"
+      width="480px"
       wrap-class-name="new-bot-modal"
       :footer="null"
     >
@@ -39,33 +39,22 @@
               :auto-size="{ minRows: 3, maxRows: 3 }"
             />
           </a-form-item>
-          <a-form-item name="templateId">
-            <div class="item-title">{{ bots.sceneTemplate }}</div>
-            <div class="template-desc">{{ bots.templateDesc }}</div>
-            <div class="template-list">
+          <!-- <a-form-item>
+            <div class="item-title">{{ bots.preSetBot }}</div>
+            <div class="preset-bot-list">
               <div
-                :class="['template-item', selectedTemplateId === '' ? 'template-active' : '']"
-                @click="onSelectTemplate('')"
+                :class="[
+                  'preset-bot-item',
+                  item?.code === selectedPrebot?.code ? 'item-active' : '',
+                ]"
+                v-for="item in defaultBotList"
+                :key="item.name"
+                @click="selectDefaultBot(item)"
               >
-                <div class="template-icon">🚫</div>
-                <div class="template-name">{{ bots.noTemplate }}</div>
-              </div>
-              <div
-                v-for="tpl in sceneTemplates"
-                :key="tpl.id"
-                :class="['template-item', selectedTemplateId === tpl.id ? 'template-active' : '']"
-                @click="onSelectTemplate(tpl.id)"
-              >
-                <div class="template-icon">{{ tpl.icon }}</div>
-                <div class="template-name">{{ isZh ? tpl.name : tpl.nameEn }}</div>
+                {{ item.name }}
               </div>
             </div>
-            <div v-if="selectedTemplateId && currentTemplate" class="template-preview">
-              <div class="preview-label">
-                {{ isZh ? currentTemplate.description : currentTemplate.descriptionEn }}
-              </div>
-            </div>
-          </a-form-item>
+          </a-form-item> -->
           <a-form-item>
             <div class="footer">
               <a-button class="cancel-btn" @click="setNewBotsVisible(false)">
@@ -91,19 +80,11 @@ import routeController from '@/controller/router';
 import { getLanguage } from '@/language/index';
 
 const { changePage } = routeController();
-const { newBotsVisible, sceneTemplates } = storeToRefs(useBots());
-const {
-  setNewBotsVisible,
-  setCurBot,
-  setTabIndex,
-  applyTemplate,
-  fetchTemplates,
-  getTemplateDefaults,
-} = useBots();
+const { newBotsVisible } = storeToRefs(useBots());
+const { setNewBotsVisible, setCurBot, setTabIndex } = useBots();
 const { setQaList } = useBotsChat();
 const bots = getLanguage().bots;
 const common = getLanguage().common;
-const isZh = getLanguage().common.type === 'zh';
 
 interface FormState {
   name: string;
@@ -111,32 +92,11 @@ interface FormState {
 }
 
 const loading = ref(false);
-const selectedTemplateId = ref('');
-const currentTemplate = computed(() => {
-  const tid = selectedTemplateId.value;
-  if (!tid) return null;
-  const fromList = sceneTemplates.value.find(t => t.id === tid);
-  if (!fromList) return null;
-  const defaults = getTemplateDefaults(tid);
-  return { ...fromList, defaults: defaults || {} };
-});
-
+const selectedPrebot = ref(null); // 选中的预设机器人
 const formState = reactive<FormState>({
   name: '',
   introduction: '',
 });
-
-watch(newBotsVisible, async visible => {
-  if (visible) {
-    await fetchTemplates();
-    selectedTemplateId.value = '';
-  }
-});
-
-const onSelectTemplate = (templateId: string) => {
-  selectedTemplateId.value = templateId;
-  applyTemplate(templateId);
-};
 
 const getBotInfo = async botId => {
   try {
@@ -150,20 +110,19 @@ const getBotInfo = async botId => {
 const onFinish = async (values: any) => {
   console.log('Success:', values);
   try {
-    const createParams: any = {
-      bot_name: values.name,
-      description: values.introduction,
-      template_id: selectedTemplateId.value || '',
-      user_overrides: {},
-    };
-    const res: any = await resultControl(await urlResquest.createBot(createParams));
+    const res: any = await resultControl(
+      await urlResquest.createBot({
+        bot_name: values.name,
+        description: values.introduction,
+      })
+    );
     await getBotInfo(res.bot_id);
     message.success(bots.creationSuccessful);
     setTabIndex(0);
     setQaList([]);
     formState.name = '';
     formState.introduction = '';
-    selectedTemplateId.value = '';
+    selectedPrebot.value = null;
     changePage(`/bots/${res.bot_id}/edit`);
   } catch (e) {
     message.error(e.msg || '创建失败');
@@ -189,72 +148,42 @@ const onFinishFailed = (errorInfo: any) => {
       color: #ff0000;
     }
   }
-  .template-desc {
-    font-size: 12px;
-    color: #999999;
-    margin-bottom: 12px;
-  }
-  .template-list {
+  .preset-bot-list {
     width: 100%;
     display: flex;
+    // justify-content: space-between;
     flex-wrap: wrap;
-    gap: 10px;
-    .template-item {
-      flex: 1;
-      min-width: 90px;
-      max-width: 110px;
-      padding: 10px 8px;
-      border-radius: 8px;
-      background: #f9f9fc;
+    .preset-bot-item {
+      width: 96px;
+      height: 32px;
+      border-radius: 4px;
+      background: #fff;
       box-sizing: border-box;
       border: 1px solid #ededed;
-      cursor: pointer;
+      font-size: 14px;
+      color: #666666;
       text-align: center;
-      transition: all 0.2s;
-      &:hover {
-        border-color: #b8a8f0;
-      }
-      .template-icon {
-        font-size: 22px;
-        margin-bottom: 4px;
-      }
-      .template-name {
-        font-size: 12px;
-        color: #666666;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
+      line-height: 32px;
+      margin-bottom: 16px;
+      margin-right: 16px;
+      cursor: pointer;
     }
-    .template-active {
+    .item-active {
       border-color: #5a47e5;
-      background: #eeecfc;
-      .template-name {
-        color: #5a47e5;
-        font-weight: 500;
-      }
-    }
-  }
-  .template-preview {
-    margin-top: 8px;
-    padding: 8px 12px;
-    background: #f9f9fc;
-    border-radius: 6px;
-    .preview-label {
-      font-size: 12px;
-      color: #888;
-      line-height: 1.5;
+      color: #5a47e5;
     }
   }
   .footer {
     display: flex;
     justify-content: end;
     .cancel-btn {
+      // width: 68px;
       height: 32px;
       padding: 0 20px;
       margin-right: 16px;
     }
     .login-form-btn {
+      // width: 68px;
       height: 32px;
       padding: 0 20px;
       background: #5a47e5 !important;

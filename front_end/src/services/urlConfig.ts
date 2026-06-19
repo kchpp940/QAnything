@@ -27,7 +27,6 @@ enum EUrlKey {
   fileList = 'fileList',
   createBot = 'createBot',
   updateBot = 'updateBot',
-  listBotTemplates = 'listBotTemplates',
   queryBotInfo = 'queryBotInfo',
   deleteBot = 'deleteBot',
   uploadFaqs = 'uploadFaqs',
@@ -40,6 +39,7 @@ enum EUrlKey {
   getKbInfo = 'getKbInfo',
   getTags = 'getTags',
   updateTags = 'updateTags',
+  getRetrievalDiagnosis = 'getRetrievalDiagnosis',
 }
 
 interface IUrlValueConfig {
@@ -170,15 +170,6 @@ const urlConfig: IUrlConfig = {
       user_info: userPhone,
     },
   },
-  // 获取Bot场景模板列表
-  listBotTemplates: {
-    type: EUrlType.POST,
-    url: '/local_doc_qa/list_bot_templates',
-    param: {
-      user_id: userId,
-      user_info: userPhone,
-    },
-  },
   // 获取Bot信息/列表
   queryBotInfo: {
     type: EUrlType.POST,
@@ -282,6 +273,15 @@ const urlConfig: IUrlConfig = {
   updateTags: {
     type: EUrlType.POST,
     url: '/local_doc_qa/update_tags',
+    param: {
+      user_id: userId,
+      user_info: userPhone,
+    },
+  },
+  // 检索质量诊断
+  getRetrievalDiagnosis: {
+    type: EUrlType.POST,
+    url: '/local_doc_qa/get_retrieval_diagnosis',
     param: {
       user_id: userId,
       user_info: userPhone,

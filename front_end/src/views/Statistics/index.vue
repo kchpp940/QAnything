@@ -36,17 +36,23 @@ const segmentedData = ref([
     value: 1,
     title: '明细',
   },
+  {
+    value: 2,
+    title: '检索诊断',
+  },
 ]);
 const segmentedIndex = ref(-1);
 
 const indexMap = new Map([
   [0, '/statistics/overview'],
   [1, '/statistics/details'],
+  [2, '/statistics/retrieval-diagnosis'],
 ]);
 
 const segmentedMap = new Map([
   ['/statistics/overview', 0],
   ['/statistics/details', 1],
+  ['/statistics/retrieval-diagnosis', 2],
 ]);
 
 const changeIndex = value => {
@@ -79,7 +85,7 @@ onMounted(() => {
 }
 
 .segmented {
-  width: 170px;
+  width: 250px;
   padding: 5px;
   margin-bottom: 20px;
   font-weight: bold;

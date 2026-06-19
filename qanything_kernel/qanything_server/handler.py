@@ -6,18 +6,6 @@ from qanything_kernel.utils.custom_log import debug_logger, qa_logger
 from qanything_kernel.configs.model_config import (BOT_DESC, BOT_IMAGE, BOT_PROMPT, BOT_WELCOME,
                                                    DEFAULT_PARENT_CHUNK_SIZE, MAX_CHARS, VECTOR_SEARCH_TOP_K,
                                                    UPLOAD_ROOT_PATH, IMAGES_ROOT_PATH)
-from qanything_kernel.configs.bot_template_resolver import (
-    resolve_bot_values,
-    compute_overridden_fields,
-    new_bot_build_persist_values,
-    update_bot_build_persist_values,
-    parse_user_overrides,
-    build_llm_setting_with_answer_style,
-    get_schema_version,
-    get_template_defaults,
-    is_valid_template_id,
-)
-from qanything_kernel.configs.scene_templates import TEMPLATE_OVERRIDABLE_FIELDS, NO_TEMPLATE_DEFAULTS, list_templates, get_template_meta
 from qanything_kernel.utils.general_utils import *
 from langchain.schema import Document
 from sanic.response import ResponseStream
@@ -42,7 +30,8 @@ __all__ = ["new_knowledge_base", "upload_files", "list_kbs", "list_docs", "delet
            "rename_knowledge_base", "get_total_status", "clean_files_by_status", "upload_weblink", "local_doc_chat",
            "document", "upload_faqs", "get_doc_completed", "get_qa_info", "get_user_id", "get_doc",
            "get_rerank_results", "get_user_status", "health_check", "update_chunks", "get_file_base64",
-           "get_random_qa", "get_related_qa", "new_bot", "delete_bot", "update_bot", "get_bot_info"]
+           "get_random_qa", "get_related_qa", "new_bot", "delete_bot", "update_bot", "get_bot_info",
+           "get_retrieval_diagnosis"]
 
 INVALID_USER_ID = f"fail, Invalid user_id: . user_id 必须只含有字母，数字和下划线且字母开头"
 
@@ -671,35 +660,26 @@ async def local_doc_chat(req: request):
         if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id):
             return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
         bot_info = local_doc_qa.milvus_summary.get_bot(None, bot_id)[0]
-        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting_raw, template_id, user_overrides, template_version = bot_info
+        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting = bot_info
         kb_ids = kb_ids_str.split(',')
         if not kb_ids:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} unbound knowledge base.".format(bot_id)})
-        merged = resolve_bot_values(template_id, user_overrides, template_version)
-        custom_prompt = merged.get('prompt_setting', prompt)
-        if not llm_setting_raw:
+        custom_prompt = prompt
+        if not llm_setting:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} llm_setting is empty.".format(bot_id)})
-        if isinstance(llm_setting_raw, str):
-            try:
-                llm_setting = json.loads(llm_setting_raw)
-            except (json.JSONDecodeError, ValueError):
-                llm_setting = {}
-        elif isinstance(llm_setting_raw, dict):
-            llm_setting = dict(llm_setting_raw)
-        else:
-            llm_setting = {}
-        rerank = merged.get('rerank', llm_setting.get('rerank', True))
-        only_need_search_results = merged.get('only_need_search_results', llm_setting.get('only_need_search_results', False))
-        need_web_search = merged.get('networking', llm_setting.get('networking', False))
+        llm_setting = json.loads(llm_setting)
+        rerank = llm_setting.get('rerank', True)
+        only_need_search_results = llm_setting.get('only_need_search_results', False)
+        need_web_search = llm_setting.get('networking', False)
         api_base = llm_setting.get('api_base', '')
         api_key = llm_setting.get('api_key', 'ollama')
         api_context_length = llm_setting.get('api_context_length', 4096)
-        top_p = merged.get('top_P', llm_setting.get('top_p', 0.99))
-        temperature = merged.get('temperature', llm_setting.get('temperature', 0.5))
-        top_k = merged.get('top_K', llm_setting.get('top_k', VECTOR_SEARCH_TOP_K))
+        top_p = llm_setting.get('top_p', 0.99)
+        temperature = llm_setting.get('temperature', 0.5)
+        top_k = llm_setting.get('top_k', VECTOR_SEARCH_TOP_K)
         model = llm_setting.get('model', 'gpt-4o-mini')
         max_token = llm_setting.get('max_token')
-        hybrid_search = merged.get('hybrid_search', llm_setting.get('hybrid_search', False))
+        hybrid_search = llm_setting.get('hybrid_search', False)
         chunk_size = llm_setting.get('chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
     else:
         kb_ids = safe_get(req, 'kb_ids')
@@ -828,7 +808,9 @@ async def local_doc_chat(req: request):
                                                                                     api_key=api_key,
                                                                                     api_context_length=api_context_length,
                                                                                     top_p=top_p,
-                                                                                    top_k=top_k
+                                                                                    top_k=top_k,
+                                                                                    user_id=user_id,
+                                                                                    bot_id=bot_id
                                                                                     ):
                 chunk_data = resp["result"]
                 if not chunk_data:
@@ -909,7 +891,9 @@ async def local_doc_chat(req: request):
                                                                            api_key=api_key,
                                                                            api_context_length=api_context_length,
                                                                            top_p=top_p,
-                                                                           top_k=top_k
+                                                                           top_k=top_k,
+                                                                           user_id=user_id,
+                                                                           bot_id=bot_id
                                                                            ):
             pass
         if only_need_search_results:
@@ -1293,71 +1277,12 @@ async def get_bot_info(req: request):
         else:
             kb_ids = []
             kb_names = []
-        template_id = bot_info[10] if len(bot_info) > 10 else ''
-        user_overrides_raw = bot_info[11] if len(bot_info) > 11 else '{}'
-        bot_template_version = bot_info[12] if len(bot_info) > 12 else ''
-        current_schema_version = get_schema_version()
-        merged = resolve_bot_values(template_id, user_overrides_raw, bot_template_version)
-        overridden_fields = compute_overridden_fields(template_id, user_overrides_raw, bot_template_version)
-        parsed_overrides = parse_user_overrides(user_overrides_raw)
-        template_defaults = get_template_defaults(template_id, bot_template_version)
-        existing_llm = bot_info[9]
-        if isinstance(existing_llm, str):
-            try:
-                llm_json = json.loads(existing_llm)
-            except (json.JSONDecodeError, ValueError):
-                llm_json = {}
-        elif isinstance(existing_llm, dict):
-            llm_json = existing_llm
-        else:
-            llm_json = {}
-        llm_json['answer_style'] = merged.get('answer_style', '')
-        updated_llm = json.dumps(llm_json, ensure_ascii=False)
         info = {"bot_id": bot_info[0], "user_id": user_id, "bot_name": bot_info[1], "description": bot_info[2],
-                "head_image": bot_info[3],
-                "prompt_setting": merged.get('prompt_setting', bot_info[4]),
-                "welcome_message": merged.get('welcome_message', bot_info[5]),
+                "head_image": bot_info[3], "prompt_setting": bot_info[4], "welcome_message": bot_info[5],
                 "kb_ids": kb_ids, "kb_names": kb_names,
-                "update_time": bot_info[7].strftime("%Y-%m-%d %H:%M:%S"),
-                "llm_setting": updated_llm,
-                "template_id": template_id,
-                "template_version": bot_template_version,
-                "schema_version": current_schema_version,
-                "user_overrides": parsed_overrides,
-                "merged_config": merged,
-                "overridden_fields": overridden_fields,
-                "template_defaults": template_defaults}
+                "update_time": bot_info[7].strftime("%Y-%m-%d %H:%M:%S"), "llm_setting": bot_info[9]}
         data.append(info)
     return sanic_json({"code": 200, "msg": "success", "data": data})
-
-
-@get_time_async
-async def list_bot_templates(req: request):
-    """
-    List all available bot scene templates with metadata and full defaults.
-    Returns:
-    - templates: list of template objects with id, name, description, icon, defaults
-    - schema_version: current template schema version
-    - overridable_fields: list of field names that can be overridden by users
-    - no_template_defaults: defaults used when no template is selected
-    """
-    user_id, is_valid, error_msg, user_info = check_state(req)
-    if not is_valid:
-        return sanic_json({"code": 2001, "msg": error_msg})
-    user_id = user_id + '__' + user_info
-    is_zh = req.headers.get('accept-language', 'zh').lower().startswith('zh')
-    templates = list_templates(is_zh=is_zh, include_defaults=True)
-    schema_version = get_schema_version()
-    return sanic_json({
-        "code": 200,
-        "msg": "success",
-        "data": {
-            "templates": templates,
-            "schema_version": schema_version,
-            "overridable_fields": TEMPLATE_OVERRIDABLE_FIELDS,
-            "no_template_defaults": NO_TEMPLATE_DEFAULTS,
-        }
-    })
 
 
 @get_time_async
@@ -1376,22 +1301,6 @@ async def new_bot(req: request):
     welcome_message = safe_get(req, "welcome_message", BOT_WELCOME)
     kb_ids = safe_get(req, "kb_ids", [])
     kb_ids_str = ",".join(kb_ids)
-    template_id = safe_get(req, "template_id", "")
-    user_overrides = safe_get(req, "user_overrides", {})
-
-    if template_id and not is_valid_template_id(template_id):
-        return sanic_json({"code": 2001, "msg": "fail, invalid template_id: {}".format(template_id)})
-
-    try:
-        merged, overrides_to_persist, prompt_welcome = new_bot_build_persist_values(
-            template_id,
-            user_overrides,
-            existing_raw_prompt=prompt_setting if prompt_setting != BOT_PROMPT else None,
-            existing_raw_welcome=welcome_message if welcome_message != BOT_WELCOME else None,
-            template_version=current_schema_version if template_id else None,
-        )
-    except ValueError as ve:
-        return sanic_json({"code": 2001, "msg": "fail, {}".format(ve)})
 
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
     if not_exist_kb_ids:
@@ -1399,21 +1308,11 @@ async def new_bot(req: request):
         return sanic_json({"code": 2001, "msg": msg, "data": [{}]})
     debug_logger.info("new_bot %s", user_id)
     bot_id = 'BOT' + uuid.uuid4().hex
-    current_schema_version = get_schema_version()
-    local_doc_qa.milvus_summary.new_qanything_bot(
-        bot_id, user_id, bot_name, desc, head_image,
-        prompt_welcome['prompt_setting'],
-        prompt_welcome['welcome_message'],
-        kb_ids_str,
-        template_id=template_id,
-        user_overrides=json.dumps(overrides_to_persist, ensure_ascii=False),
-        template_version=current_schema_version if template_id else ''
-    )
+    local_doc_qa.milvus_summary.new_qanything_bot(bot_id, user_id, bot_name, desc, head_image, prompt_setting,
+                                                  welcome_message, kb_ids_str)
     create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return sanic_json({"code": 200, "msg": "success create qanything bot {}".format(bot_id),
-                       "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time,
-                                "template_id": template_id, "template_version": current_schema_version,
-                                "merged_config": merged, "user_overrides": overrides_to_persist}})
+                       "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time}})
 
 
 @get_time_async
@@ -1469,138 +1368,53 @@ async def update_bot(req: request):
         llm_setting["api_key"] = api_key
     if api_context_length := safe_get(req, "api_context_length"):
         llm_setting["api_context_length"] = api_context_length
+    if top_p := safe_get(req, "top_p"):
+        llm_setting["top_p"] = top_p
+    if top_k := safe_get(req, "top_k"):
+        llm_setting["top_k"] = top_k
     if chunk_size := safe_get(req, "chunk_size"):
         llm_setting["chunk_size"] = chunk_size
+    if temperature := safe_get(req, "temperature"):
+        llm_setting["temperature"] = temperature
     if model := safe_get(req, "model"):
         llm_setting["model"] = model
     if max_token := safe_get(req, "max_token"):
         llm_setting["max_token"] = max_token
-
-    old_template_id = bot_info[10] if len(bot_info) > 10 else ''
-    old_user_overrides_raw = bot_info[11] if len(bot_info) > 11 else '{}'
-    old_template_version = bot_info[12] if len(bot_info) > 12 else ''
-    current_schema_version = get_schema_version()
-    old_merged = resolve_bot_values(old_template_id, old_user_overrides_raw, old_template_version)
-
-    new_template_id = safe_get(req, "template_id")
-    if new_template_id is None:
-        new_template_id = old_template_id
-    if new_template_id and not is_valid_template_id(new_template_id):
-        return sanic_json({"code": 2001, "msg": "fail, invalid template_id: {}".format(new_template_id)})
-
-    if new_template_id and (new_template_id != old_template_id or not old_template_version):
-        new_template_version = current_schema_version
-    else:
-        new_template_version = old_template_version
-
-    req_override = safe_get(req, "user_overrides")
-    if req_override is None:
-        req_override = {}
-    elif isinstance(req_override, str):
-        try:
-            req_override = json.loads(req_override)
-        except (json.JSONDecodeError, ValueError):
-            req_override = {}
-
-    raw_field_updates: Dict[str, Any] = {}
-    top_p_val = safe_get(req, "top_p")
-    if top_p_val is not None:
-        raw_field_updates["top_P"] = top_p_val
-        llm_setting["top_p"] = top_p_val
-    top_k_val = safe_get(req, "top_k")
-    if top_k_val is not None:
-        raw_field_updates["top_K"] = top_k_val
-        llm_setting["top_k"] = top_k_val
-    temperature_val = safe_get(req, "temperature")
-    if temperature_val is not None:
-        raw_field_updates["temperature"] = temperature_val
-        llm_setting["temperature"] = temperature_val
+    # 如果rerank不是None，赋值，false也可以
     rerank = safe_get(req, "rerank")
     if rerank is not None:
-        raw_field_updates["rerank"] = rerank
         llm_setting["rerank"] = rerank
     hybrid_search = safe_get(req, "hybrid_search")
     if hybrid_search is not None:
-        raw_field_updates["hybrid_search"] = hybrid_search
         llm_setting["hybrid_search"] = hybrid_search
     networking = safe_get(req, "networking")
     if networking is not None:
-        raw_field_updates["networking"] = networking
         llm_setting["networking"] = networking
     only_need_search_results = safe_get(req, "only_need_search_results")
     if only_need_search_results is not None:
-        raw_field_updates["only_need_search_results"] = only_need_search_results
         llm_setting["only_need_search_results"] = only_need_search_results
-    answer_style = safe_get(req, "answer_style")
-    if answer_style is not None:
-        raw_field_updates["answer_style"] = answer_style
-        llm_setting["answer_style"] = answer_style
-    prompt_setting_req = safe_get(req, "prompt_setting")
-    if prompt_setting_req is not None:
-        raw_field_updates["prompt_setting"] = prompt_setting_req
-    welcome_message_req = safe_get(req, "welcome_message")
-    if welcome_message_req is not None:
-        raw_field_updates["welcome_message"] = welcome_message_req
-
-    try:
-        new_merged, overrides_to_persist, prompt_welcome = update_bot_build_persist_values(
-            old_template_id,
-            new_template_id,
-            req_override,
-            old_merged_values=old_merged,
-            raw_field_updates=raw_field_updates,
-            old_template_version=old_template_version,
-            new_template_version=new_template_version,
-        )
-    except ValueError as ve:
-        return sanic_json({"code": 2001, "msg": "fail, {}".format(ve)})
-
-    llm_setting["top_p"] = new_merged["top_P"]
-    llm_setting["top_k"] = new_merged["top_K"]
-    llm_setting["temperature"] = new_merged["temperature"]
-    llm_setting["rerank"] = new_merged["rerank"]
-    llm_setting["hybrid_search"] = new_merged["hybrid_search"]
-    llm_setting["networking"] = new_merged["networking"]
-    llm_setting["only_need_search_results"] = new_merged["only_need_search_results"]
-    llm_setting["answer_style"] = new_merged["answer_style"]
-
-    prompt_setting_final = prompt_welcome["prompt_setting"]
-    welcome_message_final = prompt_welcome["welcome_message"]
-    user_overrides_str = json.dumps(overrides_to_persist, ensure_ascii=False)
 
     debug_logger.info(f"update llm_setting: {llm_setting}")
-    debug_logger.info(f"update template_id: {new_template_id}")
-    debug_logger.info(f"update user_overrides: {user_overrides_str}")
 
+    # 判断哪些项修改了
     if bot_name != bot_info[1]:
         debug_logger.info(f"update bot name from {bot_info[1]} to {bot_name}")
     if description != bot_info[2]:
         debug_logger.info(f"update bot description from {bot_info[2]} to {description}")
     if head_image != bot_info[3]:
         debug_logger.info(f"update bot head_image from {bot_info[3]} to {head_image}")
-    if prompt_setting_final != bot_info[4]:
-        debug_logger.info(f"update bot prompt_setting from {bot_info[4]} to {prompt_setting_final}")
-    if welcome_message_final != bot_info[5]:
-        debug_logger.info(f"update bot welcome_message from {bot_info[5]} to {welcome_message_final}")
+    if prompt_setting != bot_info[4]:
+        debug_logger.info(f"update bot prompt_setting from {bot_info[4]} to {prompt_setting}")
+    if welcome_message != bot_info[5]:
+        debug_logger.info(f"update bot welcome_message from {bot_info[5]} to {welcome_message}")
     if kb_ids_str != bot_info[6]:
         debug_logger.info(f"update bot kb_ids from {bot_info[6]} to {kb_ids_str}")
+    #  update_time     TIMESTAMP DEFAULT CURRENT_TIMESTAMP 根据这个mysql的格式获取现在的时间
     update_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     debug_logger.info(f"update_time: {update_time}")
-    local_doc_qa.milvus_summary.update_bot(user_id, bot_id, bot_name, description, head_image, prompt_setting_final,
-                                           welcome_message_final, kb_ids_str, update_time, llm_setting,
-                                           template_id=new_template_id, user_overrides=user_overrides_str,
-                                           template_version=new_template_version)
-    return sanic_json({"code": 200, "msg": "Bot {} update success".format(bot_id),
-                       "data": {
-                           "bot_id": bot_id,
-                           "template_id": new_template_id,
-                           "template_version": new_template_version,
-                           "schema_version": current_schema_version,
-                           "merged_config": new_merged,
-                           "user_overrides": overrides_to_persist,
-                           "overridden_fields": compute_overridden_fields(new_template_id, user_overrides_str, new_template_version),
-                           "template_defaults": get_template_defaults(new_template_id, new_template_version),
-                       }})
+    local_doc_qa.milvus_summary.update_bot(user_id, bot_id, bot_name, description, head_image, prompt_setting,
+                                           welcome_message, kb_ids_str, update_time, llm_setting)
+    return sanic_json({"code": 200, "msg": "Bot {} update success".format(bot_id)})
 
 
 @get_time_async
@@ -1652,3 +1466,52 @@ async def get_file_base64(req: request):
     with open(file_location, "rb") as f:
         file_base64 = base64.b64encode(f.read()).decode()
     return sanic_json({"code": 200, "msg": "success", "file_base64": file_base64})
+
+
+@get_time_async
+async def get_retrieval_diagnosis(req: request):
+    local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
+    user_id = safe_get(req, 'user_id')
+    user_info = safe_get(req, 'user_info', "1234")
+    passed, msg = check_user_id_and_user_info(user_id, user_info)
+    if not passed:
+        return sanic_json({"code": 2001, "msg": msg})
+    user_id = user_id + '__' + user_info
+
+    kb_id = safe_get(req, 'kb_id')
+    if not kb_id:
+        return sanic_json({"code": 2005, "msg": "fail, kb_id is required"})
+    kb_id = correct_kb_id(kb_id)
+
+    time_start = safe_get(req, 'time_start')
+    time_end = safe_get(req, 'time_end')
+    time_range = get_time_range(time_start, time_end)
+    if not time_range:
+        return sanic_json({"code": 2002, "msg": f'输入非法！time_start格式错误，示例：2024-10-05，请检查！'})
+
+    data_type = safe_get(req, 'data_type', 'summary')
+
+    if data_type == 'summary':
+        result = local_doc_qa.milvus_summary.get_retrieval_diagnosis_summary(kb_id, time_range)
+        for row in result:
+            if 'date' in row and hasattr(row['date'], 'strftime'):
+                row['date'] = row['date'].strftime("%Y-%m-%d")
+        return sanic_json({"code": 200, "msg": "success", "data": result})
+
+    elif data_type == 'failure_distribution':
+        result = local_doc_qa.milvus_summary.get_retrieval_diagnosis_failure_distribution(kb_id, time_range)
+        return sanic_json({"code": 200, "msg": "success", "data": result})
+
+    elif data_type == 'low_confidence':
+        top_k = safe_get(req, 'top_k', 20)
+        result = local_doc_qa.milvus_summary.get_retrieval_diagnosis_low_confidence(kb_id, time_range, top_k)
+        return sanic_json({"code": 200, "msg": "success", "data": result})
+
+    elif data_type == 'list':
+        page_id = safe_get(req, 'page_id', 1)
+        page_limit = safe_get(req, 'page_limit', 10)
+        result = local_doc_qa.milvus_summary.get_retrieval_diagnosis_list(kb_id, time_range, page_id, page_limit)
+        return sanic_json({"code": 200, "msg": "success", "data": result})
+
+    else:
+        return sanic_json({"code": 2003, "msg": "fail, unknown data_type, supported: summary, failure_distribution, low_confidence, list"})

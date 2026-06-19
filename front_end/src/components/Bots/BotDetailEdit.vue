@@ -4,67 +4,17 @@
       <img src="@/assets/bots/bot-avatar.png" alt="avatar" />
       <a-input v-model:value="name" :placeholder="bots.inputBotName" show-count :maxlength="25" />
     </div>
-    <div class="title">{{ bots.sceneTemplate }}</div>
-    <div class="template-selector">
-      <a-select
-        v-model:value="activeTemplateId"
-        :placeholder="bots.selectTemplate"
-        style="width: 100%"
-        @change="onTemplateChange"
-      >
-        <a-select-option value="">{{ bots.noTemplate }}</a-select-option>
-        <a-select-option v-for="tpl in sceneTemplates" :key="tpl.id" :value="tpl.id">
-          {{ tpl.icon }} {{ isZh ? tpl.name : tpl.nameEn }}
-        </a-select-option>
-      </a-select>
-    </div>
-    <div v-if="activeTemplateId && currentTemplate" class="template-info-bar">
-      <span class="template-info-text">{{
-        isZh ? currentTemplate.description : currentTemplate.descriptionEn
-      }}</span>
-    </div>
-    <div class="title-with-override">
-      <span>{{ bots.roleSetting }}</span>
-      <a-tag
-        v-if="activeTemplateId && isFieldOverridden('prompt_setting')"
-        color="orange"
-        class="override-tag"
-      >
-        {{ bots.userModified }}
-        <span class="reset-link" @click="resetField('prompt_setting')">
-          {{ bots.resetToDefault }}
-        </span>
-      </a-tag>
-      <a-tag v-else-if="activeTemplateId" color="blue" class="override-tag">
-        {{ bots.templateDefault }}
-      </a-tag>
-    </div>
+    <div class="title">{{ bots.roleSetting }}</div>
     <a-textarea
       v-model:value="roleSetting"
       class="role-setting-input"
       :auto-size="{ minRows: 7, maxRows: 7 }"
       :rows="7"
-      @change="onFieldChange('prompt_setting')"
     />
     <div :class="['role-setting-length', matches && matches.length > 2000 ? 'over-length' : '']">
       {{ matches ? matches.length : 0 }} / 2000
     </div>
-    <div class="title-with-override">
-      <span>{{ bots.welcomeMessage }}</span>
-      <a-tag
-        v-if="activeTemplateId && isFieldOverridden('welcome_message')"
-        color="orange"
-        class="override-tag"
-      >
-        {{ bots.userModified }}
-        <span class="reset-link" @click="resetField('welcome_message')">
-          {{ bots.resetToDefault }}
-        </span>
-      </a-tag>
-      <a-tag v-else-if="activeTemplateId" color="blue" class="override-tag">
-        {{ bots.templateDefault }}
-      </a-tag>
-    </div>
+    <div class="title">{{ bots.welcomeMessage }}</div>
     <a-textarea
       v-model:value="welcomeMessage"
       class="greeting-input"
@@ -73,7 +23,6 @@
       :placeholder="bots.inputWelcomMsg"
       :auto-size="{ minRows: 6, maxRows: 6 }"
       :rows="6"
-      @change="onFieldChange('welcome_message')"
     />
     <div class="title">{{ bots.associatedKb }}<span>*</span></div>
     <div v-for="(item, index) in curBot.kb_ids" :key="item" class="knowedge-item knowledge-info">
@@ -90,34 +39,9 @@
       <img class="add-knowedge" src="@/assets/bots/add-knowedge.png" alt="icon" />
       {{ bots.clickAssociatedKb }}
     </div>
-    <div class="title-with-override">
-      <span>{{ bots.answerStyle }}</span>
-      <a-tag
-        v-if="activeTemplateId && isFieldOverridden('answer_style')"
-        color="orange"
-        class="override-tag"
-      >
-        {{ bots.userModified }}
-        <span class="reset-link" @click="resetField('answer_style')">
-          {{ bots.resetToDefault }}
-        </span>
-      </a-tag>
-      <a-tag v-else-if="activeTemplateId" color="blue" class="override-tag">
-        {{ bots.templateDefault }}
-      </a-tag>
-    </div>
-    <a-select
-      v-model:value="answerStyle"
-      style="width: 100%; margin-bottom: 8px"
-      @change="onFieldChange('answer_style')"
-    >
-      <a-select-option value="concise">{{ bots.answerStyleConcise }}</a-select-option>
-      <a-select-option value="detailed">{{ bots.answerStyleDetailed }}</a-select-option>
-      <a-select-option value="technical">{{ bots.answerStyleTechnical }}</a-select-option>
-      <a-select-option value="strict_citation">
-        {{ bots.answerStyleStrictCitation }}
-      </a-select-option>
-    </a-select>
+    <!--    <div class="save">-->
+    <!--      <a-button class="save-btn" type="primary" @click="saveBotInfo">{{ bots.save }}</a-button>-->
+    <!--    </div>-->
     <div class="title">{{ common.modelSettingTitle }}</div>
     <ChatSettingForm ref="chatSettingFormRef" :context-length="QA_List.length" />
     <div class="chat-setting-form-footer">
@@ -137,131 +61,25 @@ import ChatSettingForm from '@/components/ChatSettingForm.vue';
 import { useChatSetting } from '@/store/useChatSetting';
 import { useBotsChat } from '@/store/useBotsChat';
 
-const { curBot, knowledgeList, selectedTemplateId, userOverrides, sceneTemplates } = storeToRefs(
-  useBots()
-);
+const { curBot, knowledgeList } = storeToRefs(useBots());
 const { QA_List } = storeToRefs(useBotsChat());
-const {
-  setSelectKnowledgeVisible,
-  setCurBot,
-  applyTemplate,
-  markFieldOverridden,
-  isFieldOverridden,
-  resetFieldToDefault,
-  loadBotTemplateState,
-  setUserOverrides,
-  fetchTemplates,
-  getTemplateDefaults,
-  getTemplateDefaultsStrict,
-} = useBots();
+const { setSelectKnowledgeVisible, setCurBot } = useBots();
 const { setChatSettingConfigured } = useChatSetting();
 const { chatSettingFormActive } = storeToRefs(useChatSetting());
 
 const { bots, common } = getLanguage();
-const isZh = getLanguage().common.type === 'zh';
 
 const name = ref('');
 const roleSetting = ref('');
 const welcomeMessage = ref('');
-const answerStyle = ref('');
-const activeTemplateId = ref('');
-const currentTemplate = computed(() => {
-  const tid = activeTemplateId.value;
-  if (!tid) return null;
-  const fromList = sceneTemplates.value.find(t => t.id === tid);
-  if (!fromList) return null;
-  const defaults = getTemplateDefaults(tid);
-  return { ...fromList, defaults: defaults || {} };
-});
 const matches: any = computed(() => roleSetting.value.match(/[^a-zA-Z\s]|\p{P}|\w+/g));
 
-onMounted(async () => {
+onMounted(() => {
   console.log('curBot', curBot.value);
-  await fetchTemplates();
   name.value = curBot.value.bot_name;
-  loadBotTemplateState(curBot.value);
-  activeTemplateId.value = selectedTemplateId.value;
-  roleSetting.value = curBot.value.prompt_setting;
   welcomeMessage.value = curBot.value.welcome_message;
-  if (curBot.value.merged_config && curBot.value.merged_config.answer_style !== undefined) {
-    answerStyle.value = curBot.value.merged_config.answer_style;
-  } else {
-    const llm = curBot.value.llm_setting;
-    const parsed = llm
-      ? typeof llm === 'string'
-        ? JSON.parse(llm).answer_style
-        : llm?.answer_style
-      : undefined;
-    answerStyle.value = parsed || '';
-  }
+  roleSetting.value = curBot.value.prompt_setting;
 });
-
-const onTemplateChange = async (templateId: string) => {
-  activeTemplateId.value = templateId;
-  applyTemplate(templateId);
-  if (!templateId) return;
-  const defaults = getTemplateDefaultsStrict(templateId);
-  if (defaults) {
-    roleSetting.value = defaults.prompt_setting || '';
-    welcomeMessage.value = defaults.welcome_message || '';
-    answerStyle.value = defaults.answer_style || '';
-    message.success(bots.templateApplied);
-  } else {
-    message.warning('模板默认值未加载，请刷新页面后重试');
-  }
-};
-
-const getCurrentVal = (field: string) => {
-  switch (field) {
-    case 'prompt_setting':
-      return roleSetting.value;
-    case 'welcome_message':
-      return welcomeMessage.value;
-    case 'answer_style':
-      return answerStyle.value;
-    case 'top_K':
-      return chatSettingFormActive.value.top_K;
-    case 'rerank':
-      return chatSettingFormActive.value.capabilities.rerank;
-    case 'networking':
-      return chatSettingFormActive.value.capabilities.networkSearch;
-    case 'hybrid_search':
-      return chatSettingFormActive.value.capabilities.mixedSearch;
-    case 'only_need_search_results':
-      return chatSettingFormActive.value.capabilities.onlySearch;
-    case 'temperature':
-      return chatSettingFormActive.value.temperature;
-    case 'top_P':
-      return chatSettingFormActive.value.top_P;
-    default:
-      return undefined;
-  }
-};
-
-const onFieldChange = (field: string) => {
-  if (!activeTemplateId.value) return;
-  const defaults = getTemplateDefaults(activeTemplateId.value);
-  if (!defaults) return;
-  const curVal = getCurrentVal(field);
-  const defVal = defaults[field];
-  if (curVal !== undefined && curVal !== defVal) {
-    markFieldOverridden(field);
-    const newOverrides = { ...userOverrides.value };
-    newOverrides[field] = curVal;
-    setUserOverrides(newOverrides);
-  }
-};
-
-const resetField = (field: string) => {
-  const defaults = getTemplateDefaults(activeTemplateId.value);
-  if (!defaults) return;
-  const defaultVal = defaults[field];
-  if (field === 'prompt_setting') roleSetting.value = defaultVal;
-  else if (field === 'welcome_message') welcomeMessage.value = defaultVal;
-  else if (field === 'answer_style') answerStyle.value = defaultVal;
-  resetFieldToDefault(field);
-  message.success(bots.templateReset);
-};
 
 const getBotInfo = async botId => {
   try {
@@ -275,73 +93,27 @@ const getBotInfo = async botId => {
 
 const saveBotInfo = async () => {
   try {
-    const updateParams: any = {
-      bot_id: curBot.value.bot_id,
-      bot_name: name.value,
-      prompt_setting: roleSetting.value,
-      welcome_message: welcomeMessage.value,
-      only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-      networking: chatSettingFormActive.value.capabilities.networkSearch,
-      api_base: chatSettingFormActive.value.apiBase,
-      api_key: chatSettingFormActive.value.apiKey,
-      api_context_length: chatSettingFormActive.value.apiContextLength,
-      top_p: chatSettingFormActive.value.top_P,
-      temperature: chatSettingFormActive.value.temperature,
-      top_k: chatSettingFormActive.value.top_K,
-      model: chatSettingFormActive.value.apiModelName,
-      max_token: chatSettingFormActive.value.maxToken,
-      hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-      chunk_size: chatSettingFormActive.value.chunkSize,
-      rerank: chatSettingFormActive.value.capabilities.rerank,
-      answer_style: answerStyle.value,
-      template_id: activeTemplateId.value || '',
-      user_overrides: userOverrides.value || {},
-    };
-    const updateRes: any = await resultControl(await urlResquest.updateBot(updateParams));
-    if (updateRes && updateRes.bot_id && curBot.value) {
-      const mergedCfg = updateRes.merged_config || {};
-      if (mergedCfg.prompt_setting !== undefined) {
-        roleSetting.value = mergedCfg.prompt_setting;
-      }
-      if (mergedCfg.welcome_message !== undefined) {
-        welcomeMessage.value = mergedCfg.welcome_message;
-      }
-      if (mergedCfg.answer_style !== undefined) {
-        answerStyle.value = mergedCfg.answer_style;
-      }
-      if (mergedCfg.top_K !== undefined) {
-        chatSettingFormActive.value.top_K = mergedCfg.top_K;
-      }
-      if (mergedCfg.rerank !== undefined) {
-        chatSettingFormActive.value.capabilities.rerank = mergedCfg.rerank;
-      }
-      if (mergedCfg.networking !== undefined) {
-        chatSettingFormActive.value.capabilities.networkSearch = mergedCfg.networking;
-      }
-      if (mergedCfg.hybrid_search !== undefined) {
-        chatSettingFormActive.value.capabilities.mixedSearch = mergedCfg.hybrid_search;
-      }
-      if (mergedCfg.only_need_search_results !== undefined) {
-        chatSettingFormActive.value.capabilities.onlySearch = mergedCfg.only_need_search_results;
-      }
-      if (mergedCfg.temperature !== undefined) {
-        chatSettingFormActive.value.temperature = mergedCfg.temperature;
-      }
-      if (mergedCfg.top_P !== undefined) {
-        chatSettingFormActive.value.top_P = mergedCfg.top_P;
-      }
-      const refreshedBot = {
-        ...curBot.value,
-        template_id: updateRes.template_id ?? curBot.value.template_id,
-        template_version: updateRes.template_version ?? curBot.value.template_version,
-        merged_config: updateRes.merged_config ?? curBot.value.merged_config,
-        user_overrides: updateRes.user_overrides ?? curBot.value.user_overrides,
-        overridden_fields: updateRes.overridden_fields ?? curBot.value.overridden_fields,
-        template_defaults: updateRes.template_defaults ?? curBot.value.template_defaults,
-      };
-      setCurBot(refreshedBot);
-      loadBotTemplateState(refreshedBot);
-    }
+    await resultControl(
+      await urlResquest.updateBot({
+        bot_id: curBot.value.bot_id,
+        bot_name: name.value,
+        prompt_setting: roleSetting.value,
+        welcome_message: welcomeMessage.value,
+        only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
+        networking: chatSettingFormActive.value.capabilities.networkSearch,
+        api_base: chatSettingFormActive.value.apiBase,
+        api_key: chatSettingFormActive.value.apiKey,
+        api_context_length: chatSettingFormActive.value.apiContextLength,
+        top_p: chatSettingFormActive.value.top_P,
+        temperature: chatSettingFormActive.value.temperature,
+        top_k: chatSettingFormActive.value.top_K,
+        model: chatSettingFormActive.value.apiModelName,
+        max_token: chatSettingFormActive.value.maxToken,
+        hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
+        chunk_size: chatSettingFormActive.value.chunkSize,
+        rerank: chatSettingFormActive.value.capabilities.rerank,
+      })
+    );
     await getBotInfo(curBot.value.bot_id);
   } catch (e) {
     console.log('error--', e);
@@ -373,6 +145,7 @@ const removeKb = async data => {
   }
 };
 
+// 模型设置
 const chatSettingFormRef = ref<InstanceType<typeof ChatSettingForm>>();
 const handleOk = async (_, msg = '应用成功') => {
   const checkRes = await chatSettingFormRef.value.onCheck();
@@ -421,52 +194,6 @@ defineExpose({ handleOk });
 
     span {
       color: #ff0000;
-    }
-  }
-
-  .title-with-override {
-    font-size: 16px;
-    font-weight: 500;
-    color: #222222;
-    margin-top: 24px;
-    margin-bottom: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-
-    span:first-child {
-      flex-shrink: 0;
-    }
-
-    .override-tag {
-      font-size: 11px;
-      line-height: 18px;
-      padding: 0 6px;
-      border-radius: 4px;
-
-      .reset-link {
-        color: #5a47e5;
-        cursor: pointer;
-        margin-left: 4px;
-        text-decoration: underline;
-      }
-    }
-  }
-
-  .template-selector {
-    margin-bottom: 4px;
-  }
-
-  .template-info-bar {
-    margin-bottom: 8px;
-    padding: 8px 12px;
-    background: #f0eeff;
-    border-radius: 6px;
-
-    .template-info-text {
-      font-size: 12px;
-      color: #5a47e5;
-      line-height: 1.5;
     }
   }
 

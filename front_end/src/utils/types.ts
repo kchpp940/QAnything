@@ -117,8 +117,6 @@ type ICapabilities = {
   rerank: boolean;
 };
 
-export type AnswerStyle = 'concise' | 'detailed' | 'technical' | 'strict_citation' | '';
-
 export interface IChatSetting {
   /* 模型类型，string为自定义名称，不用传 */
   modelType: 'openAI' | 'ollama' | '自定义模型配置' | string;
@@ -150,8 +148,6 @@ export interface IChatSetting {
   capabilities: ICapabilities;
   /* 是否开启（只有一个） */
   active: boolean;
-  /* 回答风格 */
-  answerStyle?: AnswerStyle;
 }
 
 // 第一个对象类型，第二个参数联合类型，把联合类型里面的参数设定为可选
