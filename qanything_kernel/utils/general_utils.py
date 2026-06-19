@@ -60,12 +60,13 @@ RETRIEVAL_SOURCE_PRIORITY = {
 
 def normalize_document_metadata(doc, embed_version=None, retrieval_query=None,
                                default_retrieval_source='unknown', default_kb_id='',
-                               idx_for_fallback=0, total_docs=1):
+                               idx_for_fallback=0, total_docs=1,
+                               force_embed_version=False, force_retrieval_query=False):
     if doc is None:
         return None
     md = doc.metadata
     file_id = md.get('file_id', '')
-    doc_id = md.get('doc_id', md.get('doc_id', ''))
+    doc_id = md.get('doc_id', '')
     if not doc_id:
         if file_id:
             doc_id = f"{file_id}_{idx_for_fallback}"
@@ -74,11 +75,11 @@ def normalize_document_metadata(doc, embed_version=None, retrieval_query=None,
     md['doc_id'] = doc_id
     md.setdefault('file_id', file_id if file_id else '')
     md.setdefault('file_name', md.get('file_name', ''))
-    if default_kb_id:
-        md.setdefault('kb_id', default_kb_id)
+    if default_kb_id and not md.get('kb_id'):
+        md['kb_id'] = default_kb_id
     else:
-        md.setdefault('kb_id', md.get('kb_id', ''))
-    md.setdefault('user_id', md.get('user_id', ''))
+        md.setdefault('kb_id', '')
+    md.setdefault('user_id', '')
     raw_score = md.get('score')
     if raw_score is None or raw_score == '':
         raw_score = float(1 - (idx_for_fallback / max(total_docs, 1)))
@@ -86,29 +87,42 @@ def normalize_document_metadata(doc, embed_version=None, retrieval_query=None,
         md['score'] = float(raw_score)
     except (TypeError, ValueError):
         md['score'] = float(1 - (idx_for_fallback / max(total_docs, 1)))
-    src = md.get('retrieval_source', default_retrieval_source)
+    src = md.get('retrieval_source', '')
     if not src:
         src = default_retrieval_source
     md['retrieval_source'] = src
-    if embed_version is not None:
+    if force_embed_version and embed_version is not None:
         md['embed_version'] = embed_version
     else:
-        md.setdefault('embed_version', '')
-    deleted = md.get('deleted')
-    if deleted is None:
-        deleted = 0
-    try:
-        md['deleted'] = int(deleted)
-    except (TypeError, ValueError):
+        existing_embed = md.get('embed_version')
+        if existing_embed:
+            md['embed_version'] = existing_embed
+        elif embed_version is not None:
+            md['embed_version'] = embed_version
+        else:
+            md['embed_version'] = ''
+    deleted_raw = md.get('deleted')
+    if deleted_raw is None:
         md['deleted'] = 0
-    if retrieval_query is not None:
+    else:
+        try:
+            md['deleted'] = int(deleted_raw)
+        except (TypeError, ValueError):
+            md['deleted'] = 0
+    if force_retrieval_query and retrieval_query is not None:
         md['retrieval_query'] = retrieval_query
     else:
-        md.setdefault('retrieval_query', '')
-    md.setdefault('headers', md.get('headers', {}))
-    md.setdefault('page_id', md.get('page_id', 0))
-    md.setdefault('nos_keys', md.get('nos_keys', ''))
-    md.setdefault('file_url', md.get('file_url', ''))
+        existing_query = md.get('retrieval_query')
+        if existing_query:
+            md['retrieval_query'] = existing_query
+        elif retrieval_query is not None:
+            md['retrieval_query'] = retrieval_query
+        else:
+            md['retrieval_query'] = ''
+    md.setdefault('headers', {})
+    md.setdefault('page_id', 0)
+    md.setdefault('nos_keys', '')
+    md.setdefault('file_url', '')
     return doc
 
 
@@ -121,9 +135,31 @@ def _get_dedup_key(doc):
     return ('file_content', file_id, content)
 
 
+def _doc_is_deleted(doc):
+    deleted = doc.metadata.get('deleted', 0)
+    try:
+        return int(deleted) != 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _pick_better_doc(existing_doc, new_doc):
-    existing_score = existing_doc.metadata.get('score', 0.0) or 0.0
-    new_score = new_doc.metadata.get('score', 0.0) or 0.0
+    existing_deleted = _doc_is_deleted(existing_doc)
+    new_deleted = _doc_is_deleted(new_doc)
+    if existing_deleted and not new_deleted:
+        return new_doc
+    if not existing_deleted and new_deleted:
+        return existing_doc
+    existing_score = existing_doc.metadata.get('score', 0.0)
+    try:
+        existing_score = float(existing_score)
+    except (TypeError, ValueError):
+        existing_score = 0.0
+    new_score = new_doc.metadata.get('score', 0.0)
+    try:
+        new_score = float(new_score)
+    except (TypeError, ValueError):
+        new_score = 0.0
     existing_src = existing_doc.metadata.get('retrieval_source', 'unknown')
     new_src = new_doc.metadata.get('retrieval_source', 'unknown')
     existing_prio = RETRIEVAL_SOURCE_PRIORITY.get(existing_src, 0)
@@ -139,6 +175,8 @@ def deduplicate_documents(source_docs):
     unique_map = {}
     order_keys = []
     for doc in source_docs:
+        if _doc_is_deleted(doc):
+            continue
         key = _get_dedup_key(doc)
         if key not in unique_map:
             unique_map[key] = doc

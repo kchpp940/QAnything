@@ -140,19 +140,25 @@ class LocalDocQA:
             if not file_id:
                 debug_logger.warning(f"doc at idx {idx} missing file_id, doc_id: {doc.metadata.get('doc_id', '')}, skip")
                 continue
+            is_deleted = False
             try:
-                if retriever.mysql_client.is_deleted_file(file_id):
-                    debug_logger.warning(f"file_id: {file_id} is deleted, skip doc_id: {doc.metadata.get('doc_id', '')}")
-                    continue
+                is_deleted = retriever.mysql_client.is_deleted_file(file_id)
             except Exception as e:
                 debug_logger.warning(f"check is_deleted_file error for file_id {file_id}: {e}")
+            if is_deleted:
+                debug_logger.warning(f"file_id: {file_id} is deleted, skip doc_id: {doc.metadata.get('doc_id', '')}")
+                doc.metadata['deleted'] = 1
+                continue
+            doc.metadata['deleted'] = 0
             normalize_document_metadata(doc, embed_version=self.embeddings.embed_version,
                                         retrieval_query=query, default_retrieval_source='unknown',
-                                        default_kb_id=default_kb, idx_for_fallback=idx, total_docs=total_docs)
+                                        default_kb_id=default_kb, idx_for_fallback=idx, total_docs=total_docs,
+                                        force_retrieval_query=True)
             doc.metadata['deleted'] = 0
             source_documents.append(doc)
         debug_logger.info(f"embed scores: {[doc.metadata['score'] for doc in source_documents]}")
         debug_logger.info(f"retrieval_sources: {[doc.metadata['retrieval_source'] for doc in source_documents]}")
+        debug_logger.info(f"embed_versions: {[doc.metadata['embed_version'] for doc in source_documents]}")
         return source_documents
 
     def reprocess_source_documents(self, custom_llm: OpenAILLM, query: str,
@@ -578,25 +584,43 @@ class LocalDocQA:
             doc.page_content = re.sub(r'^\[headers]\(.*?\)\n', '', doc.page_content)
             normalize_document_metadata(doc, embed_version=self.embeddings.embed_version,
                                         retrieval_query=query, default_retrieval_source='unknown',
-                                        idx_for_fallback=idx, total_docs=total_final)
+                                        idx_for_fallback=idx, total_docs=total_final,
+                                        force_retrieval_query=True)
 
-        high_score_faq_documents = [doc for doc in source_documents if
-                                    doc.metadata['file_name'].endswith('.faq') and doc.metadata['score'] >= 0.9]
-        if high_score_faq_documents:
-            source_documents = high_score_faq_documents
+        high_score_faq_docs = []
         for doc in source_documents:
+            file_name = doc.metadata.get('file_name', '')
+            score = doc.metadata.get('score', 0.0)
+            try:
+                score = float(score)
+            except (TypeError, ValueError):
+                score = 0.0
+            if file_name.endswith('.faq') and score >= 0.9:
+                high_score_faq_docs.append(doc)
+        if high_score_faq_docs:
+            debug_logger.info(f"high score faq docs: {len(high_score_faq_docs)}, files: {[d.metadata.get('file_name', '') for d in high_score_faq_docs]}")
+            source_documents = high_score_faq_docs
+            for idx, doc in enumerate(source_documents):
+                normalize_document_metadata(doc, embed_version=self.embeddings.embed_version,
+                                            retrieval_query=query, default_retrieval_source='unknown',
+                                            idx_for_fallback=idx, total_docs=len(source_documents),
+                                            force_retrieval_query=True)
+
+        for doc in source_documents:
+            file_name = doc.metadata.get('file_name', '')
             faq_dict = doc.metadata.get('faq_dict', {})
-            if doc.metadata['file_name'].endswith('.faq') and faq_dict and clear_string_is_equal(
-                    faq_dict.get('question', ''), query):
-                debug_logger.info(f"match faq question: {query}")
-                if only_need_search_results:
-                    yield source_documents, None
+            if file_name.endswith('.faq') and faq_dict and isinstance(faq_dict, dict):
+                faq_question = faq_dict.get('question', '')
+                if clear_string_is_equal(faq_question, query):
+                    debug_logger.info(f"match faq question: {query}")
+                    if only_need_search_results:
+                        yield source_documents, None
+                        return
+                    res = faq_dict.get('answer', '')
+                    async for response, history in self.generate_response(query, res, condense_question, source_documents,
+                                                                          time_record, chat_history, streaming, 'MATCH_FAQ'):
+                        yield response, history
                     return
-                res = faq_dict.get('answer', '')
-                async for response, history in self.generate_response(query, res, condense_question, source_documents,
-                                                                      time_record, chat_history, streaming, 'MATCH_FAQ'):
-                    yield response, history
-                return
 
         # 获取今日日期
         today = time.strftime("%Y-%m-%d", time.localtime())
