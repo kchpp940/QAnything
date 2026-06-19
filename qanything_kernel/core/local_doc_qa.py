@@ -542,25 +542,37 @@ class LocalDocQA:
 
         source_documents = deduplicate_documents(source_documents)
 
-        retrieval_candidates = []
+        candidate_map = {}
+        for c in retrieval_source_info.get('raw_candidates', []):
+            doc_id = c['doc_id']
+            candidate_map[doc_id] = {
+                'id': doc_id,
+                'doc_id': doc_id,
+                'file_id': c['file_id'],
+                'retrieval_source': c['source'],
+                'stage_traces': [{'stage': 'retrieval', 'score': c['score']}],
+                'final_selected': False,
+                'final_filter_reason': '',
+            }
 
-        raw_candidates_list = retrieval_source_info.get('raw_candidates', [])
-        for c in raw_candidates_list:
-            rc = dict(c)
-            rc['phase'] = 'retrieval'
-            retrieval_candidates.append(rc)
-
-        for doc in source_documents:
-            retrieval_candidates.append({
-                'phase': 'before_rerank',
-                'doc_id': doc.metadata.get('doc_id', ''),
-                'file_id': doc.metadata.get('file_id', ''),
-                'score': float(doc.metadata.get('score', 0)),
-                'source': doc.metadata.get('retrieval_source', 'unknown'),
-            })
+        for rank, doc in enumerate(source_documents):
+            doc_id = doc.metadata.get('doc_id', '')
+            if doc_id not in candidate_map:
+                candidate_map[doc_id] = {
+                    'id': doc_id,
+                    'doc_id': doc_id,
+                    'file_id': doc.metadata.get('file_id', ''),
+                    'retrieval_source': doc.metadata.get('retrieval_source', 'web'),
+                    'stage_traces': [],
+                    'final_selected': False,
+                    'final_filter_reason': '',
+                }
+            candidate_map[doc_id]['stage_traces'].append(
+                {'stage': 'before_rerank', 'score': float(doc.metadata.get('score', 0)), 'rank': rank + 1}
+            )
 
         rerank_actually_used = False
-        source_docs_before_rerank = source_documents[:]
+        rerank_filtered_ids = set()
         if rerank and len(source_documents) > 1 and num_tokens_rerank(query) <= 300:
             try:
                 t1 = time.perf_counter()
@@ -569,14 +581,12 @@ class LocalDocQA:
                 t2 = time.perf_counter()
                 time_record['rerank'] = round(t2 - t1, 2)
                 rerank_actually_used = True
-                for doc in source_documents:
-                    retrieval_candidates.append({
-                        'phase': 'after_rerank',
-                        'doc_id': doc.metadata.get('doc_id', ''),
-                        'file_id': doc.metadata.get('file_id', ''),
-                        'score': float(doc.metadata.get('score', 0)),
-                        'source': doc.metadata.get('retrieval_source', 'unknown'),
-                    })
+                for rank, doc in enumerate(source_documents):
+                    doc_id = doc.metadata.get('doc_id', '')
+                    if doc_id in candidate_map:
+                        candidate_map[doc_id]['stage_traces'].append(
+                            {'stage': 'after_rerank', 'score': float(doc.metadata.get('score', 0)), 'rank': rank + 1}
+                        )
                 debug_logger.info(f"rerank step1 num: {len(source_documents)}")
                 debug_logger.info(f"rerank step1 scores: {[doc.metadata['score'] for doc in source_documents]}")
                 if len(source_documents) > 1:
@@ -593,19 +603,11 @@ class LocalDocQA:
                             saved_docs.append(doc)
                     source_documents = saved_docs
                     debug_logger.info(f"rerank step3 num: {len(source_documents)}")
+                for doc in source_documents:
+                    rerank_filtered_ids.add(doc.metadata.get('doc_id', ''))
             except Exception as e:
                 time_record['rerank'] = 0.0
                 debug_logger.error(f"query {query}: kb_ids: {kb_ids}, rerank error: {traceback.format_exc()}")
-
-        if not rerank_actually_used:
-            for doc in source_docs_before_rerank:
-                retrieval_candidates.append({
-                    'phase': 'after_rerank',
-                    'doc_id': doc.metadata.get('doc_id', ''),
-                    'file_id': doc.metadata.get('file_id', ''),
-                    'score': float(doc.metadata.get('score', 0)),
-                    'source': doc.metadata.get('retrieval_source', 'unknown'),
-                })
 
         source_documents = source_documents[:top_k]
 
@@ -620,18 +622,39 @@ class LocalDocQA:
             else:
                 empty_recall_reason = 'unknown_empty_recall'
 
+        final_doc_ids = set()
         for doc in source_documents:
-            retrieval_candidates.append({
-                'phase': 'final_citation',
-                'doc_id': doc.metadata.get('doc_id', ''),
-                'file_id': doc.metadata.get('file_id', ''),
-                'score': float(doc.metadata.get('score', 0)),
-                'source': doc.metadata.get('retrieval_source', 'unknown'),
-            })
+            doc_id = doc.metadata.get('doc_id', '')
+            final_doc_ids.add(doc_id)
+            if doc_id in candidate_map:
+                candidate_map[doc_id]['final_selected'] = True
+                candidate_map[doc_id]['stage_traces'].append(
+                    {'stage': 'final_citation', 'score': float(doc.metadata.get('score', 0))}
+                )
+
+        for doc_id, cand in candidate_map.items():
+            if cand['final_selected']:
+                continue
+            stages = set(s['stage'] for s in cand['stage_traces'])
+            if rerank_actually_used and 'after_rerank' in stages:
+                after_rerank_trace = next((s for s in cand['stage_traces'] if s['stage'] == 'after_rerank'), None)
+                if after_rerank_trace and after_rerank_trace.get('score', 0) < 0.28:
+                    cand['final_filter_reason'] = 'rerank_score_below_threshold'
+                elif rerank_filtered_ids and doc_id not in rerank_filtered_ids:
+                    cand['final_filter_reason'] = 'rerank_relative_diff'
+                else:
+                    cand['final_filter_reason'] = 'top_k_truncated'
+            elif 'before_rerank' in stages:
+                if not rerank_actually_used and doc_id not in final_doc_ids:
+                    cand['final_filter_reason'] = 'top_k_truncated'
+                else:
+                    cand['final_filter_reason'] = 'dropped_in_rerank'
+            else:
+                cand['final_filter_reason'] = 'dropped_before_rerank'
 
         retrieval_trace = {
             'retrieval_time_ms': retrieval_source_info.get('retrieval_time_ms', 0),
-            'candidates': retrieval_candidates,
+            'candidates': list(candidate_map.values()),
             'metadata': {
                 'rerank_used': rerank_actually_used,
                 'empty_recall_reason': empty_recall_reason,

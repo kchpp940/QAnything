@@ -925,35 +925,49 @@ class KnowledgeBaseManager:
 
         candidates = retrieval_trace.get('candidates', [])
 
-        def _get_phase(phase_name):
-            return [c for c in candidates if c.get('phase') == phase_name]
+        milvus_hit_count = sum(1 for c in candidates if c.get('retrieval_source') == 'milvus')
+        es_hit_count = sum(1 for c in candidates if c.get('retrieval_source') == 'es')
 
-        raw_candidates = _get_phase('retrieval')
-        milvus_hit_count = sum(1 for c in raw_candidates if c.get('source') == 'milvus')
-        es_hit_count = sum(1 for c in raw_candidates if c.get('source') == 'es')
+        def _get_stage_score(candidate, stage_name):
+            for s in candidate.get('stage_traces', []):
+                if s.get('stage') == stage_name:
+                    return s.get('score', 0)
+            return None
 
-        before_rerank = _get_phase('before_rerank')
-        after_rerank_full = _get_phase('after_rerank')
-        final_citations = _get_phase('final_citation')
+        def _get_stage_rank(candidate, stage_name):
+            for s in candidate.get('stage_traces', []):
+                if s.get('stage') == stage_name:
+                    return s.get('rank')
+            return None
 
-        rerank_before_order = [
-            {k: c[k] for k in ('doc_id', 'file_id', 'score') if k in c}
-            for c in before_rerank
-        ]
-        rerank_after_order = [
-            {k: c[k] for k in ('doc_id', 'file_id', 'score') if k in c}
-            for c in after_rerank_full
-        ]
+        before_rerank_cands = []
+        after_rerank_cands = []
+        for c in candidates:
+            br_score = _get_stage_score(c, 'before_rerank')
+            br_rank = _get_stage_rank(c, 'before_rerank')
+            if br_score is not None:
+                before_rerank_cands.append({'doc_id': c['doc_id'], 'file_id': c['file_id'], 'score': br_score, 'rank': br_rank})
+            ar_score = _get_stage_score(c, 'after_rerank')
+            ar_rank = _get_stage_rank(c, 'after_rerank')
+            if ar_score is not None:
+                after_rerank_cands.append({'doc_id': c['doc_id'], 'file_id': c['file_id'], 'score': ar_score, 'rank': ar_rank})
+
+        before_rerank_cands.sort(key=lambda x: (x.get('rank') or 999999, -x.get('score', 0)))
+        after_rerank_cands.sort(key=lambda x: (x.get('rank') or 999999, -x.get('score', 0)))
+
+        rerank_before_order = [{'doc_id': c['doc_id'], 'file_id': c['file_id'], 'score': c['score']} for c in before_rerank_cands]
+        rerank_after_order = [{'doc_id': c['doc_id'], 'file_id': c['file_id'], 'score': c['score']} for c in after_rerank_cands]
 
         metadata = retrieval_trace.get('metadata', {})
         rerank_used = metadata.get('rerank_used', False)
         empty_recall_reason = metadata.get('empty_recall_reason', '')
         retrieval_time_ms = retrieval_trace.get('retrieval_time_ms', 0)
 
+        final_citations = [c for c in candidates if c.get('final_selected')]
         candidate_count = len(final_citations)
         final_citation_count = len(final_citations)
         if final_citations:
-            top_score = float(max((c.get('score', 0) for c in final_citations), default=0))
+            top_score = float(max((_get_stage_score(c, 'final_citation') or 0) for c in final_citations))
         else:
             top_score = 0.0
 
