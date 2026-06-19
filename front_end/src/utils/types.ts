@@ -32,6 +32,28 @@ export interface IDataSourceItem {
 // 联网检索策略
 export type WebSearchPolicy = 'disabled' | 'manual' | 'low_recall' | 'always';
 
+// 联网触发原因
+export type WebTriggerReason =
+  | 'policy_always'
+  | 'policy_low_recall'
+  | 'policy_manual'
+  | 'skipped_disabled'
+  | 'skipped_manual_off'
+  | 'skipped_high_recall';
+
+// 联网搜索追踪记录
+export interface IWebSearchTrace {
+  policy: WebSearchPolicy;          // 执行的策略
+  manual_enabled: boolean;           // 用户是否手动开启单次联网
+  triggered: boolean;                // 是否实际触发了联网搜索
+  trigger_reason: WebTriggerReason;  // 触发/跳过原因
+  local_doc_count: number;           // 本地检索文档数
+  local_recall_score: number;        // 本地最高召回分数
+  web_result_count: number;          // 联网结果数量
+  web_ratio: number;                 // 联网结果占比
+  execution_time_ms: number;         // 执行耗时(ms)
+}
+
 export interface IChatItem {
   type: 'ai' | 'user'; //区别用户提问 和ai回复
   question?: string; //问题
@@ -43,6 +65,7 @@ export interface IChatItem {
 
   showTools?: boolean; //当期问答是否结束 结束展示复制等小工具和取消闪烁
   source?: Array<IDataSourceItem>; // 数据来源
+  web_search_trace?: IWebSearchTrace; // 联网搜索追踪记录
 
   picList?: any; // 不知道是啥，用到了，不敢删
   qaId?: any; // 同上

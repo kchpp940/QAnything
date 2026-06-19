@@ -37,6 +37,67 @@
                     />
                   </p>
                   <template v-if="item.source.length">
+                    <!-- web_search_trace 信息展示 -->
+                    <div v-if="item.web_search_trace" class="web-search-trace">
+                      <div class="trace-header">
+                        <span
+                          :class="[
+                            'trace-status',
+                            item.web_search_trace.triggered ? 'status-triggered' : 'status-skipped',
+                          ]"
+                        >
+                          {{
+                            item.web_search_trace.triggered
+                              ? common.webSearchEnabled
+                              : common.webSearchDisabled
+                          }}
+                        </span>
+                        <span class="trace-reason">
+                          {{ getTriggerReasonText(item.web_search_trace.trigger_reason) }}
+                        </span>
+                      </div>
+                      <div class="trace-stats">
+                        <span class="stat-item">
+                          <span class="stat-label">{{ common.sourceTypeLocal }}:</span>
+                          <span class="stat-value">{{ item.web_search_trace.local_doc_count }}</span>
+                        </span>
+                        <span class="stat-item">
+                          <span class="stat-label">{{ common.sourceTypeWeb }}:</span>
+                          <span class="stat-value">{{ item.web_search_trace.web_result_count }}</span>
+                        </span>
+                        <span v-if="item.web_search_trace.web_ratio > 0" class="stat-item">
+                          <span class="stat-label">{{ common.webSearchResultRatio }}:</span>
+                          <span class="stat-value">{{
+                            (item.web_search_trace.web_ratio * 100).toFixed(1)
+                          }}%</span>
+                        </span>
+                        <span v-if="item.web_search_trace.local_recall_score > 0" class="stat-item">
+                          <span class="stat-label">{{ common.localRecallScore }}:</span>
+                          <span class="stat-value">{{ item.web_search_trace.local_recall_score.toFixed(3) }}</span>
+                        </span>
+                        <span v-if="item.web_search_trace.execution_time_ms > 0" class="stat-item">
+                          <span class="stat-label">{{ common.webExecutionTime }}:</span>
+                          <span class="stat-value">{{ item.web_search_trace.execution_time_ms }}ms</span>
+                        </span>
+                      </div>
+                      <div class="trace-actions">
+                        <a-switch
+                          class="web-next-toggle"
+                          :checked="manualWebEnabled"
+                          size="small"
+                          @change="toggleManualWeb"
+                        >
+                          <template #checkedChildren>ON</template>
+                          <template #unCheckedChildren>OFF</template>
+                        </a-switch>
+                        <span class="toggle-hint">
+                          {{ manualWebEnabled ? common.webSearchEnabled : common.webSearchDisabled }} · {{
+                            common.manualWebSearch
+                          }}
+                        </span>
+                      </div>
+                    </div>
+
                     <div
                       :class="[
                         'source-total',
@@ -44,26 +105,19 @@
                       ]"
                     >
                       <span v-if="language === 'zh'">
-                        找到了{{ getFilteredSource(item.source).length }}个信息来源
-                        <span v-if="getWebSourceCount(item.source) > 0" class="source-stats">
+                        找到了{{ item.source.length }}个信息来源
+                        <span class="source-stats">
                           （{{ common.sourceTypeLocal }}: {{ getLocalSourceCount(item.source) }}，
                           {{ common.sourceTypeWeb }}: {{ getWebSourceCount(item.source) }}）
                         </span>
                       </span>
                       <span v-else>
-                        Found {{ getFilteredSource(item.source).length }} source of information
-                        <span v-if="getWebSourceCount(item.source) > 0" class="source-stats">
+                        Found {{ item.source.length }} source of information
+                        <span class="source-stats">
                           ({{ common.sourceTypeLocal }}: {{ getLocalSourceCount(item.source) }},
                           {{ common.sourceTypeWeb }}: {{ getWebSourceCount(item.source) }})
                         </span>
                       </span>
-                      <a-switch
-                        v-if="getWebSourceCount(item.source) > 0"
-                        class="web-source-switch"
-                        :checked="!hideWebSources[index]"
-                        size="small"
-                        @change="toggleWebSources(index)"
-                      />
                       <SvgIcon
                         v-show="!showSourceIdxs.includes(index)"
                         name="down"
@@ -76,62 +130,121 @@
                       />
                     </div>
                     <div v-show="showSourceIdxs.includes(index)" class="source-list">
-                      <div
-                        v-for="(sourceItem, sourceIndex) in getFilteredSource(item.source, index)"
-                        :key="sourceIndex"
-                        :class="['data-source', `source-${sourceItem.source_type || 'local'}`]"
-                      >
-                        <p v-show="sourceItem.file_name" class="control">
-                          <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
-                          <span
-                            :class="['source-type-tag', `trust-${sourceItem.trust_level || 'high'}`]"
-                          >
-                            {{ sourceItem.source_type === 'web' ? common.sourceTypeWeb : common.sourceTypeLocal }}
+                      <!-- 本地知识库分组 -->
+                      <div v-if="getLocalSourceCount(item.source) > 0" class="source-group">
+                        <div class="source-group-header">
+                          <SvgIcon name="icon-database" class="group-icon" />
+                          <span class="group-title">{{ common.sourceGroupLocal }}</span>
+                          <span class="group-count">({{ getLocalSourceCount(item.source) }})</span>
+                        </div>
+                        <div
+                          v-for="(sourceItem, sourceIndex) in getLocalSources(item.source)"
+                          :key="'local-' + sourceIndex"
+                          :class="['data-source', 'source-local']"
+                        >
+                          <p v-show="sourceItem.file_name" class="control">
+                            <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
+                            <span :class="['source-type-tag', 'trust-high']">
+                              {{ common.trustLevelHigh }}
+                            </span>
+                            <span
+                              :class="[
+                                'file',
+                                checkFileType(sourceItem.file_name) ? 'filename-active' : '',
+                              ]"
+                              @click="handleChatSource(sourceItem)"
+                            >
+                              {{ sourceItem.file_name }}
+                            </span>
+                            <SvgIcon
+                              v-show="sourceItem.showDetailDataSource"
+                              name="iconup"
+                              @click="hideDetail(item, sourceIndex)"
+                            />
+                            <SvgIcon
+                              v-show="!sourceItem.showDetailDataSource"
+                              name="icondown"
+                              @click="showDetail(item, sourceIndex)"
+                            />
+                          </p>
+                          <Transition name="sourceitem">
+                            <div v-show="sourceItem.showDetailDataSource" class="source-content">
+                              <HighLightMarkDown :content="sourceItem.content" />
+                              <p class="score">
+                                <span class="tips">{{ common.correlation }}</span>
+                                {{ sourceItem.score }}
+                              </p>
+                            </div>
+                          </Transition>
+                        </div>
+                      </div>
+                      <div v-else class="source-group-empty">
+                        {{ common.noLocalResults }}
+                      </div>
+
+                      <!-- 联网搜索分组 -->
+                      <div v-if="getWebSourceCount(item.source) > 0" class="source-group">
+                        <div class="source-group-header source-group-header-web">
+                          <SvgIcon name="network-search" class="group-icon" />
+                          <span class="group-title">{{ common.sourceGroupWeb }}</span>
+                          <span class="group-count">({{ getWebSourceCount(item.source) }})</span>
+                          <span :class="['source-type-tag', 'trust-medium', 'group-tag']">
+                            {{ common.trustLevelMedium }}
                           </span>
-                          <a
-                            v-if="sourceItem.file_url.startsWith('http')"
-                            :href="sourceItem.file_url"
-                            target="_blank"
-                          >
-                            {{ sourceItem.file_name }}
-                          </a>
-                          <span
-                            v-else
-                            :class="[
-                              'file',
-                              checkFileType(sourceItem.file_name) ? 'filename-active' : '',
-                            ]"
-                            @click="handleChatSource(sourceItem)"
-                          >
-                            {{ sourceItem.file_name }}
-                          </span>
-                          <SvgIcon
-                            v-show="sourceItem.showDetailDataSource"
-                            name="iconup"
-                            @click="hideDetail(item, sourceIndex)"
-                          />
-                          <SvgIcon
-                            v-show="!sourceItem.showDetailDataSource"
-                            name="icondown"
-                            @click="showDetail(item, sourceIndex)"
-                          />
-                        </p>
-                        <Transition name="sourceitem">
-                          <div v-show="sourceItem.showDetailDataSource" class="source-content">
-                            <!--                            <p v-html="sourceItem.content?.replaceAll('\n', '<br/>')"></p>-->
-                            <HighLightMarkDown :content="sourceItem.content" />
-                            <p class="score">
-                              <span class="tips">{{ common.correlation }}</span>
-                              {{ sourceItem.score }}
-                            </p>
-                            <p v-if="sourceItem.source_type === 'web'" class="web-meta">
-                              <span class="tips">{{ common.trustLevelMedium }}</span>
-                              <span v-if="sourceItem.web_timestamp" class="web-time">
-                                {{ formatWebTimestamp(sourceItem.web_timestamp) }}
-                              </span>
-                            </p>
-                          </div>
-                        </Transition>
+                        </div>
+                        <div
+                          v-for="(sourceItem, sourceIndex) in getWebSources(item.source)"
+                          :key="'web-' + sourceIndex"
+                          :class="['data-source', 'source-web']"
+                        >
+                          <p v-show="sourceItem.file_name" class="control">
+                            <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
+                            <a
+                              v-if="sourceItem.file_url.startsWith('http')"
+                              :href="sourceItem.file_url"
+                              target="_blank"
+                            >
+                              {{ sourceItem.file_name }}
+                            </a>
+                            <span
+                              v-else
+                              :class="[
+                                'file',
+                                checkFileType(sourceItem.file_name) ? 'filename-active' : '',
+                              ]"
+                              @click="handleChatSource(sourceItem)"
+                            >
+                              {{ sourceItem.file_name }}
+                            </span>
+                            <SvgIcon
+                              v-show="sourceItem.showDetailDataSource"
+                              name="iconup"
+                              @click="hideDetail(item, sourceIndex)"
+                            />
+                            <SvgIcon
+                              v-show="!sourceItem.showDetailDataSource"
+                              name="icondown"
+                              @click="showDetail(item, sourceIndex)"
+                            />
+                          </p>
+                          <Transition name="sourceitem">
+                            <div v-show="sourceItem.showDetailDataSource" class="source-content">
+                              <HighLightMarkDown :content="sourceItem.content" />
+                              <p class="score">
+                                <span class="tips">{{ common.correlation }}</span>
+                                {{ sourceItem.score }}
+                              </p>
+                              <p class="web-meta">
+                                <span v-if="sourceItem.web_timestamp" class="web-time">
+                                  {{ formatWebTimestamp(sourceItem.web_timestamp) }}
+                                </span>
+                              </p>
+                            </div>
+                          </Transition>
+                        </div>
+                      </div>
+                      <div v-else class="source-group-empty">
+                        {{ common.noWebResults }}
                       </div>
                     </div>
                   </template>
@@ -204,13 +317,33 @@
                 <SvgIcon name="chat-download" />
               </span>
             </a-popover>
-            <a-popover>
+            <a-popover placement="topLeft">
               <template #content>{{ common.clearChat }}</template>
               <span
                 :class="['question-icon', showLoading ? 'isPreventClick' : '']"
                 @click="deleteChat"
               >
                 <SvgIcon name="chat-delete" />
+              </span>
+            </a-popover>
+            <a-popover placement="topLeft">
+              <template #content>
+                <div class="web-search-popover">
+                  <p><strong>{{ common.manualWebSearch }}</strong></p>
+                  <p>{{ common.manualWebSearchDescription }}</p>
+                </div>
+              </template>
+              <span
+                :class="[
+                  'question-icon',
+                  'web-search-toggle',
+                  manualWebEnabled ? 'isActive' : '',
+                  chatSettingFormActive.value.webSearchPolicy === 'disabled' ? 'isPreventClick' : '',
+                ]"
+                @click="toggleManualWeb"
+              >
+                <SvgIcon name="network-search" v-if="manualWebEnabled" />
+                <SvgIcon name="network-search-off" v-else />
               </span>
             </a-popover>
             <a-popover>
@@ -303,6 +436,15 @@ const history = computed(() => {
 const showLoading = ref(false);
 
 const showSourceIdxs = ref([]);
+
+// 单次联网开关
+const manualWebEnabled = ref(false);
+
+// 切换单次联网开关
+const toggleManualWeb = () => {
+  if (chatSettingFormActive.value.webSearchPolicy === 'disabled') return;
+  manualWebEnabled.value = !manualWebEnabled.value;
+};
 
 // 被监听的元素
 const observeDom = ref(null);
@@ -417,6 +559,7 @@ const addAnswer = (question: string) => {
     unlike: false,
     source: [],
     showTools: false,
+    web_search_trace: undefined,
   });
 };
 
@@ -559,6 +702,7 @@ const send = async () => {
     streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
     networking: chatSettingFormActive.value.capabilities.networkSearch,
     web_search_policy: chatSettingFormActive.value.webSearchPolicy || 'disabled',
+    manual_enabled: manualWebEnabled.value,
     product_source: 'saas',
     rerank: chatSettingFormActive.value.capabilities.rerank,
     only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
@@ -574,6 +718,10 @@ const send = async () => {
     temperature: chatSettingFormActive.value.temperature,
   };
 
+  // 发送后重置单次联网开关
+  const willManualReset = manualWebEnabled.value;
+  manualWebEnabled.value = false;
+
   // 如果是仅检索
   if (chatSettingFormActive.value.capabilities.onlySearch) {
     // 模型配置添加进去
@@ -588,6 +736,9 @@ const send = async () => {
           ? common.searchCompleted
           : common.searchNotFound;
         QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+        if (res?.web_search_trace) {
+          QA_List.value[QA_List.value.length - 1].web_search_trace = res.web_search_trace;
+        }
       }
     } catch (e) {
       console.log('出错', e);
@@ -647,6 +798,10 @@ const send = async () => {
 
         if (res?.source_documents?.length) {
           QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+        }
+
+        if (res?.web_search_trace) {
+          QA_List.value[QA_List.value.length - 1].web_search_trace = res.web_search_trace;
         }
 
         if (res?.show_images?.length) {
@@ -711,12 +866,6 @@ const hideSourceList = index => {
   showSourceIdxs.value = showSourceIdxs.value.filter(item => item !== index);
 };
 
-const hideWebSources = ref<Record<number, boolean>>({});
-
-const toggleWebSources = index => {
-  hideWebSources.value[index] = !hideWebSources.value[index];
-};
-
 const getLocalSourceCount = sources => {
   if (!sources || !sources.length) return 0;
   return sources.filter(s => (s.source_type || 'local') === 'local').length;
@@ -727,13 +876,26 @@ const getWebSourceCount = sources => {
   return sources.filter(s => s.source_type === 'web').length;
 };
 
-const getFilteredSource = (sources, index?) => {
+const getLocalSources = sources => {
   if (!sources || !sources.length) return [];
-  const idx = index ?? 0;
-  if (hideWebSources.value[idx]) {
-    return sources.filter(s => (s.source_type || 'local') === 'local');
-  }
-  return sources;
+  return sources.filter(s => (s.source_type || 'local') === 'local');
+};
+
+const getWebSources = sources => {
+  if (!sources || !sources.length) return [];
+  return sources.filter(s => s.source_type === 'web');
+};
+
+const getTriggerReasonText = reason => {
+  const reasonMap: Record<string, string> = {
+    policy_always: common.triggerReasonPolicyAlways,
+    policy_low_recall: common.triggerReasonPolicyLowRecall,
+    policy_manual: common.triggerReasonPolicyManual,
+    skipped_disabled: common.triggerReasonSkippedDisabled,
+    skipped_manual_off: common.triggerReasonSkippedManualOff,
+    skipped_high_recall: common.triggerReasonSkippedHighRecall,
+  };
+  return reasonMap[reason] || reason;
 };
 
 const formatWebTimestamp = timestamp => {

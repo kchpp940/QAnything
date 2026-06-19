@@ -3,7 +3,10 @@ from qanything_kernel.configs.model_config import VECTOR_SEARCH_TOP_K, VECTOR_SE
     LOCAL_RERANK_MODEL_NAME, LOCAL_EMBED_MAX_LENGTH, SEPARATORS, WEB_SEARCH_POLICY_DISABLED, \
     WEB_SEARCH_POLICY_MANUAL, WEB_SEARCH_POLICY_LOW_RECALL, WEB_SEARCH_POLICY_ALWAYS, \
     TRUST_LEVEL_LOCAL, TRUST_LEVEL_WEB, SOURCE_TYPE_LOCAL, SOURCE_TYPE_WEB, \
-    LOW_RECALL_SCORE_THRESHOLD, LOW_RECALL_DOC_THRESHOLD
+    LOW_RECALL_SCORE_THRESHOLD, LOW_RECALL_DOC_THRESHOLD, \
+    WEB_TRIGGER_REASON_POLICY_ALWAYS, WEB_TRIGGER_REASON_POLICY_LOW_RECALL, WEB_TRIGGER_REASON_POLICY_MANUAL, \
+    WEB_TRIGGER_REASON_SKIPPED_DISABLED, WEB_TRIGGER_REASON_SKIPPED_MANUAL_OFF, WEB_TRIGGER_REASON_SKIPPED_HIGH_RECALL, \
+    create_default_web_search_trace
 from typing import List, Tuple, Union, Dict
 import time
 from scipy.spatial import cKDTree
@@ -376,7 +379,7 @@ class LocalDocQA:
         return relevant_docs
 
     @staticmethod
-    async def generate_response(query, res, condense_question, source_documents, time_record, chat_history, streaming, prompt):
+    async def generate_response(query, res, condense_question, source_documents, time_record, chat_history, streaming, prompt, web_search_trace=None):
         """
         生成response并使用yield返回。
 
@@ -388,7 +391,11 @@ class LocalDocQA:
         :param chat_history: 聊天历史
         :param streaming: 是否启用流式输出
         :param prompt: 生成response时的prompt类型
+        :param web_search_trace: 联网搜索追踪信息
         """
+        if web_search_trace is None:
+            from qanything_kernel.configs.model_config import create_default_web_search_trace
+            web_search_trace = create_default_web_search_trace()
         history = chat_history + [[query, res]]
 
         if streaming:
@@ -400,7 +407,8 @@ class LocalDocQA:
             "result": res,
             "condense_question": condense_question,
             "retrieval_documents": source_documents,
-            "source_documents": source_documents
+            "source_documents": source_documents,
+            "web_search_trace": web_search_trace
         }
 
         if 'llm_completed' not in time_record:
@@ -421,33 +429,50 @@ class LocalDocQA:
             yield response, history
 
     def check_low_recall(self, source_documents):
-        """检查本地检索是否为低召回状态"""
-        if len(source_documents) < LOW_RECALL_DOC_THRESHOLD:
-            return True
+        """检查本地检索是否为低召回状态，返回 (is_low_recall, local_doc_count, local_max_score)"""
+        local_doc_count = len(source_documents)
+        local_max_score = 0.0
         if source_documents:
-            max_score = max(float(doc.metadata.get('score', 0)) for doc in source_documents)
-            if max_score < LOW_RECALL_SCORE_THRESHOLD:
-                return True
-        return False
+            local_max_score = max(float(doc.metadata.get('score', 0)) for doc in source_documents)
+        is_low = False
+        if local_doc_count < LOW_RECALL_DOC_THRESHOLD:
+            is_low = True
+        elif local_max_score < LOW_RECALL_SCORE_THRESHOLD:
+            is_low = True
+        return is_low, local_doc_count, local_max_score
 
-    def should_do_web_search(self, web_search_policy, need_web_search, source_documents):
-        """根据联网策略判断是否需要进行联网搜索"""
+    def should_do_web_search(self, web_search_policy, manual_enabled, source_documents):
+        """根据联网策略判断是否需要进行联网搜索，返回 (triggered, trigger_reason, local_doc_count, local_max_score)"""
+        is_low, local_doc_count, local_max_score = self.check_low_recall(source_documents)
+
         if web_search_policy == WEB_SEARCH_POLICY_DISABLED:
-            return False
+            return False, WEB_TRIGGER_REASON_SKIPPED_DISABLED, local_doc_count, local_max_score
         if web_search_policy == WEB_SEARCH_POLICY_ALWAYS:
-            return True
+            return True, WEB_TRIGGER_REASON_POLICY_ALWAYS, local_doc_count, local_max_score
         if web_search_policy == WEB_SEARCH_POLICY_MANUAL:
-            return need_web_search
+            if manual_enabled:
+                return True, WEB_TRIGGER_REASON_POLICY_MANUAL, local_doc_count, local_max_score
+            else:
+                return False, WEB_TRIGGER_REASON_SKIPPED_MANUAL_OFF, local_doc_count, local_max_score
         if web_search_policy == WEB_SEARCH_POLICY_LOW_RECALL:
-            return self.check_low_recall(source_documents)
-        return False
+            if is_low:
+                return True, WEB_TRIGGER_REASON_POLICY_LOW_RECALL, local_doc_count, local_max_score
+            else:
+                return False, WEB_TRIGGER_REASON_SKIPPED_HIGH_RECALL, local_doc_count, local_max_score
+        return False, WEB_TRIGGER_REASON_SKIPPED_DISABLED, local_doc_count, local_max_score
 
     async def get_knowledge_based_answer(self, model, max_token, kb_ids, query, retriever, custom_prompt, time_record,
                                          temperature, api_base, api_key, api_context_length, top_p, top_k, web_chunk_size,
                                          chat_history=None, streaming: bool = STREAMING, rerank: bool = False,
-                                         only_need_search_results: bool = False, need_web_search=False,
+                                         only_need_search_results: bool = False, manual_enabled=False,
                                          web_search_policy=WEB_SEARCH_POLICY_DISABLED,
                                          hybrid_search=False):
+        # 初始化 web_search_trace
+        web_search_trace = create_default_web_search_trace()
+        web_search_trace['policy'] = web_search_policy
+        web_search_trace['manual_enabled'] = manual_enabled
+        web_start_time = time.perf_counter()
+
         custom_llm = OpenAILLM(model, max_token, api_base, api_key, api_context_length, top_p, temperature)
         if chat_history is None:
             chat_history = []
@@ -509,10 +534,17 @@ class LocalDocQA:
         else:
             source_documents = []
 
-        do_web_search = self.should_do_web_search(web_search_policy, need_web_search, source_documents)
+        do_web_search, trigger_reason, local_doc_count, local_max_score = self.should_do_web_search(
+            web_search_policy, manual_enabled, source_documents)
+        web_search_trace['triggered'] = do_web_search
+        web_search_trace['trigger_reason'] = trigger_reason
+        web_search_trace['local_doc_count'] = local_doc_count
+        web_search_trace['local_recall_score'] = round(local_max_score, 4)
         time_record['web_search_policy'] = web_search_policy
         time_record['web_search_triggered'] = do_web_search
+        time_record['web_search_trigger_reason'] = trigger_reason
 
+        web_docs_before_merge = 0
         if do_web_search:
             t1 = time.perf_counter()
             web_search_results = self.web_page_search(query, top_k=3)
@@ -523,6 +555,7 @@ class LocalDocQA:
                 length_function=num_tokens_embed,
             )
             web_search_results = web_splitter.split_documents(web_search_results)
+            web_docs_before_merge = len(web_search_results)
 
             current_doc_id = 0
             current_file_id = web_search_results[0].metadata['file_id']
@@ -552,6 +585,21 @@ class LocalDocQA:
         #     return
 
         source_documents = deduplicate_documents(source_documents)
+
+        # 计算最终 web_search_trace 统计信息
+        total_doc_count = len(source_documents)
+        web_doc_count = sum(1 for doc in source_documents if doc.metadata.get('source_type') == SOURCE_TYPE_WEB)
+        local_doc_count_final = total_doc_count - web_doc_count
+        web_search_trace['web_result_count'] = web_doc_count
+        if total_doc_count > 0:
+            web_search_trace['web_ratio'] = round(web_doc_count / total_doc_count, 4)
+        else:
+            web_search_trace['web_ratio'] = 0.0
+        web_search_trace['local_doc_count'] = local_doc_count_final
+        # 如果本地文档数少于策略判断时的数量，以最终为准
+        if local_doc_count_final < web_search_trace['local_doc_count']:
+            web_search_trace['local_doc_count'] = local_doc_count_final
+
         if rerank and len(source_documents) > 1 and num_tokens_rerank(query) <= 300:
             try:
                 t1 = time.perf_counter()
@@ -600,8 +648,10 @@ class LocalDocQA:
                     yield source_documents, None
                     return
                 res = doc.metadata['faq_dict']['answer']
+                web_search_trace['execution_time_ms'] = int((time.perf_counter() - web_start_time) * 1000)
                 async for response, history in self.generate_response(query, res, condense_question, source_documents,
-                                                                      time_record, chat_history, streaming, 'MATCH_FAQ'):
+                                                                      time_record, chat_history, streaming, 'MATCH_FAQ',
+                                                                      web_search_trace):
                     yield response, history
                 return
 
@@ -640,9 +690,10 @@ class LocalDocQA:
                         f"抱歉，由于留给相关文档使用的token数量不足(docs_available_token_nums: {limited_token_nums} < 文本分片大小: {web_chunk_size})，"
                         f"\n无法保证回答质量，请在模型配置中提高【总Token数量】或减少【输出Tokens数量】或减少【上下文消息数量】再继续提问。"
                         f"\n计算方式：{tokens_msg}")
+                    web_search_trace['execution_time_ms'] = int((time.perf_counter() - web_start_time) * 1000)
                     async for response, history in self.generate_response(query, res, condense_question, source_documents,
                                                                           time_record, chat_history, streaming,
-                                                                          'TOKENS_NOT_ENOUGH'):
+                                                                          'TOKENS_NOT_ENOUGH', web_search_trace):
                         yield response, history
                     return
 
@@ -709,7 +760,8 @@ class LocalDocQA:
                         "result": resp,
                         "condense_question": condense_question,
                         "retrieval_documents": retrieval_documents,
-                        "source_documents": source_documents}
+                        "source_documents": source_documents,
+                        "web_search_trace": web_search_trace}
             time_record['prompt_tokens'] = prompt_tokens if prompt_tokens != 0 else est_prompt_tokens
             time_record['completion_tokens'] = completion_tokens if completion_tokens != 0 else num_tokens(acc_resp)
             time_record['total_tokens'] = total_tokens if total_tokens != 0 else time_record['prompt_tokens'] + \
@@ -719,13 +771,17 @@ class LocalDocQA:
                 has_first_return = True
                 time_record['llm_first_return'] = round(first_return_time - t1, 2)
             if resp[6:].startswith("[DONE]"):
+                # 填充最终执行时间
+                web_search_trace['execution_time_ms'] = int((time.perf_counter() - web_start_time) * 1000)
+                response['web_search_trace'] = web_search_trace
                 if extra_msg is not None:
                     msg_response = {"query": query,
                                 "prompt": prompt,
                                 "result": f"data: {json.dumps({'answer': extra_msg}, ensure_ascii=False)}",
                                 "condense_question": condense_question,
                                 "retrieval_documents": retrieval_documents,
-                                "source_documents": source_documents}
+                                "source_documents": source_documents,
+                                "web_search_trace": web_search_trace}
                     yield msg_response, history
                 last_return_time = time.perf_counter()
                 time_record['llm_completed'] = round(last_return_time - t1, 2) - time_record['llm_first_return']
