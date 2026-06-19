@@ -37,22 +37,26 @@ STAGE_ORDER = ["retrieval", "web_search", "rerank", "topk_filter", "faq_match", 
 
 
 def _generate_stable_trace_id(doc):
-    source = doc.metadata.get("source", "")
     doc_id = doc.metadata.get("doc_id", "")
     file_id = doc.metadata.get("file_id", "")
-    content_hash = hashlib.md5(doc.page_content.encode("utf-8")).hexdigest()[:8]
-    raw = f"{source}|{doc_id}|{file_id}|{content_hash}"
+    content_hash = hashlib.md5(doc.page_content.encode("utf-8")).hexdigest()
+    raw = f"{doc_id}|{file_id}|{content_hash}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _get_chunk_fingerprint(doc):
+    return _generate_stable_trace_id(doc)
 
 
 class TraceCandidate:
     __slots__ = (
         "trace_id", "doc_id", "file_id", "file_name", "content",
         "final_selected", "final_filter_reason", "prompt_position",
-        "stage_traces",
+        "retrieval_sources", "stage_traces", "_fingerprint",
     )
 
     def __init__(self, doc):
+        self._fingerprint = _get_chunk_fingerprint(doc)
         self.trace_id = _generate_stable_trace_id(doc)
         self.doc_id = doc.metadata.get("doc_id", "")
         self.file_id = doc.metadata.get("file_id", "")
@@ -61,8 +65,20 @@ class TraceCandidate:
         self.final_selected = False
         self.final_filter_reason = None
         self.prompt_position = None
+        self.retrieval_sources = []
         self.stage_traces = {s: None for s in STAGE_ORDER}
         doc.metadata["trace_id"] = self.trace_id
+        self._add_retrieval_source(doc)
+
+    def _add_retrieval_source(self, doc):
+        source = doc.metadata.get("retrieval_source", "")
+        score = doc.metadata.get("score")
+        source_info = {"source": source, "score": score}
+        if source_info not in self.retrieval_sources:
+            self.retrieval_sources.append(source_info)
+
+    def merge_from(self, other_doc):
+        self._add_retrieval_source(other_doc)
 
     def record_stage(self, doc, stage, retrieval_score=None, rerank_score=None,
                      selected=True, filter_reason=None, prompt_position=None):
@@ -102,6 +118,7 @@ class TraceCandidate:
             "final_selected": self.final_selected,
             "final_filter_reason": self.final_filter_reason,
             "prompt_position": self.prompt_position,
+            "retrieval_sources": list(self.retrieval_sources),
             "stage_traces": dict(self.stage_traces),
         }
 
@@ -570,13 +587,24 @@ class LocalDocQA:
                 retrieval_trace["retrieval_query"] = retrieval_query
 
         retrieval_stage_docs = []
+        chunk_to_cand = {}
         if kb_ids:
             source_documents = await self.get_source_documents(retrieval_query, retriever, kb_ids, time_record,
                                                                hybrid_search, top_k)
             for doc in source_documents:
-                cand = TraceCandidate(doc)
-                candidate_traces[cand.trace_id] = cand
-                entry = cand.record_stage(doc, "retrieval", retrieval_score=doc.metadata.get('score'), selected=True)
+                fp = _get_chunk_fingerprint(doc)
+                if fp in chunk_to_cand:
+                    chunk_to_cand[fp].merge_from(doc)
+                    doc.metadata["trace_id"] = chunk_to_cand[fp].trace_id
+                else:
+                    cand = TraceCandidate(doc)
+                    chunk_to_cand[fp] = cand
+                    candidate_traces[cand.trace_id] = cand
+                entry = chunk_to_cand[fp].record_stage(
+                    doc, "retrieval",
+                    retrieval_score=doc.metadata.get('score'),
+                    selected=True
+                )
                 retrieval_stage_docs.append(entry)
         else:
             source_documents = []
@@ -610,13 +638,24 @@ class LocalDocQA:
                     current_doc_id = 0
                     doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
                     current_doc_id += 1
-                cand = TraceCandidate(doc)
-                candidate_traces[cand.trace_id] = cand
+                doc.metadata['retrieval_source'] = 'web'
+                fp = _get_chunk_fingerprint(doc)
+                if fp in chunk_to_cand:
+                    chunk_to_cand[fp].merge_from(doc)
+                    doc.metadata["trace_id"] = chunk_to_cand[fp].trace_id
+                else:
+                    cand = TraceCandidate(doc)
+                    chunk_to_cand[fp] = cand
+                    candidate_traces[cand.trace_id] = cand
                 doc_json = doc.to_json()
                 if doc_json['kwargs'].get('metadata') is None:
                     doc_json['kwargs']['metadata'] = doc.metadata
                 self.milvus_summary.add_document(doc_id=doc.metadata['doc_id'], json_data=doc_json)
-                entry = cand.record_stage(doc, "web_search", retrieval_score=doc.metadata.get('score'), selected=True)
+                entry = chunk_to_cand[fp].record_stage(
+                    doc, "web_search",
+                    retrieval_score=doc.metadata.get('score'),
+                    selected=True
+                )
                 web_search_stage_docs.append(entry)
 
             t2 = time.perf_counter()

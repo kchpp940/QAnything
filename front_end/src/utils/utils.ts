@@ -334,6 +334,7 @@ export function processRetrievalTrace(
     final_selected: cand.final_selected,
     final_filter_reason: cand.final_filter_reason,
     prompt_position: cand.prompt_position,
+    retrieval_sources: cand.retrieval_sources,
     stage_traces: STAGE_ORDER.map(stageKey => ({
       stage: stageKey,
       stage_name: getStageName(stageKey),

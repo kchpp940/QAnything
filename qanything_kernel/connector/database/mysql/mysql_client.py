@@ -208,10 +208,20 @@ class KnowledgeBaseManager:
                 result TEXT NOT NULL,
                 retrieval_documents MEDIUMTEXT NOT NULL,
                 source_documents MEDIUMTEXT NOT NULL,
+                retrieval_trace MEDIUMTEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
         self.execute_query_(query, (), commit=True)
+
+        try:
+            self.execute_query_(
+                "ALTER TABLE QaLogs ADD COLUMN retrieval_trace MEDIUMTEXT",
+                (), commit=True
+            )
+        except Exception as e:
+            if "Duplicate column name" not in str(e):
+                debug_logger.warning(f"Add column retrieval_trace warning: {e}")
 
         # create_index_query = "CREATE INDEX IF NOT EXISTS index_bot_id ON QaLogs (bot_id);"
         # self.execute_query_(create_index_query, (), commit=True)
@@ -671,7 +681,7 @@ class KnowledgeBaseManager:
         debug_logger.info(f"delete_faqs count: {total_deleted}")
 
     def add_qalog(self, user_id, bot_id, kb_ids, query, model, product_source, time_record, history, condense_question,
-                  prompt, result, retrieval_documents, source_documents):
+                  prompt, result, retrieval_documents, source_documents, retrieval_trace=None):
         debug_logger.info("add_qalog: {}".format(query))
         qa_id = uuid.uuid4().hex
         kb_ids = json.dumps(kb_ids, ensure_ascii=False)
@@ -679,13 +689,14 @@ class KnowledgeBaseManager:
         source_documents = json.dumps(source_documents, ensure_ascii=False)
         history = json.dumps(history, ensure_ascii=False)
         time_record = json.dumps(time_record, ensure_ascii=False)
+        retrieval_trace_json = json.dumps(retrieval_trace, ensure_ascii=False) if retrieval_trace is not None else None
         insert_query = (
             "INSERT INTO QaLogs (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record, "
-            "history, condense_question, prompt, result, retrieval_documents, source_documents) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            "history, condense_question, prompt, result, retrieval_documents, source_documents, retrieval_trace) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
         self.execute_query_(insert_query, (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record,
                                            history, condense_question, prompt, result, retrieval_documents,
-                                           source_documents), commit=True)
+                                           source_documents, retrieval_trace_json), commit=True)
 
     def get_qalog_by_filter(self, need_info, user_id=None, query=None, bot_id=None, time_range=None, any_kb_id=None, qa_ids=None):
         # 判断哪些条件不是None，构建搜索query
@@ -725,6 +736,8 @@ class KnowledgeBaseManager:
                 qa_info['source_documents'] = json.loads(qa_info['source_documents'])
             if 'history' in qa_info:
                 qa_info['history'] = json.loads(qa_info['history'])
+            if 'retrieval_trace' in qa_info and qa_info['retrieval_trace'] is not None:
+                qa_info['retrieval_trace'] = json.loads(qa_info['retrieval_trace'])
         if 'timestamp' in need_info:
             qa_infos = sorted(qa_infos, key=lambda x: x["timestamp"], reverse=True)
         return qa_infos

@@ -52,6 +52,10 @@ export interface IBackendCandidateTrace {
   final_selected: boolean;
   final_filter_reason: string | null;
   prompt_position: number | null;
+  retrieval_sources: Array<{
+    source: string;
+    score: number | null;
+  }>;
   stage_traces: Record<TraceStageKey, ITraceDoc | null>;
 }
 
@@ -70,6 +74,10 @@ export interface ICandidateTraceInfo {
   final_selected: boolean; // 最终是否入选进入 source_documents
   final_filter_reason?: string | null; // 最终未入选的原因
   prompt_position?: number | null; // 在 prompt 中的位置，null 表示未进入 prompt
+  retrieval_sources?: Array<{
+    source: string;
+    score: number | null;
+  }>;
   stage_traces: Array<{
     stage: string;
     stage_name: string;

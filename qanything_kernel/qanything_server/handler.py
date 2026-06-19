@@ -828,7 +828,8 @@ async def local_doc_chat(req: request):
                                  'history': history,
                                  'condense_question': resp['condense_question'], 'prompt': resp['prompt'],
                                  'result': result, 'retrieval_documents': retrieval_documents,
-                                 'source_documents': source_documents, 'bot_id': bot_id}
+                                 'source_documents': source_documents, 'bot_id': bot_id,
+                                 'retrieval_trace': resp.get('retrieval_trace', None)}
                     local_doc_qa.milvus_summary.add_qalog(**chat_data)
                     qa_logger.info("chat_data: %s", chat_data)
                     debug_logger.info("response: %s", chat_data['result'])
@@ -904,7 +905,8 @@ async def local_doc_chat(req: request):
                      'history': history, "condense_question": resp['condense_question'], "model": model,
                      "product_source": request_source,
                      'retrieval_documents': retrieval_documents, 'prompt': resp['prompt'], 'result': resp['result'],
-                     'source_documents': source_documents, 'bot_id': bot_id}
+                     'source_documents': source_documents, 'bot_id': bot_id,
+                     'retrieval_trace': resp.get('retrieval_trace', None)}
         local_doc_qa.milvus_summary.add_qalog(**chat_data)
         qa_logger.info("chat_data: %s", chat_data)
         debug_logger.info("response: %s", chat_data['result'])
