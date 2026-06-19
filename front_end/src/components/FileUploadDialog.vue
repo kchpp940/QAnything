@@ -425,7 +425,12 @@ const startProgressPolling = () => {
 
   const pollProgress = async () => {
     const processingFiles = uploadFileList.value.filter(
-      item => item.status === 'loading' || (item.status === 'success' && item.progress !== undefined && item.progress < 100)
+      item => 
+        item.file_id && 
+        item.status !== 'error' && 
+        (item.status === 'loading' || 
+         item.progress === undefined || 
+         item.progress < 100)
     );
 
     if (processingFiles.length === 0) {
@@ -443,6 +448,7 @@ const startProgressPolling = () => {
         const res: any = await resultControl(
           await urlResquest.getFileProgress({
             file_id: file.file_id,
+            kb_id: currentId.value,
           })
         );
 
@@ -455,10 +461,12 @@ const startProgressPolling = () => {
           file.retryable = res.data.retryable;
           file.retry_count = res.data.retry_count;
 
-          if (res.data.progress >= 100 || res.data.stage === 'completed') {
+          if (res.data.status === 'green') {
             file.status = 'success';
-          } else if (res.data.stage === 'failed' || res.data.status === 'red') {
+          } else if (res.data.status === 'red') {
             file.status = 'error';
+          } else {
+            file.status = 'loading';
           }
         }
       } catch (e) {
@@ -467,7 +475,7 @@ const startProgressPolling = () => {
     }
 
     const allCompleted = uploadFileList.value.every(
-      item => item.status === 'success' || item.status === 'error' || item.progress === undefined || item.progress >= 100
+      item => item.status === 'success' || item.status === 'error'
     );
 
     if (allCompleted) {
@@ -493,10 +501,12 @@ const retryUploadFile = async (item: IFileListItem) => {
     );
     message.success(common.retrySuccess);
     item.status = 'loading';
-    item.progress = 5;
+    item.progress = 0;
     item.stage = 'upload';
+    item.stage_status = 'pending';
     item.error_message = undefined;
     item.error_code = undefined;
+    item.retryable = false;
     startProgressPolling();
   } catch (e: any) {
     message.error(e.msg || common.retryFailed);

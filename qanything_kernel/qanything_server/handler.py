@@ -172,8 +172,18 @@ async def upload_weblink(req: request):
         msg = local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
                                                    chunk_size, timestamp, url)
         debug_logger.info(f"{url}, {file_name}, {file_id}, {msg}")
+
+        progress_tracker = FileProgressTracker(local_doc_qa.milvus_summary)
+        progress_data = progress_tracker.create_initial_progress(file_id, file_name)
+        progress_data = progress_tracker.update_stage_start(progress_data, FileStage.UPLOAD)
+        progress_data = progress_tracker.update_stage_progress(progress_data, FileStage.UPLOAD, 100)
+        progress_data = progress_tracker.update_stage_success(progress_data, FileStage.UPLOAD)
+        progress_tracker.save_progress(file_id, progress_data)
+
         data.append({"file_id": file_id, "file_name": file_name, "file_url": url, "status": "gray", "bytes": 0,
-                     "timestamp": timestamp})
+                     "timestamp": timestamp,
+                     "progress": progress_data["overall_progress"],
+                     "stage": progress_data["current_stage"]})
         # asyncio.create_task(local_doc_qa.insert_files_to_milvus(user_id, kb_id, [local_file]))
     if exist_file_names:
         msg = f'warning，当前的mode是soft，无法上传同名文件{exist_file_names}，如果想强制上传同名文件，请设置mode：strong'
@@ -1513,14 +1523,16 @@ async def get_file_progress(req: request):
         return sanic_json({"code": 2001, "msg": msg})
     user_id = user_id + '__' + user_info
     file_id = safe_get(req, 'file_id')
-    debug_logger.info("get_file_progress %s %s", user_id, file_id)
+    kb_id = safe_get(req, 'kb_id')
+    kb_id = correct_kb_id(kb_id)
+    debug_logger.info("get_file_progress %s %s %s", user_id, kb_id, file_id)
 
-    if not file_id:
-        return sanic_json({"code": 2005, "msg": "fail, file_id is required"})
+    if not file_id or not kb_id:
+        return sanic_json({"code": 2005, "msg": "fail, file_id and kb_id are required"})
 
-    progress_info = local_doc_qa.milvus_summary.get_file_progress_info(file_id)
+    progress_info = local_doc_qa.milvus_summary.get_file_progress_info(file_id, user_id=user_id, kb_id=kb_id)
     if not progress_info:
-        return sanic_json({"code": 2004, "msg": "fail, file not found"})
+        return sanic_json({"code": 2004, "msg": "fail, file not found or access denied"})
 
     response_data = {
         "file_id": progress_info.get('file_id'),
@@ -1563,9 +1575,12 @@ async def retry_file(req: request):
     if not file_id or not kb_id:
         return sanic_json({"code": 2005, "msg": "fail, file_id and kb_id are required"})
 
-    progress_info = local_doc_qa.milvus_summary.get_file_progress_info(file_id)
+    progress_info = local_doc_qa.milvus_summary.get_file_progress_info(file_id, user_id=user_id, kb_id=kb_id)
     if not progress_info:
-        return sanic_json({"code": 2004, "msg": "fail, file not found"})
+        return sanic_json({"code": 2004, "msg": "fail, file not found or access denied"})
+
+    if progress_info.get('status') != 'red':
+        return sanic_json({"code": 2002, "msg": "fail, only failed files can be retried"})
 
     if not progress_info.get('retryable', 0):
         return sanic_json({"code": 2002, "msg": "fail, this file cannot be retried"})
@@ -1574,22 +1589,9 @@ async def retry_file(req: request):
     if not result:
         return sanic_json({"code": 500, "msg": "fail, retry operation failed"})
 
-    progress_tracker = FileProgressTracker(local_doc_qa.milvus_summary)
-    progress_data = progress_tracker.load_progress(file_id)
-    if progress_data:
-        progress_data = progress_tracker.start_retry(progress_data)
-        progress_tracker.save_progress(file_id, progress_data)
+    debug_logger.info(f"File retry queued: {file_id}, will be picked up by insert_files_service")
 
-    file_location = progress_info.get('file_location')
-    file_name = progress_info.get('file_name')
-    chunk_size = progress_info.get('chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
-
-    if file_location and os.path.exists(file_location):
-        from qanything_kernel.core.local_file import LocalFile
-        local_file = LocalFile(user_id, kb_id, file_location, file_name, use_local_file=True)
-        asyncio.create_task(local_doc_qa.insert_files_to_milvus(user_id, kb_id, [local_file]))
-
-    return sanic_json({"code": 200, "msg": "success, file retry started"})
+    return sanic_json({"code": 200, "msg": "success, file retry queued"})
 
 
 @get_time_async
@@ -1607,7 +1609,7 @@ async def get_retryable_files(req: request):
     if isinstance(kb_ids, str):
         kb_ids = [kb_ids]
 
-    retryable_files = local_doc_qa.milvus_summary.get_retryable_files(kb_ids)
+    retryable_files = local_doc_qa.milvus_summary.get_retryable_files(user_id, kb_ids)
     data = []
     for file_info in retryable_files:
         data.append({

@@ -951,14 +951,25 @@ class KnowledgeBaseManager:
             return result[0][0]
         return None
 
-    def get_file_progress_info(self, file_id):
+    def get_file_progress_info(self, file_id, user_id=None, kb_id=None):
         query = """
-            SELECT file_id, file_name, status, stage, stage_status, progress, 
-                   error_code, error_message, retryable, retry_count, progress_detail
-            FROM File 
-            WHERE file_id = %s
+            SELECT f.file_id, f.file_name, f.status, f.stage, f.stage_status, f.progress, 
+                   f.error_code, f.error_message, f.retryable, f.retry_count, f.progress_detail,
+                   f.kb_id, f.file_location, f.chunk_size
+            FROM File f
+            WHERE f.file_id = %s
         """
-        result = self.execute_query_(query, (file_id,), fetch=True, user_dict=True)
+        params = [file_id]
+
+        if kb_id:
+            query += " AND f.kb_id = %s"
+            params.append(kb_id)
+
+        if user_id:
+            query += " AND f.kb_id IN (SELECT kb_id FROM KnowledgeBase WHERE user_id = %s)"
+            params.append(user_id)
+
+        result = self.execute_query_(query, params, fetch=True, user_dict=True)
         if result:
             return result[0]
         return None
@@ -969,17 +980,19 @@ class KnowledgeBaseManager:
         all_files = []
 
         base_query = """
-            SELECT file_id, file_name, status, file_size, content_length, timestamp,
-                   file_location, file_url, chunk_size, msg, stage, stage_status,
-                   progress, error_code, error_message, retryable, retry_count, progress_detail
-            FROM File
-            WHERE kb_id = %s AND deleted = 0
+            SELECT f.file_id, f.file_name, f.status, f.file_size, f.content_length, f.timestamp,
+                   f.file_location, f.file_url, f.chunk_size, f.msg, f.stage, f.stage_status,
+                   f.progress, f.error_code, f.error_message, f.retryable, f.retry_count, f.progress_detail
+            FROM File f
+            WHERE f.kb_id = %s 
+            AND f.deleted = 0
+            AND f.kb_id IN (SELECT kb_id FROM KnowledgeBase WHERE user_id = %s)
         """
 
-        params = [kb_id]
+        params = [kb_id, user_id]
 
         if file_id is not None:
-            base_query += " AND file_id = %s"
+            base_query += " AND f.file_id = %s"
             params.append(file_id)
             query = base_query
             current_params = params
@@ -1009,23 +1022,26 @@ class KnowledgeBaseManager:
                 error_code = NULL,
                 error_message = NULL,
                 retryable = 0,
+                retry_count = retry_count + 1,
                 progress_detail = NULL
             WHERE file_id = %s AND kb_id = %s 
             AND kb_id IN (SELECT kb_id FROM KnowledgeBase WHERE user_id = %s)
+            AND status = 'red'
         """
         result = self.execute_query_(query, (file_id, kb_id, user_id), commit=True, check=True)
         return result is not None and result > 0
 
-    def get_retryable_files(self, kb_ids):
+    def get_retryable_files(self, user_id, kb_ids):
         if not kb_ids:
             return []
         kb_ids_str = ','.join("'{}'".format(str(x)) for x in kb_ids)
         query = f"""
-            SELECT file_id, file_name, error_code, error_message, retry_count
+            SELECT file_id, file_name, kb_id, error_code, error_message, retry_count
             FROM File 
             WHERE kb_id IN ({kb_ids_str}) 
             AND deleted = 0 
             AND retryable = 1
             AND status = 'red'
+            AND kb_id IN (SELECT kb_id FROM KnowledgeBase WHERE user_id = %s)
         """
-        return self.execute_query_(query, (), fetch=True, user_dict=True)
+        return self.execute_query_(query, (user_id,), fetch=True, user_dict=True)

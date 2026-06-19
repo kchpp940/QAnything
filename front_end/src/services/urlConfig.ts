@@ -287,6 +287,8 @@ const urlConfig: IUrlConfig = {
     param: {
       user_id: userId,
       user_info: userPhone,
+      kb_id: '',
+      file_id: '',
     },
   },
   // 重试文件处理

@@ -77,6 +77,9 @@ async def process_data(retriever, milvus_kb, mysql_client, file_info, time_recor
 
     if not progress_data:
         progress_data = progress_tracker.create_initial_progress(file_id, file_name)
+        progress_data = progress_tracker.update_stage_start(progress_data, FileStage.UPLOAD)
+        progress_data = progress_tracker.update_stage_progress(progress_data, FileStage.UPLOAD, 100)
+        progress_data = progress_tracker.update_stage_success(progress_data, FileStage.UPLOAD)
 
     try:
         progress_data = progress_tracker.update_stage_start(progress_data, FileStage.PARSE)
