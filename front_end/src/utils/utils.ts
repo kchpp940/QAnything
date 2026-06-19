@@ -324,100 +324,35 @@ const STAGE_ORDER: TraceStageKey[] = [
 
 export function processRetrievalTrace(
   trace: IRetrievalTrace,
-  sourceDocs: IDataSourceItem[]
+  _sourceDocs: IDataSourceItem[]
 ): ITraceDisplayData {
-  if (trace.candidates && trace.candidates.length > 0) {
-    const candidates: ICandidateTraceInfo[] = trace.candidates.map(cand => ({
-      doc_id: cand.doc_id,
-      file_id: cand.file_id,
-      file_name: cand.file_name,
-      content: cand.content,
-      final_selected: cand.final_selected,
-      final_filter_reason: cand.final_filter_reason,
-      prompt_position: cand.prompt_position,
-      stage_traces: STAGE_ORDER.map(stageKey => ({
-        stage: stageKey,
-        stage_name: getStageName(stageKey),
-        stage_description: getStageDescription(stageKey),
-        trace: cand.stage_traces[stageKey] || null,
-      })),
-    }));
+  const candidates: ICandidateTraceInfo[] = (trace.candidates || []).map(cand => ({
+    doc_id: cand.doc_id,
+    file_id: cand.file_id,
+    file_name: cand.file_name,
+    content: cand.content,
+    final_selected: cand.final_selected,
+    final_filter_reason: cand.final_filter_reason,
+    prompt_position: cand.prompt_position,
+    stage_traces: STAGE_ORDER.map(stageKey => ({
+      stage: stageKey,
+      stage_name: getStageName(stageKey),
+      stage_description: getStageDescription(stageKey),
+      trace: cand.stage_traces[stageKey] || null,
+    })),
+  }));
 
-    const selectedCandidates = candidates
-      .filter(c => c.final_selected)
-      .sort((a, b) => {
-        const aPos = a.prompt_position;
-        const bPos = b.prompt_position;
-        if (aPos !== null && aPos !== undefined && bPos !== null && bPos !== undefined) {
-          return (aPos ?? 999) - (bPos ?? 999);
-        }
-        return 0;
-      });
-
-    const filteredCandidates = candidates.filter(c => !c.final_selected);
-
-    return {
-      selected_candidates: selectedCandidates,
-      filtered_candidates: filteredCandidates,
-      original_query: trace.original_query,
-      retrieval_query: trace.retrieval_query,
-    };
-  }
-
-  const allStages = trace.stages.map(s => s.stage);
-  const candidateMap = new Map<string, ICandidateTraceInfo>();
-  const selectedDocIds = new Set(sourceDocs.map(d => d.doc_id || d.file_id));
-
-  trace.stages.forEach(stage => {
-    stage.docs.forEach(doc => {
-      const key = doc.doc_id || doc.file_id;
-      if (!candidateMap.has(key)) {
-        candidateMap.set(key, {
-          doc_id: doc.doc_id,
-          file_id: doc.file_id,
-          file_name: doc.file_name,
-          content: doc.content,
-          final_selected: false,
-          final_filter_reason: null,
-          stage_traces: allStages.map(s => ({
-            stage: s,
-            stage_name: getStageName(s),
-            stage_description: getStageDescription(s),
-            trace: null,
-          })),
-        });
-      }
-      const candidate = candidateMap.get(key)!;
-      const stageTrace = candidate.stage_traces.find(st => st.stage === stage.stage);
-      if (stageTrace) {
-        stageTrace.trace = doc;
-      }
-    });
-  });
-
-  candidateMap.forEach(candidate => {
-    const key = candidate.doc_id || candidate.file_id;
-    candidate.final_selected = selectedDocIds.has(key);
-    if (!candidate.final_selected) {
-      const filteredStages = candidate.stage_traces.filter(st => st.trace && !st.trace.selected);
-      const lastFilteredStage = filteredStages[filteredStages.length - 1];
-      candidate.final_filter_reason = lastFilteredStage?.trace?.filter_reason || null;
-    }
-  });
-
-  const candidates = Array.from(candidateMap.values());
   const selectedCandidates = candidates
     .filter(c => c.final_selected)
     .sort((a, b) => {
-      const aPos = a.stage_traces.find(st => st.stage === 'prompt_assembly')?.trace
-        ?.prompt_position;
-      const bPos = b.stage_traces.find(st => st.stage === 'prompt_assembly')?.trace
-        ?.prompt_position;
-      if (aPos !== null && aPos !== undefined && bPos !== null && bPos !== undefined) {
-        return (aPos ?? 999) - (bPos ?? 999);
+      const aPos = a.prompt_position;
+      const bPos = b.prompt_position;
+      if (aPos != null && bPos != null) {
+        return aPos - bPos;
       }
       return 0;
     });
+
   const filteredCandidates = candidates.filter(c => !c.final_selected);
 
   return {

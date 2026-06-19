@@ -59,7 +59,7 @@ export interface IRetrievalTrace {
   original_query: string;
   retrieval_query: string;
   stages: ITraceStage[];
-  candidates?: IBackendCandidateTrace[];
+  candidates: IBackendCandidateTrace[];
 }
 
 export interface ICandidateTraceInfo {
