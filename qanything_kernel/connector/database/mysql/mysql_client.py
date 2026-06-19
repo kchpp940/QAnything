@@ -149,7 +149,15 @@ class KnowledgeBaseManager:
                 file_url VARCHAR(2048) DEFAULT '',
                 upload_infos TEXT,
                 chunk_size INT DEFAULT -1,
-                timestamp VARCHAR(255) DEFAULT '197001010000'
+                timestamp VARCHAR(255) DEFAULT '197001010000',
+                stage VARCHAR(64) DEFAULT 'upload',
+                stage_status VARCHAR(32) DEFAULT 'pending',
+                progress INT DEFAULT 0,
+                error_code VARCHAR(16),
+                error_message TEXT,
+                retryable BOOL DEFAULT 0,
+                retry_count INT DEFAULT 0,
+                progress_detail LONGTEXT
             );
 
         """
@@ -262,6 +270,15 @@ class KnowledgeBaseManager:
             # 如果没有的话，给QanythingBot添加一列：llm_setting VARCHAR(512)
             "ALTER TABLE QanythingBot ADD COLUMN llm_setting VARCHAR(512) DEFAULT '{}'",
             "ALTER TABLE QanythingBot DROP COLUMN model",
+            # 为File表添加进度追踪相关列
+            "ALTER TABLE File ADD COLUMN stage VARCHAR(64) DEFAULT 'upload'",
+            "ALTER TABLE File ADD COLUMN stage_status VARCHAR(32) DEFAULT 'pending'",
+            "ALTER TABLE File ADD COLUMN progress INT DEFAULT 0",
+            "ALTER TABLE File ADD COLUMN error_code VARCHAR(16)",
+            "ALTER TABLE File ADD COLUMN error_message TEXT",
+            "ALTER TABLE File ADD COLUMN retryable BOOL DEFAULT 0",
+            "ALTER TABLE File ADD COLUMN retry_count INT DEFAULT 0",
+            "ALTER TABLE File ADD COLUMN progress_detail LONGTEXT",
         ]
 
         for query in index_queries:
@@ -882,3 +899,133 @@ class KnowledgeBaseManager:
         result = self.execute_query_(query, (file_id,), fetch=True)
         file_location = result[0][0] if result else None
         return file_location
+
+    def update_file_progress(self, file_id, progress_json):
+        try:
+            progress_data = json.loads(progress_json)
+            current_stage = progress_data.get('current_stage', '')
+            overall_progress = progress_data.get('overall_progress', 0)
+            error_code = progress_data.get('error_code')
+            error_message = progress_data.get('error_message')
+            retryable = 1 if progress_data.get('retryable', False) else 0
+            retry_count = progress_data.get('retry_count', 0)
+
+            query = """
+                UPDATE File 
+                SET stage = %s, 
+                    stage_status = %s,
+                    progress = %s,
+                    error_code = %s,
+                    error_message = %s,
+                    retryable = %s,
+                    retry_count = %s,
+                    progress_detail = %s
+                WHERE file_id = %s
+            """
+
+            stage_status = 'running'
+            if current_stage == 'completed':
+                stage_status = 'success'
+            elif current_stage == 'failed':
+                stage_status = 'failed'
+            elif current_stage in ['upload', 'parse', 'chunk', 'milvus_insert', 'es_index']:
+                if progress_data.get('stage_details', {}).get(current_stage, {}).get('status') == 'success':
+                    stage_status = 'success'
+                elif progress_data.get('stage_details', {}).get(current_stage, {}).get('status') == 'failed':
+                    stage_status = 'failed'
+
+            self.execute_query_(query, (
+                current_stage, stage_status, overall_progress,
+                error_code, error_message, retryable, retry_count,
+                progress_json, file_id
+            ), commit=True)
+            return True
+        except Exception as e:
+            debug_logger.error(f"Failed to update file progress: {e}")
+            return False
+
+    def get_file_progress(self, file_id):
+        query = "SELECT progress_detail FROM File WHERE file_id = %s"
+        result = self.execute_query_(query, (file_id,), fetch=True)
+        if result and result[0][0]:
+            return result[0][0]
+        return None
+
+    def get_file_progress_info(self, file_id):
+        query = """
+            SELECT file_id, file_name, status, stage, stage_status, progress, 
+                   error_code, error_message, retryable, retry_count, progress_detail
+            FROM File 
+            WHERE file_id = %s
+        """
+        result = self.execute_query_(query, (file_id,), fetch=True, user_dict=True)
+        if result:
+            return result[0]
+        return None
+
+    def get_files_with_progress(self, user_id, kb_id, file_id=None):
+        limit = 100
+        offset = 0
+        all_files = []
+
+        base_query = """
+            SELECT file_id, file_name, status, file_size, content_length, timestamp,
+                   file_location, file_url, chunk_size, msg, stage, stage_status,
+                   progress, error_code, error_message, retryable, retry_count, progress_detail
+            FROM File
+            WHERE kb_id = %s AND deleted = 0
+        """
+
+        params = [kb_id]
+
+        if file_id is not None:
+            base_query += " AND file_id = %s"
+            params.append(file_id)
+            query = base_query
+            current_params = params
+            files = self.execute_query_(query, current_params, fetch=True, user_dict=True)
+            return files
+
+        while True:
+            query = base_query + " LIMIT %s OFFSET %s"
+            current_params = params + [limit, offset]
+            files = self.execute_query_(query, current_params, fetch=True, user_dict=True)
+
+            if not files:
+                break
+
+            all_files.extend(files)
+            offset += limit
+
+        return all_files
+
+    def retry_file(self, file_id, user_id, kb_id):
+        query = """
+            UPDATE File 
+            SET status = 'gray',
+                stage = 'upload',
+                stage_status = 'pending',
+                progress = 0,
+                error_code = NULL,
+                error_message = NULL,
+                retryable = 0,
+                progress_detail = NULL
+            WHERE file_id = %s AND kb_id = %s 
+            AND kb_id IN (SELECT kb_id FROM KnowledgeBase WHERE user_id = %s)
+        """
+        result = self.execute_query_(query, (file_id, kb_id, user_id), commit=True, check=True)
+        return result is not None and result > 0
+
+    def get_retryable_files(self, kb_ids):
+        if not kb_ids:
+            return []
+        kb_ids_str = ','.join("'{}'".format(str(x)) for x in kb_ids)
+        query = f"""
+            SELECT file_id, file_name, error_code, error_message, retry_count
+            FROM File 
+            WHERE kb_id IN ({kb_ids_str}) 
+            AND deleted = 0 
+            AND retryable = 1
+            AND status = 'red'
+        """
+        return self.execute_query_(query, (), fetch=True, user_dict=True)

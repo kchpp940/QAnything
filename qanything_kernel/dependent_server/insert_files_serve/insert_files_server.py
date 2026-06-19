@@ -20,6 +20,9 @@ from qanything_kernel.core.retriever.elasticsearchstore import StoreElasticSearc
 from qanything_kernel.core.retriever.parent_retriever import ParentRetriever
 from qanything_kernel.configs.model_config import MYSQL_HOST_LOCAL, MYSQL_PORT_LOCAL, \
     MYSQL_USER_LOCAL, MYSQL_PASSWORD_LOCAL, MYSQL_DATABASE_LOCAL, MAX_CHARS
+from qanything_kernel.utils.file_progress_tracker import (
+    FileProgressTracker, FileStage, FileStageStatus, ErrorCode, RETRYABLE_ERRORS
+)
 from sanic.worker.manager import WorkerManager
 import asyncio
 import traceback
@@ -68,42 +71,57 @@ async def process_data(retriever, milvus_kb, mysql_client, file_info, time_recor
     local_file = LocalFileForInsert(user_id, kb_id, file_id, file_location, file_name, file_url, chunk_size, mysql_client)
     msg = "success"
     chunks_number = 0
-    mysql_client.update_file_msg(file_id, f'Processing:{random.randint(1, 5)}%')
-    # 这里是把文件做向量化，然后写入Milvus的逻辑
-    start = time.perf_counter()
+
+    progress_tracker = FileProgressTracker(mysql_client)
+    progress_data = progress_tracker.load_progress(file_id)
+
+    if not progress_data:
+        progress_data = progress_tracker.create_initial_progress(file_id, file_name)
+
     try:
+        progress_data = progress_tracker.update_stage_start(progress_data, FileStage.PARSE)
+        progress_tracker.save_progress(file_id, progress_data)
+
+        start = time.perf_counter()
         await asyncio.wait_for(
             asyncio.to_thread(local_file.split_file_to_docs),
             timeout=parse_timeout_seconds
         )
         content_length = sum([len(doc.page_content) for doc in local_file.docs])
-        if content_length > MAX_CHARS:
-            status = 'red'
-            msg = f"{file_name} content_length too large, {content_length} >= MaxLength({MAX_CHARS})"
-            return status, content_length, chunks_number, msg
-        elif content_length == 0:
-            status = 'red'
-            msg = f"{file_name} content_length is 0, file content is empty or The URL exists anti-crawling or requires login."
-            return status, content_length, chunks_number, msg
-    except asyncio.TimeoutError:
-        local_file.event.set()
-        insert_logger.error(f'Timeout: split_file_to_docs took longer than {parse_timeout_seconds} seconds')
-        status = 'red'
-        msg = f"split_file_to_docs timeout: {parse_timeout_seconds}s"
-        return status, content_length, chunks_number, msg
-    except Exception as e:
-        error_info = f'split_file_to_docs error: {traceback.format_exc()}'
-        msg = error_info
-        insert_logger.error(msg)
-        status = 'red'
-        msg = f"split_file_to_docs error"
-        return status, content_length, chunks_number, msg
-    end = time.perf_counter()
-    time_record['parse_time'] = round(end - start, 2)
-    insert_logger.info(f'parse time: {end - start} {len(local_file.docs)}')
-    mysql_client.update_file_msg(file_id, f'Processing:{random.randint(5, 75)}%')
 
-    try:
+        if content_length > MAX_CHARS:
+            error_msg = f"{file_name} content_length too large, {content_length} >= MaxLength({MAX_CHARS})"
+            progress_data = progress_tracker.update_stage_failed(
+                progress_data, FileStage.PARSE, ErrorCode.PARSE_CONTENT_TOO_LARGE, error_msg
+            )
+            progress_tracker.save_progress(file_id, progress_data)
+            status = 'red'
+            msg = error_msg
+            return status, content_length, chunks_number, msg
+
+        elif content_length == 0:
+            error_msg = f"{file_name} content_length is 0, file content is empty or The URL exists anti-crawling or requires login."
+            progress_data = progress_tracker.update_stage_failed(
+                progress_data, FileStage.PARSE, ErrorCode.PARSE_ANTI_CRAWL, error_msg
+            )
+            progress_tracker.save_progress(file_id, progress_data)
+            status = 'red'
+            msg = error_msg
+            return status, content_length, chunks_number, msg
+
+        progress_data = progress_tracker.update_stage_success(progress_data, FileStage.PARSE)
+        progress_data = progress_tracker.update_stage_start(progress_data, FileStage.CHUNK)
+        progress_data = progress_tracker.update_stage_progress(progress_data, FileStage.CHUNK, 100)
+        progress_data = progress_tracker.update_stage_success(progress_data, FileStage.CHUNK)
+        progress_tracker.save_progress(file_id, progress_data)
+
+        end = time.perf_counter()
+        time_record['parse_time'] = round(end - start, 2)
+        insert_logger.info(f'parse time: {end - start} {len(local_file.docs)}')
+
+        progress_data = progress_tracker.update_stage_start(progress_data, FileStage.MILVUS_INSERT)
+        progress_tracker.save_progress(file_id, progress_data)
+
         start = time.perf_counter()
         chunks_number, insert_time_record = await asyncio.wait_for(
             retriever.insert_documents(local_file.docs, chunk_size),
@@ -112,23 +130,59 @@ async def process_data(retriever, milvus_kb, mysql_client, file_info, time_recor
         time_record.update(insert_time_record)
         insert_logger.info(f'insert time: {insert_time - start}')
         mysql_client.update_chunks_number(local_file.file_id, chunks_number)
+
+        progress_data = progress_tracker.update_stage_progress(progress_data, FileStage.MILVUS_INSERT, 100)
+        progress_data = progress_tracker.update_stage_success(progress_data, FileStage.MILVUS_INSERT)
+        progress_tracker.save_progress(file_id, progress_data)
+
+        progress_data = progress_tracker.update_stage_start(progress_data, FileStage.ES_INDEX)
+        progress_data = progress_tracker.update_stage_progress(progress_data, FileStage.ES_INDEX, 100)
+        progress_data = progress_tracker.update_stage_success(progress_data, FileStage.ES_INDEX)
+        progress_data = progress_tracker.mark_completed(progress_data)
+        progress_tracker.save_progress(file_id, progress_data)
+
     except asyncio.TimeoutError:
-        insert_logger.error(f'Timeout: milvus insert took longer than {insert_timeout_seconds} seconds')
-        expr = f'file_id == \"{local_file.file_id}\"'
-        milvus_kb.delete_expr(expr)
+        local_file.event.set()
+        timeout_stage = FileStage.PARSE if 'parse_time' not in time_record else FileStage.MILVUS_INSERT
+        timeout_error = ErrorCode.PARSE_TIMEOUT if timeout_stage == FileStage.PARSE else ErrorCode.MILVUS_TIMEOUT
+        error_msg = f"{timeout_stage.value} timeout: {parse_timeout_seconds if timeout_stage == FileStage.PARSE else insert_timeout_seconds}s"
+        insert_logger.error(f'Timeout: {timeout_stage.value} took longer than expected')
+
+        progress_data = progress_tracker.update_stage_failed(
+            progress_data, timeout_stage, timeout_error, error_msg
+        )
+        progress_tracker.save_progress(file_id, progress_data)
+
+        if timeout_stage == FileStage.MILVUS_INSERT:
+            expr = f'file_id == \"{local_file.file_id}\"'
+            milvus_kb.delete_expr(expr)
+
         status = 'red'
         time_record['insert_timeout'] = True
-        msg = f"milvus insert timeout: {insert_timeout_seconds}s"
-        return status, content_length, chunks_number, msg
-    except Exception as e:
-        error_info = f'milvus insert error: {traceback.format_exc()}'
-        insert_logger.error(error_info)
-        status = 'red'
-        time_record['insert_error'] = True
-        msg = f"milvus insert error"
+        msg = error_msg
         return status, content_length, chunks_number, msg
 
-    mysql_client.update_file_msg(file_id, f'Processing:{random.randint(75, 100)}%')
+    except Exception as e:
+        error_info = f'error: {traceback.format_exc()}'
+        insert_logger.error(error_info)
+
+        failed_stage = FileStage.PARSE
+        error_code = ErrorCode.PARSE_ERROR
+        if 'parse_time' in time_record:
+            failed_stage = FileStage.MILVUS_INSERT
+            error_code = ErrorCode.MILVUS_INSERT_ERROR
+
+        error_msg = f"{failed_stage.value} error"
+        progress_data = progress_tracker.update_stage_failed(
+            progress_data, failed_stage, error_code, error_msg
+        )
+        progress_tracker.save_progress(file_id, progress_data)
+
+        status = 'red'
+        time_record['insert_error'] = True
+        msg = error_msg
+        return status, content_length, chunks_number, msg
+
     time_record['upload_total_time'] = round(time.perf_counter() - process_start, 2)
     mysql_client.update_file_upload_infos(file_id, time_record)
     insert_logger.info(f'insert_files_to_milvus: {user_id}, {kb_id}, {file_id}, {file_name}, {status}')

@@ -92,7 +92,23 @@ export interface IUrlListItem {
   borderRadius?: string;
 }
 
-//上传文件
+// 文件处理阶段
+export type FileStage = 'upload' | 'parse' | 'chunk' | 'milvus_insert' | 'es_index' | 'completed' | 'failed' | 'rollback';
+
+// 阶段状态
+export type FileStageStatus = 'pending' | 'running' | 'success' | 'failed';
+
+// 单阶段进度详情
+export interface IStageProgressDetail {
+  status: FileStageStatus;
+  progress: number;
+  error_code?: string;
+  error_message?: string;
+  start_time?: string;
+  end_time?: string;
+}
+
+// 上传文件
 export interface IFileListItem {
   file?: File; // 这个只有在上传时候加，接收没有这个
   file_name: string;
@@ -103,6 +119,20 @@ export interface IFileListItem {
   text?: string;
   order?: number;
   bytes: number;
+
+  // 新增进度追踪字段
+  stage?: FileStage;
+  stage_status?: FileStageStatus;
+  progress?: number;
+  error_code?: string;
+  error_message?: string;
+  retryable?: boolean;
+  retry_count?: number;
+  progress_detail?: Record<FileStage, IStageProgressDetail>;
+
+  // UI状态
+  showRetry?: boolean;
+  isRetrying?: boolean;
 }
 
 // 模型设置

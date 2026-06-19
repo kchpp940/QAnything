@@ -98,6 +98,9 @@ app.add_route(update_bot, "/api/local_doc_qa/update_bot", methods=['POST'])  # t
 app.add_route(get_bot_info, "/api/local_doc_qa/get_bot_info", methods=['POST'])  # tags=["获取Bot信息"]
 app.add_route(update_chunks, "/api/local_doc_qa/update_chunks", methods=['POST'])  # tags=["更新chunk"]
 app.add_route(get_file_base64, "/api/local_doc_qa/get_file_base64", methods=['POST'])  # tags=["更新chunk"]
+app.add_route(get_file_progress, "/api/local_doc_qa/get_file_progress", methods=['POST'])  # tags=["获取文件处理进度"]
+app.add_route(retry_file, "/api/local_doc_qa/retry_file", methods=['POST'])  # tags=["重试文件处理"]
+app.add_route(get_retryable_files, "/api/local_doc_qa/get_retryable_files", methods=['POST'])  # tags=["获取可重试文件列表"]
 
 if __name__ == "__main__":
     app.run(host='0.0.0.0', port=args.port, workers=args.workers, access_log=False)

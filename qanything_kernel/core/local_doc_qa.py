@@ -79,33 +79,22 @@ class LocalDocQA:
         query = queries[0]
         web_content, web_documents = duckduckgo_search(query, top_k)
         source_documents = []
-        total = len(web_documents)
         for idx, doc in enumerate(web_documents):
             if 'title' not in doc.metadata:
                 continue
+            doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
             debug_logger.info(f"web search doc: {doc.metadata}")
             file_name = re.sub(r'[\uFF01-\uFF5E\u3000-\u303F]', '', doc.metadata['title'])
             doc.metadata['file_name'] = file_name + '.web'
             doc.metadata['file_url'] = doc.metadata['source']
+            doc.metadata['embed_version'] = self.embeddings.embed_version
+            doc.metadata['score'] = 1 - (idx / len(web_documents))
             doc.metadata['file_id'] = 'websearch' + str(idx)
-            doc.metadata['kb_id'] = 'web_search_kb'
-            doc.metadata['doc_id'] = doc.metadata['file_id'] + '_0'
             doc.metadata['headers'] = {"新闻标题": file_name}
-            doc.metadata['retrieval_source'] = 'web_search'
-            doc.metadata['score'] = 1 - (idx / max(total, 1))
-            doc.metadata['deleted'] = 0
-            normalize_document_metadata(doc, embed_version=self.embeddings.embed_version,
-                                        retrieval_query=query, default_retrieval_source='web_search',
-                                        default_kb_id='web_search_kb', idx_for_fallback=idx, total_docs=total)
             if 'description' in doc.metadata:
-                desc_md = copy.deepcopy(doc.metadata)
-                desc_md['doc_id'] = doc.metadata['file_id'] + '_desc'
-                desc_doc = Document(page_content=doc.metadata['description'], metadata=desc_md)
-                normalize_document_metadata(desc_doc, embed_version=self.embeddings.embed_version,
-                                            retrieval_query=query, default_retrieval_source='web_search',
-                                            default_kb_id='web_search_kb', idx_for_fallback=idx, total_docs=total)
+                desc_doc = Document(page_content=doc.metadata['description'], metadata=doc.metadata)
                 source_documents.append(desc_doc)
-            source_documents.append(doc)
+            source_documents.append(doc)  # 先插入description，再插入原文
         return web_content, source_documents
 
     def web_page_search(self, query, top_k=None):
@@ -120,6 +109,7 @@ class LocalDocQA:
 
     @get_time_async
     async def get_source_documents(self, query, retriever: ParentRetriever, kb_ids, time_record, hybrid_search, top_k):
+        source_documents = []
         start_time = time.perf_counter()
         query_docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
                                                              hybrid_search=hybrid_search, top_k=top_k)
@@ -132,33 +122,20 @@ class LocalDocQA:
         end_time = time.perf_counter()
         time_record['retriever_search'] = round(end_time - start_time, 2)
         debug_logger.info(f"retriever_search time: {time_record['retriever_search']}s")
-        default_kb = kb_ids[0] if kb_ids and len(kb_ids) == 1 else ''
-        total_docs = len(query_docs)
-        source_documents = []
+        # debug_logger.info(f"query_docs num: {len(query_docs)}, query_docs: {query_docs}")
         for idx, doc in enumerate(query_docs):
-            file_id = doc.metadata.get('file_id', '')
-            if not file_id:
-                debug_logger.warning(f"doc at idx {idx} missing file_id, doc_id: {doc.metadata.get('doc_id', '')}, skip")
+            if retriever.mysql_client.is_deleted_file(doc.metadata['file_id']):
+                debug_logger.warning(f"file_id: {doc.metadata['file_id']} is deleted")
                 continue
-            is_deleted = False
-            try:
-                is_deleted = retriever.mysql_client.is_deleted_file(file_id)
-            except Exception as e:
-                debug_logger.warning(f"check is_deleted_file error for file_id {file_id}: {e}")
-            if is_deleted:
-                debug_logger.warning(f"file_id: {file_id} is deleted, skip doc_id: {doc.metadata.get('doc_id', '')}")
-                doc.metadata['deleted'] = 1
-                continue
-            doc.metadata['deleted'] = 0
-            normalize_document_metadata(doc, embed_version=self.embeddings.embed_version,
-                                        retrieval_query=query, default_retrieval_source='unknown',
-                                        default_kb_id=default_kb, idx_for_fallback=idx, total_docs=total_docs,
-                                        force_retrieval_query=True)
-            doc.metadata['deleted'] = 0
+            doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
+            doc.metadata['embed_version'] = self.embeddings.embed_version
+            if 'score' not in doc.metadata:
+                doc.metadata['score'] = 1 - (idx / len(query_docs))  # TODO 这个score怎么获取呢
             source_documents.append(doc)
         debug_logger.info(f"embed scores: {[doc.metadata['score'] for doc in source_documents]}")
-        debug_logger.info(f"retrieval_sources: {[doc.metadata['retrieval_source'] for doc in source_documents]}")
-        debug_logger.info(f"embed_versions: {[doc.metadata['embed_version'] for doc in source_documents]}")
+        # if cosine_thresh:
+        #     source_documents = [item for item in source_documents if float(item.metadata['score']) > cosine_thresh]
+
         return source_documents
 
     def reprocess_source_documents(self, custom_llm: OpenAILLM, query: str,
@@ -507,36 +484,29 @@ class LocalDocQA:
         if need_web_search:
             t1 = time.perf_counter()
             web_search_results = self.web_page_search(query, top_k=3)
-            if web_search_results:
-                web_splitter = RecursiveCharacterTextSplitter(
-                    separators=SEPARATORS,
-                    chunk_size=web_chunk_size,
-                    chunk_overlap=int(web_chunk_size / 4),
-                    length_function=num_tokens_embed,
-                )
-                web_search_results = web_splitter.split_documents(web_search_results)
-                web_total = len(web_search_results)
-                current_doc_id = 0
-                current_file_id = web_search_results[0].metadata.get('file_id', 'websearch0')
-                for idx, doc in enumerate(web_search_results):
-                    doc_file_id = doc.metadata.get('file_id', current_file_id)
-                    if doc_file_id == current_file_id:
-                        doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
-                        current_doc_id += 1
-                    else:
-                        current_file_id = doc_file_id
-                        current_doc_id = 0
-                        doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
-                        current_doc_id += 1
-                    normalize_document_metadata(doc, embed_version=self.embeddings.embed_version,
-                                                retrieval_query=query, default_retrieval_source='web_search',
-                                                default_kb_id='web_search_kb', idx_for_fallback=idx,
-                                                total_docs=web_total)
-                    doc.metadata['deleted'] = 0
-                    doc_json = doc.to_json()
-                    if doc_json['kwargs'].get('metadata') is None:
-                        doc_json['kwargs']['metadata'] = doc.metadata
-                    self.milvus_summary.add_document(doc_id=doc.metadata['doc_id'], json_data=doc_json)
+            web_splitter = RecursiveCharacterTextSplitter(
+                separators=SEPARATORS,
+                chunk_size=web_chunk_size,
+                chunk_overlap=int(web_chunk_size / 4),
+                length_function=num_tokens_embed,
+            )
+            web_search_results = web_splitter.split_documents(web_search_results)
+
+            current_doc_id = 0
+            current_file_id = web_search_results[0].metadata['file_id']
+            for doc in web_search_results:
+                if doc.metadata['file_id'] == current_file_id:
+                    doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
+                    current_doc_id += 1
+                else:
+                    current_file_id = doc.metadata['file_id']
+                    current_doc_id = 0
+                    doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
+                    current_doc_id += 1
+                doc_json = doc.to_json()
+                if doc_json['kwargs'].get('metadata') is None:
+                    doc_json['kwargs']['metadata'] = doc.metadata
+                self.milvus_summary.add_document(doc_id=doc.metadata['doc_id'], json_data=doc_json)
 
             t2 = time.perf_counter()
             time_record['web_search'] = round(t2 - t1, 2)
@@ -557,37 +527,17 @@ class LocalDocQA:
                 source_documents = await self.rerank.arerank_documents(condense_question, source_documents)
                 t2 = time.perf_counter()
                 time_record['rerank'] = round(t2 - t1, 2)
-                for doc in source_documents:
-                    sbs = doc.metadata.get('scores_by_source')
-                    if isinstance(sbs, dict) and sbs:
-                        main_src = doc.metadata.get('retrieval_source', '')
-                        if main_src and main_src in sbs:
-                            raw_score = sbs[main_src]
-                        else:
-                            best_score = 0.0
-                            for v in sbs.values():
-                                try:
-                                    vv = float(v)
-                                except (TypeError, ValueError):
-                                    vv = 0.0
-                                if vv > best_score:
-                                    best_score = vv
-                            raw_score = best_score
-                        doc.metadata['rerank_score'] = doc.metadata.get('score', 0.0)
-                        doc.metadata['score'] = raw_score
-                    else:
-                        doc.metadata['rerank_score'] = doc.metadata.get('score', 0.0)
+                # 过滤掉低分的文档
                 debug_logger.info(f"rerank step1 num: {len(source_documents)}")
-                debug_logger.info(f"rerank step1 rerank_scores: {[doc.metadata['rerank_score'] for doc in source_documents]}")
-                debug_logger.info(f"rerank step1 original_scores: {[doc.metadata['score'] for doc in source_documents]}")
+                debug_logger.info(f"rerank step1 scores: {[doc.metadata['score'] for doc in source_documents]}")
                 if len(source_documents) > 1:
-                    if filtered_documents := [doc for doc in source_documents if doc.metadata['rerank_score'] >= 0.28]:
+                    if filtered_documents := [doc for doc in source_documents if doc.metadata['score'] >= 0.28]:
                         source_documents = filtered_documents
                     debug_logger.info(f"rerank step2 num: {len(source_documents)}")
                     saved_docs = [source_documents[0]]
                     for doc in source_documents[1:]:
-                        debug_logger.info(f"rerank doc rerank_score: {doc.metadata['rerank_score']}, original_score: {doc.metadata['score']}")
-                        relative_difference = (saved_docs[0].metadata['rerank_score'] - doc.metadata['rerank_score']) / saved_docs[0].metadata['rerank_score']
+                        debug_logger.info(f"rerank doc score: {doc.metadata['score']}")
+                        relative_difference = (saved_docs[0].metadata['score'] - doc.metadata['score']) / saved_docs[0].metadata['score']
                         if relative_difference > 0.5:
                             break
                         else:
@@ -598,49 +548,30 @@ class LocalDocQA:
                 time_record['rerank'] = 0.0
                 debug_logger.error(f"query {query}: kb_ids: {kb_ids}, rerank error: {traceback.format_exc()}")
 
+        # es检索+milvus检索结果最多可能是2k
         source_documents = source_documents[:top_k]
-        total_final = len(source_documents)
-        for idx, doc in enumerate(source_documents):
+
+        # rerank之后删除headers，只保留文本内容，用于后续处理
+        for doc in source_documents:
             doc.page_content = re.sub(r'^\[headers]\(.*?\)\n', '', doc.page_content)
-            normalize_document_metadata(doc, embed_version=self.embeddings.embed_version,
-                                        retrieval_query=query, default_retrieval_source='unknown',
-                                        idx_for_fallback=idx, total_docs=total_final,
-                                        force_retrieval_query=True)
 
-        high_score_faq_docs = []
+        high_score_faq_documents = [doc for doc in source_documents if
+                                    doc.metadata['file_name'].endswith('.faq') and doc.metadata['score'] >= 0.9]
+        if high_score_faq_documents:
+            source_documents = high_score_faq_documents
+        # FAQ完全匹配处理逻辑
         for doc in source_documents:
-            file_name = doc.metadata.get('file_name', '')
-            score = doc.metadata.get('score', 0.0)
-            try:
-                score = float(score)
-            except (TypeError, ValueError):
-                score = 0.0
-            if file_name.endswith('.faq') and score >= 0.9:
-                high_score_faq_docs.append(doc)
-        if high_score_faq_docs:
-            debug_logger.info(f"high score faq docs: {len(high_score_faq_docs)}, files: {[d.metadata.get('file_name', '') for d in high_score_faq_docs]}")
-            source_documents = high_score_faq_docs
-            for idx, doc in enumerate(source_documents):
-                normalize_document_metadata(doc, embed_version=self.embeddings.embed_version,
-                                            retrieval_query=query, default_retrieval_source='unknown',
-                                            idx_for_fallback=idx, total_docs=len(source_documents),
-                                            force_retrieval_query=True)
-
-        for doc in source_documents:
-            file_name = doc.metadata.get('file_name', '')
-            faq_dict = doc.metadata.get('faq_dict', {})
-            if file_name.endswith('.faq') and faq_dict and isinstance(faq_dict, dict):
-                faq_question = faq_dict.get('question', '')
-                if clear_string_is_equal(faq_question, query):
-                    debug_logger.info(f"match faq question: {query}")
-                    if only_need_search_results:
-                        yield source_documents, None
-                        return
-                    res = faq_dict.get('answer', '')
-                    async for response, history in self.generate_response(query, res, condense_question, source_documents,
-                                                                          time_record, chat_history, streaming, 'MATCH_FAQ'):
-                        yield response, history
+            if doc.metadata['file_name'].endswith('.faq') and clear_string_is_equal(
+                    doc.metadata['faq_dict']['question'], query):
+                debug_logger.info(f"match faq question: {query}")
+                if only_need_search_results:
+                    yield source_documents, None
                     return
+                res = doc.metadata['faq_dict']['answer']
+                async for response, history in self.generate_response(query, res, condense_question, source_documents,
+                                                                      time_record, chat_history, streaming, 'MATCH_FAQ'):
+                    yield response, history
+                return
 
         # 获取今日日期
         today = time.strftime("%Y-%m-%d", time.localtime())
