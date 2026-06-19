@@ -1,5 +1,5 @@
 import { useRouter } from 'vue-router';
-import { computeUserOverrides, getTemplateById } from '@/config/sceneTemplates';
+import { getTemplateById } from '@/config/sceneTemplates';
 
 export const useBots = defineStore('useBots', () => {
   const route = useRouter();
@@ -8,17 +8,14 @@ export const useBots = defineStore('useBots', () => {
     console.log('zj-route-name', name);
     return name === 'edit' ? 0 : 1;
   };
-  //是否展示创建Bot Modal
   const newBotsVisible = ref(false);
   const setNewBotsVisible = value => {
     newBotsVisible.value = value;
   };
-  //是否展示学则知识库Modal
   const selectKnowledgeVisible = ref(false);
   const setSelectKnowledgeVisible = value => {
     selectKnowledgeVisible.value = value;
   };
-  //是否展示复制链接Modal
   const copyUrlVisible = ref(false);
   const setCopyUrlVisible = value => {
     copyUrlVisible.value = value;
@@ -44,7 +41,6 @@ export const useBots = defineStore('useBots', () => {
     defaultBotList.value = value;
   };
 
-  // 当前正在编辑的bot
   const curBot = ref(null);
   const setCurBot = value => {
     curBot.value = value;
@@ -71,6 +67,7 @@ export const useBots = defineStore('useBots', () => {
   };
 
   const overriddenFields = ref<Set<string>>(new Set());
+
   const markFieldOverridden = (field: string) => {
     overriddenFields.value = new Set([...overriddenFields.value, field]);
   };
@@ -82,6 +79,7 @@ export const useBots = defineStore('useBots', () => {
   const isFieldOverridden = (field: string): boolean => {
     return overriddenFields.value.has(field);
   };
+
   const resetFieldToDefault = (field: string) => {
     const tpl = getTemplateById(selectedTemplateId.value);
     if (tpl) {
@@ -101,27 +99,21 @@ export const useBots = defineStore('useBots', () => {
     overriddenFields.value = new Set();
   };
 
-  const syncOverridesFromValues = (currentValues: Record<string, any>) => {
-    if (!selectedTemplateId.value) return;
-    const overrides = computeUserOverrides(selectedTemplateId.value, currentValues);
-    userOverrides.value = overrides;
-    const newOverridden = new Set<string>();
-    for (const key of Object.keys(overrides)) {
-      newOverridden.add(key);
+  const getMergedConfigValue = (field: string, fallback?: any) => {
+    if (curBot.value && curBot.value.merged_config) {
+      const val = curBot.value.merged_config[field];
+      if (val !== undefined) return val;
     }
-    overriddenFields.value = newOverridden;
+    const tpl = getTemplateById(selectedTemplateId.value);
+    if (tpl && tpl.defaults[field] !== undefined) return tpl.defaults[field];
+    return fallback;
   };
 
   const loadBotTemplateState = (botData: any) => {
     if (botData) {
       selectedTemplateId.value = botData.template_id || '';
-      const raw = botData.user_overrides;
-      userOverrides.value = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : {};
-      const newOverridden = new Set<string>();
-      for (const key of Object.keys(userOverrides.value)) {
-        newOverridden.add(key);
-      }
-      overriddenFields.value = newOverridden;
+      userOverrides.value = botData.user_overrides || {};
+      overriddenFields.value = new Set((botData.overridden_fields as string[]) || []);
     } else {
       selectedTemplateId.value = '';
       userOverrides.value = {};
@@ -160,7 +152,7 @@ export const useBots = defineStore('useBots', () => {
     isFieldOverridden,
     resetFieldToDefault,
     applyTemplate,
-    syncOverridesFromValues,
+    getMergedConfigValue,
     loadBotTemplateState,
   };
 });

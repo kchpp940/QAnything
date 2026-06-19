@@ -6,6 +6,17 @@ from qanything_kernel.utils.custom_log import debug_logger, qa_logger
 from qanything_kernel.configs.model_config import (BOT_DESC, BOT_IMAGE, BOT_PROMPT, BOT_WELCOME,
                                                    DEFAULT_PARENT_CHUNK_SIZE, MAX_CHARS, VECTOR_SEARCH_TOP_K,
                                                    UPLOAD_ROOT_PATH, IMAGES_ROOT_PATH)
+from qanything_kernel.configs.bot_template_resolver import (
+    resolve_bot_values,
+    compute_overridden_fields,
+    new_bot_build_persist_values,
+    update_bot_build_persist_values,
+    parse_user_overrides,
+    build_llm_setting_with_answer_style,
+    get_schema_version,
+    is_valid_template_id,
+)
+from qanything_kernel.configs.scene_templates import TEMPLATE_OVERRIDABLE_FIELDS, list_templates, get_template_meta
 from qanything_kernel.utils.general_utils import *
 from langchain.schema import Document
 from sanic.response import ResponseStream
@@ -659,26 +670,35 @@ async def local_doc_chat(req: request):
         if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id):
             return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
         bot_info = local_doc_qa.milvus_summary.get_bot(None, bot_id)[0]
-        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting, template_id, user_overrides = bot_info
+        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting_raw, template_id, user_overrides = bot_info
         kb_ids = kb_ids_str.split(',')
         if not kb_ids:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} unbound knowledge base.".format(bot_id)})
-        custom_prompt = prompt
-        if not llm_setting:
+        merged = resolve_bot_values(template_id, user_overrides)
+        custom_prompt = merged.get('prompt_setting', prompt)
+        if not llm_setting_raw:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} llm_setting is empty.".format(bot_id)})
-        llm_setting = json.loads(llm_setting)
-        rerank = llm_setting.get('rerank', True)
-        only_need_search_results = llm_setting.get('only_need_search_results', False)
-        need_web_search = llm_setting.get('networking', False)
+        if isinstance(llm_setting_raw, str):
+            try:
+                llm_setting = json.loads(llm_setting_raw)
+            except (json.JSONDecodeError, ValueError):
+                llm_setting = {}
+        elif isinstance(llm_setting_raw, dict):
+            llm_setting = dict(llm_setting_raw)
+        else:
+            llm_setting = {}
+        rerank = merged.get('rerank', llm_setting.get('rerank', True))
+        only_need_search_results = merged.get('only_need_search_results', llm_setting.get('only_need_search_results', False))
+        need_web_search = merged.get('networking', llm_setting.get('networking', False))
         api_base = llm_setting.get('api_base', '')
         api_key = llm_setting.get('api_key', 'ollama')
         api_context_length = llm_setting.get('api_context_length', 4096)
-        top_p = llm_setting.get('top_p', 0.99)
-        temperature = llm_setting.get('temperature', 0.5)
-        top_k = llm_setting.get('top_k', VECTOR_SEARCH_TOP_K)
+        top_p = merged.get('top_P', llm_setting.get('top_p', 0.99))
+        temperature = merged.get('temperature', llm_setting.get('temperature', 0.5))
+        top_k = merged.get('top_K', llm_setting.get('top_k', VECTOR_SEARCH_TOP_K))
         model = llm_setting.get('model', 'gpt-4o-mini')
         max_token = llm_setting.get('max_token')
-        hybrid_search = llm_setting.get('hybrid_search', False)
+        hybrid_search = merged.get('hybrid_search', llm_setting.get('hybrid_search', False))
         chunk_size = llm_setting.get('chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
     else:
         kb_ids = safe_get(req, 'kb_ids')
@@ -1272,12 +1292,35 @@ async def get_bot_info(req: request):
         else:
             kb_ids = []
             kb_names = []
+        template_id = bot_info[10] if len(bot_info) > 10 else ''
+        user_overrides_raw = bot_info[11] if len(bot_info) > 11 else '{}'
+        merged = resolve_bot_values(template_id, user_overrides_raw)
+        overridden_fields = compute_overridden_fields(template_id, user_overrides_raw)
+        parsed_overrides = parse_user_overrides(user_overrides_raw)
+        existing_llm = bot_info[9]
+        if isinstance(existing_llm, str):
+            try:
+                llm_json = json.loads(existing_llm)
+            except (json.JSONDecodeError, ValueError):
+                llm_json = {}
+        elif isinstance(existing_llm, dict):
+            llm_json = existing_llm
+        else:
+            llm_json = {}
+        llm_json['answer_style'] = merged.get('answer_style', '')
+        updated_llm = json.dumps(llm_json, ensure_ascii=False)
         info = {"bot_id": bot_info[0], "user_id": user_id, "bot_name": bot_info[1], "description": bot_info[2],
-                "head_image": bot_info[3], "prompt_setting": bot_info[4], "welcome_message": bot_info[5],
+                "head_image": bot_info[3],
+                "prompt_setting": merged.get('prompt_setting', bot_info[4]),
+                "welcome_message": merged.get('welcome_message', bot_info[5]),
                 "kb_ids": kb_ids, "kb_names": kb_names,
-                "update_time": bot_info[7].strftime("%Y-%m-%d %H:%M:%S"), "llm_setting": bot_info[9],
-                "template_id": bot_info[10] if len(bot_info) > 10 else '',
-                "user_overrides": bot_info[11] if len(bot_info) > 11 else '{}'}
+                "update_time": bot_info[7].strftime("%Y-%m-%d %H:%M:%S"),
+                "llm_setting": updated_llm,
+                "template_id": template_id,
+                "template_version": get_schema_version(),
+                "user_overrides": parsed_overrides,
+                "merged_config": merged,
+                "overridden_fields": overridden_fields}
         data.append(info)
     return sanic_json({"code": 200, "msg": "success", "data": data})
 
@@ -1299,6 +1342,20 @@ async def new_bot(req: request):
     kb_ids = safe_get(req, "kb_ids", [])
     kb_ids_str = ",".join(kb_ids)
     template_id = safe_get(req, "template_id", "")
+    user_overrides = safe_get(req, "user_overrides", {})
+
+    if template_id and not is_valid_template_id(template_id):
+        return sanic_json({"code": 2001, "msg": "fail, invalid template_id: {}".format(template_id)})
+
+    try:
+        merged, overrides_to_persist, prompt_welcome = new_bot_build_persist_values(
+            template_id,
+            user_overrides,
+            existing_raw_prompt=prompt_setting if prompt_setting != BOT_PROMPT else None,
+            existing_raw_welcome=welcome_message if welcome_message != BOT_WELCOME else None,
+        )
+    except ValueError as ve:
+        return sanic_json({"code": 2001, "msg": "fail, {}".format(ve)})
 
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
     if not_exist_kb_ids:
@@ -1306,11 +1363,19 @@ async def new_bot(req: request):
         return sanic_json({"code": 2001, "msg": msg, "data": [{}]})
     debug_logger.info("new_bot %s", user_id)
     bot_id = 'BOT' + uuid.uuid4().hex
-    local_doc_qa.milvus_summary.new_qanything_bot(bot_id, user_id, bot_name, desc, head_image, prompt_setting,
-                                                  welcome_message, kb_ids_str, template_id=template_id)
+    local_doc_qa.milvus_summary.new_qanything_bot(
+        bot_id, user_id, bot_name, desc, head_image,
+        prompt_welcome['prompt_setting'],
+        prompt_welcome['welcome_message'],
+        kb_ids_str,
+        template_id=template_id,
+        user_overrides=json.dumps(overrides_to_persist, ensure_ascii=False)
+    )
     create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return sanic_json({"code": 200, "msg": "success create qanything bot {}".format(bot_id),
-                       "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time}})
+                       "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time,
+                                "template_id": template_id, "template_version": get_schema_version(),
+                                "merged_config": merged, "user_overrides": overrides_to_persist}})
 
 
 @get_time_async
@@ -1366,48 +1431,98 @@ async def update_bot(req: request):
         llm_setting["api_key"] = api_key
     if api_context_length := safe_get(req, "api_context_length"):
         llm_setting["api_context_length"] = api_context_length
-    if top_p := safe_get(req, "top_p"):
-        llm_setting["top_p"] = top_p
-    if top_k := safe_get(req, "top_k"):
-        llm_setting["top_k"] = top_k
     if chunk_size := safe_get(req, "chunk_size"):
         llm_setting["chunk_size"] = chunk_size
-    if temperature := safe_get(req, "temperature"):
-        llm_setting["temperature"] = temperature
     if model := safe_get(req, "model"):
         llm_setting["model"] = model
     if max_token := safe_get(req, "max_token"):
         llm_setting["max_token"] = max_token
+
+    old_template_id = bot_info[10] if len(bot_info) > 10 else ''
+    old_user_overrides_raw = bot_info[11] if len(bot_info) > 11 else '{}'
+    old_merged = resolve_bot_values(old_template_id, old_user_overrides_raw)
+
+    new_template_id = safe_get(req, "template_id")
+    if new_template_id is None:
+        new_template_id = old_template_id
+    if new_template_id and not is_valid_template_id(new_template_id):
+        return sanic_json({"code": 2001, "msg": "fail, invalid template_id: {}".format(new_template_id)})
+
+    req_override = safe_get(req, "user_overrides")
+    if req_override is None:
+        req_override = {}
+    elif isinstance(req_override, str):
+        try:
+            req_override = json.loads(req_override)
+        except (json.JSONDecodeError, ValueError):
+            req_override = {}
+
+    raw_field_updates: Dict[str, Any] = {}
+    top_p_val = safe_get(req, "top_p")
+    if top_p_val is not None:
+        raw_field_updates["top_P"] = top_p_val
+        llm_setting["top_p"] = top_p_val
+    top_k_val = safe_get(req, "top_k")
+    if top_k_val is not None:
+        raw_field_updates["top_K"] = top_k_val
+        llm_setting["top_k"] = top_k_val
+    temperature_val = safe_get(req, "temperature")
+    if temperature_val is not None:
+        raw_field_updates["temperature"] = temperature_val
+        llm_setting["temperature"] = temperature_val
     rerank = safe_get(req, "rerank")
     if rerank is not None:
+        raw_field_updates["rerank"] = rerank
         llm_setting["rerank"] = rerank
     hybrid_search = safe_get(req, "hybrid_search")
     if hybrid_search is not None:
+        raw_field_updates["hybrid_search"] = hybrid_search
         llm_setting["hybrid_search"] = hybrid_search
     networking = safe_get(req, "networking")
     if networking is not None:
+        raw_field_updates["networking"] = networking
         llm_setting["networking"] = networking
     only_need_search_results = safe_get(req, "only_need_search_results")
     if only_need_search_results is not None:
+        raw_field_updates["only_need_search_results"] = only_need_search_results
         llm_setting["only_need_search_results"] = only_need_search_results
     answer_style = safe_get(req, "answer_style")
     if answer_style is not None:
+        raw_field_updates["answer_style"] = answer_style
         llm_setting["answer_style"] = answer_style
+    prompt_setting_req = safe_get(req, "prompt_setting")
+    if prompt_setting_req is not None:
+        raw_field_updates["prompt_setting"] = prompt_setting_req
+    welcome_message_req = safe_get(req, "welcome_message")
+    if welcome_message_req is not None:
+        raw_field_updates["welcome_message"] = welcome_message_req
 
-    template_id = safe_get(req, "template_id")
-    if template_id is not None:
-        template_id_val = template_id
-    else:
-        template_id_val = bot_info[10] if len(bot_info) > 10 else ''
+    try:
+        new_merged, overrides_to_persist, prompt_welcome = update_bot_build_persist_values(
+            old_template_id,
+            new_template_id,
+            req_override,
+            old_merged_values=old_merged,
+            raw_field_updates=raw_field_updates,
+        )
+    except ValueError as ve:
+        return sanic_json({"code": 2001, "msg": "fail, {}".format(ve)})
 
-    user_overrides_val = safe_get(req, "user_overrides")
-    if user_overrides_val is not None:
-        user_overrides_str = user_overrides_val if isinstance(user_overrides_val, str) else json.dumps(user_overrides_val, ensure_ascii=False)
-    else:
-        user_overrides_str = bot_info[11] if len(bot_info) > 11 else '{}'
+    llm_setting["top_p"] = new_merged["top_P"]
+    llm_setting["top_k"] = new_merged["top_K"]
+    llm_setting["temperature"] = new_merged["temperature"]
+    llm_setting["rerank"] = new_merged["rerank"]
+    llm_setting["hybrid_search"] = new_merged["hybrid_search"]
+    llm_setting["networking"] = new_merged["networking"]
+    llm_setting["only_need_search_results"] = new_merged["only_need_search_results"]
+    llm_setting["answer_style"] = new_merged["answer_style"]
+
+    prompt_setting_final = prompt_welcome["prompt_setting"]
+    welcome_message_final = prompt_welcome["welcome_message"]
+    user_overrides_str = json.dumps(overrides_to_persist, ensure_ascii=False)
 
     debug_logger.info(f"update llm_setting: {llm_setting}")
-    debug_logger.info(f"update template_id: {template_id_val}")
+    debug_logger.info(f"update template_id: {new_template_id}")
     debug_logger.info(f"update user_overrides: {user_overrides_str}")
 
     if bot_name != bot_info[1]:
@@ -1416,18 +1531,25 @@ async def update_bot(req: request):
         debug_logger.info(f"update bot description from {bot_info[2]} to {description}")
     if head_image != bot_info[3]:
         debug_logger.info(f"update bot head_image from {bot_info[3]} to {head_image}")
-    if prompt_setting != bot_info[4]:
-        debug_logger.info(f"update bot prompt_setting from {bot_info[4]} to {prompt_setting}")
-    if welcome_message != bot_info[5]:
-        debug_logger.info(f"update bot welcome_message from {bot_info[5]} to {welcome_message}")
+    if prompt_setting_final != bot_info[4]:
+        debug_logger.info(f"update bot prompt_setting from {bot_info[4]} to {prompt_setting_final}")
+    if welcome_message_final != bot_info[5]:
+        debug_logger.info(f"update bot welcome_message from {bot_info[5]} to {welcome_message_final}")
     if kb_ids_str != bot_info[6]:
         debug_logger.info(f"update bot kb_ids from {bot_info[6]} to {kb_ids_str}")
     update_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     debug_logger.info(f"update_time: {update_time}")
-    local_doc_qa.milvus_summary.update_bot(user_id, bot_id, bot_name, description, head_image, prompt_setting,
-                                           welcome_message, kb_ids_str, update_time, llm_setting,
-                                           template_id=template_id_val, user_overrides=user_overrides_str)
-    return sanic_json({"code": 200, "msg": "Bot {} update success".format(bot_id)})
+    local_doc_qa.milvus_summary.update_bot(user_id, bot_id, bot_name, description, head_image, prompt_setting_final,
+                                           welcome_message_final, kb_ids_str, update_time, llm_setting,
+                                           template_id=new_template_id, user_overrides=user_overrides_str)
+    return sanic_json({"code": 200, "msg": "Bot {} update success".format(bot_id),
+                       "data": {
+                           "bot_id": bot_id,
+                           "template_id": new_template_id,
+                           "template_version": get_schema_version(),
+                           "merged_config": new_merged,
+                           "user_overrides": overrides_to_persist,
+                       }})
 
 
 @get_time_async

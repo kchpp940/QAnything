@@ -136,12 +136,7 @@ import { getLanguage } from '@/language/index';
 import ChatSettingForm from '@/components/ChatSettingForm.vue';
 import { useChatSetting } from '@/store/useChatSetting';
 import { useBotsChat } from '@/store/useBotsChat';
-import {
-  SCENE_TEMPLATES,
-  getTemplateById,
-  applyTemplateWithOverrides,
-  computeUserOverrides,
-} from '@/config/sceneTemplates';
+import { SCENE_TEMPLATES, getTemplateById } from '@/config/sceneTemplates';
 
 const { curBot, knowledgeList, selectedTemplateId, userOverrides } = storeToRefs(useBots());
 const { QA_List } = storeToRefs(useBotsChat());
@@ -152,8 +147,8 @@ const {
   markFieldOverridden,
   isFieldOverridden,
   resetFieldToDefault,
-  syncOverridesFromValues,
   loadBotTemplateState,
+  setUserOverrides,
 } = useBots();
 const { setChatSettingConfigured } = useChatSetting();
 const { chatSettingFormActive } = storeToRefs(useChatSetting());
@@ -172,15 +167,12 @@ const matches: any = computed(() => roleSetting.value.match(/[^a-zA-Z\s]|\p{P}|\
 onMounted(() => {
   console.log('curBot', curBot.value);
   name.value = curBot.value.bot_name;
-  welcomeMessage.value = curBot.value.welcome_message;
-  roleSetting.value = curBot.value.prompt_setting;
   loadBotTemplateState(curBot.value);
   activeTemplateId.value = selectedTemplateId.value;
-  if (selectedTemplateId.value) {
-    const merged = applyTemplateWithOverrides(selectedTemplateId.value, userOverrides.value);
-    roleSetting.value = merged.prompt_setting;
-    welcomeMessage.value = merged.welcome_message;
-    answerStyle.value = merged.answer_style || '';
+  roleSetting.value = curBot.value.prompt_setting;
+  welcomeMessage.value = curBot.value.welcome_message;
+  if (curBot.value.merged_config && curBot.value.merged_config.answer_style !== undefined) {
+    answerStyle.value = curBot.value.merged_config.answer_style;
   } else {
     const llm = curBot.value.llm_setting;
     const parsed = llm
@@ -206,34 +198,52 @@ const onTemplateChange = (templateId: string) => {
   }
 };
 
+const getCurrentVal = (field: string) => {
+  switch (field) {
+    case 'prompt_setting':
+      return roleSetting.value;
+    case 'welcome_message':
+      return welcomeMessage.value;
+    case 'answer_style':
+      return answerStyle.value;
+    case 'top_K':
+      return chatSettingFormActive.value.top_K;
+    case 'rerank':
+      return chatSettingFormActive.value.capabilities.rerank;
+    case 'networking':
+      return chatSettingFormActive.value.capabilities.networkSearch;
+    case 'hybrid_search':
+      return chatSettingFormActive.value.capabilities.mixedSearch;
+    case 'only_need_search_results':
+      return chatSettingFormActive.value.capabilities.onlySearch;
+    case 'temperature':
+      return chatSettingFormActive.value.temperature;
+    case 'top_P':
+      return chatSettingFormActive.value.top_P;
+    default:
+      return undefined;
+  }
+};
+
 const onFieldChange = (field: string) => {
   if (!activeTemplateId.value) return;
   const tpl = getTemplateById(activeTemplateId.value);
   if (!tpl) return;
-  let currentVal: any;
-  if (field === 'prompt_setting') currentVal = roleSetting.value;
-  else if (field === 'welcome_message') currentVal = welcomeMessage.value;
-  else if (field === 'answer_style') currentVal = answerStyle.value;
-  if (currentVal !== tpl.defaults[field]) {
+  const curVal = getCurrentVal(field);
+  const defaults = tpl.defaults;
+  const defVal = defaults[field as keyof typeof defaults];
+  if (curVal !== undefined && curVal !== defVal) {
     markFieldOverridden(field);
+    const newOverrides = { ...userOverrides.value };
+    newOverrides[field] = curVal;
+    setUserOverrides(newOverrides);
   }
-  syncCurrentOverrides();
-};
-
-const syncCurrentOverrides = () => {
-  if (!activeTemplateId.value) return;
-  const currentValues: Record<string, any> = {
-    prompt_setting: roleSetting.value,
-    welcome_message: welcomeMessage.value,
-    answer_style: answerStyle.value,
-  };
-  syncOverridesFromValues(currentValues);
 };
 
 const resetField = (field: string) => {
   const tpl = getTemplateById(activeTemplateId.value);
   if (!tpl) return;
-  const defaultVal = tpl.defaults[field];
+  const defaultVal = tpl.defaults[field as keyof typeof tpl.defaults];
   if (field === 'prompt_setting') roleSetting.value = defaultVal;
   else if (field === 'welcome_message') welcomeMessage.value = defaultVal;
   else if (field === 'answer_style') answerStyle.value = defaultVal;
@@ -272,27 +282,9 @@ const saveBotInfo = async () => {
       chunk_size: chatSettingFormActive.value.chunkSize,
       rerank: chatSettingFormActive.value.capabilities.rerank,
       answer_style: answerStyle.value,
+      template_id: activeTemplateId.value || '',
+      user_overrides: userOverrides.value || {},
     };
-    if (activeTemplateId.value) {
-      updateParams.template_id = activeTemplateId.value;
-      const currentValues: Record<string, any> = {
-        prompt_setting: roleSetting.value,
-        welcome_message: welcomeMessage.value,
-        top_K: chatSettingFormActive.value.top_K,
-        rerank: chatSettingFormActive.value.capabilities.rerank,
-        networking: chatSettingFormActive.value.capabilities.networkSearch,
-        hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-        only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-        temperature: chatSettingFormActive.value.temperature,
-        top_P: chatSettingFormActive.value.top_P,
-        answer_style: answerStyle.value,
-      };
-      const overrides = computeUserOverrides(activeTemplateId.value, currentValues);
-      updateParams.user_overrides = JSON.stringify(overrides);
-    } else {
-      updateParams.template_id = '';
-      updateParams.user_overrides = '{}';
-    }
     await resultControl(await urlResquest.updateBot(updateParams));
     await getBotInfo(curBot.value.bot_id);
   } catch (e) {

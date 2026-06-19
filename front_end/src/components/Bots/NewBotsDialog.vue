@@ -133,15 +133,9 @@ const onFinish = async (values: any) => {
     const createParams: any = {
       bot_name: values.name,
       description: values.introduction,
+      template_id: selectedTemplateId.value || '',
+      user_overrides: {},
     };
-    if (selectedTemplateId.value) {
-      createParams.template_id = selectedTemplateId.value;
-      const tpl = getTemplateById(selectedTemplateId.value);
-      if (tpl) {
-        createParams.prompt_setting = tpl.defaults.prompt_setting;
-        createParams.welcome_message = tpl.defaults.welcome_message;
-      }
-    }
     const res: any = await resultControl(await urlResquest.createBot(createParams));
     await getBotInfo(res.bot_id);
     message.success(bots.creationSuccessful);
