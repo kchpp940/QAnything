@@ -30,6 +30,7 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 import traceback
 import re
+import hashlib
 
 
 class LocalDocQA:
@@ -128,11 +129,20 @@ class LocalDocQA:
             if retriever.mysql_client.is_deleted_file(doc.metadata.get('file_id', '')):
                 debug_logger.warning(f"file_id: {doc.metadata.get('file_id', '')} is deleted")
                 continue
+            doc_id = doc.metadata.get('doc_id', '')
+            file_id = doc.metadata.get('file_id', '')
+            chunk_index = doc_id.split('_')[-1] if '_' in doc_id else '0'
+            content_hash = hashlib.md5(doc.page_content.encode()).hexdigest()[:8]
+            source = doc.metadata.get('retrieval_source', 'unknown')
+            candidate_id = f"{source}_{doc_id}_{chunk_index}_{content_hash}"
             raw_candidates.append({
-                'doc_id': doc.metadata.get('doc_id', ''),
-                'file_id': doc.metadata.get('file_id', ''),
+                'candidate_id': candidate_id,
+                'doc_id': doc_id,
+                'file_id': file_id,
+                'chunk_index': chunk_index,
+                'content_hash': content_hash,
                 'score': float(doc.metadata.get('score', 1.0)),
-                'source': doc.metadata.get('retrieval_source', 'unknown'),
+                'source': source,
             })
 
         milvus_hit_count = sum(1 for c in raw_candidates if c['source'] == 'milvus')
@@ -545,28 +555,55 @@ class LocalDocQA:
         candidate_map = {}
         for c in retrieval_source_info.get('raw_candidates', []):
             doc_id = c['doc_id']
-            candidate_map[doc_id] = {
-                'id': doc_id,
-                'doc_id': doc_id,
-                'file_id': c['file_id'],
-                'retrieval_source': c['source'],
-                'stage_traces': [{'stage': 'retrieval', 'score': c['score']}],
-                'final_selected': False,
-                'final_filter_reason': '',
-            }
-
-        for rank, doc in enumerate(source_documents):
-            doc_id = doc.metadata.get('doc_id', '')
-            if doc_id not in candidate_map:
+            if doc_id in candidate_map:
+                candidate_map[doc_id]['retrieval_sources'].append({
+                    'source': c['source'],
+                    'retrieval_score': c['score'],
+                })
+                candidate_map[doc_id]['stage_traces'].append(
+                    {'stage': 'retrieval', 'source': c['source'], 'score': c['score']}
+                )
+            else:
                 candidate_map[doc_id] = {
-                    'id': doc_id,
+                    'id': c['candidate_id'],
                     'doc_id': doc_id,
-                    'file_id': doc.metadata.get('file_id', ''),
-                    'retrieval_source': doc.metadata.get('retrieval_source', 'web'),
-                    'stage_traces': [],
+                    'file_id': c['file_id'],
+                    'chunk_index': c['chunk_index'],
+                    'content_hash': c['content_hash'],
+                    'retrieval_sources': [{'source': c['source'], 'retrieval_score': c['score']}],
+                    'stage_traces': [{'stage': 'retrieval', 'source': c['source'], 'score': c['score']}],
                     'final_selected': False,
                     'final_filter_reason': '',
                 }
+
+        for rank, doc in enumerate(source_documents):
+            doc_id = doc.metadata.get('doc_id', '')
+            content_hash = hashlib.md5(doc.page_content.encode()).hexdigest()[:8]
+            chunk_index = doc_id.split('_')[-1] if '_' in doc_id else '0'
+            source = doc.metadata.get('retrieval_source', 'web')
+            candidate_id = f"{source}_{doc_id}_{chunk_index}_{content_hash}"
+            if doc_id not in candidate_map:
+                candidate_map[doc_id] = {
+                    'id': candidate_id,
+                    'doc_id': doc_id,
+                    'file_id': doc.metadata.get('file_id', ''),
+                    'chunk_index': chunk_index,
+                    'content_hash': content_hash,
+                    'retrieval_sources': [{'source': source, 'retrieval_score': float(doc.metadata.get('score', 0))}],
+                    'stage_traces': [{'stage': 'retrieval', 'source': source, 'score': float(doc.metadata.get('score', 0))}],
+                    'final_selected': False,
+                    'final_filter_reason': '',
+                }
+            else:
+                existing_sources = [s['source'] for s in candidate_map[doc_id]['retrieval_sources']]
+                if source not in existing_sources:
+                    candidate_map[doc_id]['retrieval_sources'].append({
+                        'source': source,
+                        'retrieval_score': float(doc.metadata.get('score', 0)),
+                    })
+                    candidate_map[doc_id]['stage_traces'].append(
+                        {'stage': 'retrieval', 'source': source, 'score': float(doc.metadata.get('score', 0))}
+                    )
             candidate_map[doc_id]['stage_traces'].append(
                 {'stage': 'before_rerank', 'score': float(doc.metadata.get('score', 0)), 'rank': rank + 1}
             )

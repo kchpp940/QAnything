@@ -925,32 +925,36 @@ class KnowledgeBaseManager:
 
         candidates = retrieval_trace.get('candidates', [])
 
-        milvus_hit_count = sum(1 for c in candidates if c.get('retrieval_source') == 'milvus')
-        es_hit_count = sum(1 for c in candidates if c.get('retrieval_source') == 'es')
+        milvus_hit_count = 0
+        es_hit_count = 0
+        for c in candidates:
+            for src in c.get('retrieval_sources', []):
+                if src.get('source') == 'milvus':
+                    milvus_hit_count += 1
+                elif src.get('source') == 'es':
+                    es_hit_count += 1
 
-        def _get_stage_score(candidate, stage_name):
+        def _get_stage_trace(candidate, stage_name):
             for s in candidate.get('stage_traces', []):
                 if s.get('stage') == stage_name:
-                    return s.get('score', 0)
-            return None
-
-        def _get_stage_rank(candidate, stage_name):
-            for s in candidate.get('stage_traces', []):
-                if s.get('stage') == stage_name:
-                    return s.get('rank')
+                    return s
             return None
 
         before_rerank_cands = []
         after_rerank_cands = []
         for c in candidates:
-            br_score = _get_stage_score(c, 'before_rerank')
-            br_rank = _get_stage_rank(c, 'before_rerank')
-            if br_score is not None:
-                before_rerank_cands.append({'doc_id': c['doc_id'], 'file_id': c['file_id'], 'score': br_score, 'rank': br_rank})
-            ar_score = _get_stage_score(c, 'after_rerank')
-            ar_rank = _get_stage_rank(c, 'after_rerank')
-            if ar_score is not None:
-                after_rerank_cands.append({'doc_id': c['doc_id'], 'file_id': c['file_id'], 'score': ar_score, 'rank': ar_rank})
+            br = _get_stage_trace(c, 'before_rerank')
+            if br is not None:
+                before_rerank_cands.append({
+                    'doc_id': c['doc_id'], 'file_id': c['file_id'],
+                    'score': br.get('score', 0), 'rank': br.get('rank'),
+                })
+            ar = _get_stage_trace(c, 'after_rerank')
+            if ar is not None:
+                after_rerank_cands.append({
+                    'doc_id': c['doc_id'], 'file_id': c['file_id'],
+                    'score': ar.get('score', 0), 'rank': ar.get('rank'),
+                })
 
         before_rerank_cands.sort(key=lambda x: (x.get('rank') or 999999, -x.get('score', 0)))
         after_rerank_cands.sort(key=lambda x: (x.get('rank') or 999999, -x.get('score', 0)))
@@ -967,7 +971,7 @@ class KnowledgeBaseManager:
         candidate_count = len(final_citations)
         final_citation_count = len(final_citations)
         if final_citations:
-            top_score = float(max((_get_stage_score(c, 'final_citation') or 0) for c in final_citations))
+            top_score = float(max((_get_stage_trace(c, 'final_citation') or {}).get('score', 0) for c in final_citations))
         else:
             top_score = 0.0
 
