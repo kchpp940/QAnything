@@ -650,9 +650,10 @@ const getStageName = (stage: string): string => {
     chunk: common.stageChunk,
     milvus_insert: common.stageMilvusInsert,
     es_index: common.stageEsIndex,
+    rollback: common.stageRollback,
+    cleanup: common.stageCleanup,
     completed: common.stageCompleted,
     failed: common.stageFailed,
-    rollback: common.stageRollback,
   };
   return stageMap[stage] || stage;
 };
@@ -662,7 +663,8 @@ const getStageStatusText = (status: string): string => {
     pending: common.statusPending,
     running: common.statusRunning,
     success: common.statusSuccess,
-    failed: common.stageFailed,
+    failed: common.statusFailed,
+    partial_success: common.statusPartialSuccess,
   };
   return statusMap[status] || status;
 };

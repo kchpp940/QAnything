@@ -11,9 +11,10 @@ class FileStage(Enum):
     CHUNK = "chunk"
     MILVUS_INSERT = "milvus_insert"
     ES_INDEX = "es_index"
+    ROLLBACK = "rollback"
+    CLEANUP = "cleanup"
     COMPLETED = "completed"
     FAILED = "failed"
-    ROLLBACK = "rollback"
 
 
 class FileStageStatus(Enum):
@@ -21,6 +22,7 @@ class FileStageStatus(Enum):
     RUNNING = "running"
     SUCCESS = "success"
     FAILED = "failed"
+    PARTIAL_SUCCESS = "partial_success"
 
 
 class ErrorCode(Enum):
@@ -40,6 +42,7 @@ class ErrorCode(Enum):
     ES_CONNECTION_ERROR = "E402"
     ES_INDEX_ERROR = "E403"
     ROLLBACK_ERROR = "E501"
+    CLEANUP_ERROR = "E502"
 
 
 RETRYABLE_ERRORS = {
@@ -51,6 +54,8 @@ RETRYABLE_ERRORS = {
     ErrorCode.ES_INDEX_ERROR,
     ErrorCode.PARSE_TIMEOUT,
     ErrorCode.UNKNOWN_ERROR,
+    ErrorCode.ROLLBACK_ERROR,
+    ErrorCode.CLEANUP_ERROR,
 }
 
 
@@ -76,6 +81,12 @@ class FileProgressTracker:
             FileStage.ES_INDEX,
         ]
 
+    def _get_all_stages(self) -> List[FileStage]:
+        return self._get_stage_order() + [
+            FileStage.ROLLBACK,
+            FileStage.CLEANUP,
+        ]
+
     def calculate_progress(self, stage_progress: Dict[str, float]) -> int:
         total_progress = 0
         stage_order = self._get_stage_order()
@@ -91,7 +102,7 @@ class FileProgressTracker:
         stage_progress = {}
         stage_details = {}
 
-        for stage in self._get_stage_order():
+        for stage in self._get_all_stages():
             stage_progress[stage.value] = 0
             stage_details[stage.value] = {
                 "status": FileStageStatus.PENDING.value,
@@ -112,6 +123,19 @@ class FileProgressTracker:
             "retryable": False,
             "retry_count": 0,
             "last_updated": datetime.now().isoformat(),
+            "rollback_info": {
+                "milvus_cleared": False,
+                "es_cleared": False,
+                "mysql_cleared": False,
+            },
+            "cleanup_info": {
+                "milvus_checked": False,
+                "es_checked": False,
+                "mysql_checked": False,
+                "milvus_cleared": False,
+                "es_cleared": False,
+                "mysql_cleared": False,
+            },
         }
 
         return progress_data
@@ -270,3 +294,228 @@ class FileProgressTracker:
             debug_logger.error(f"Failed to load progress for file {file_id}: {e}")
 
         return None
+
+    def update_stage_partial_success(self, progress_data: Dict[str, Any], stage: FileStage,
+                                      partial_info: Dict[str, Any]) -> Dict[str, Any]:
+        stage_value = stage.value
+        now = datetime.now()
+
+        start_time = progress_data["stage_details"][stage_value].get("start_time")
+        duration = None
+        if start_time:
+            try:
+                start_dt = datetime.fromisoformat(start_time)
+                duration = round((now - start_dt).total_seconds(), 2)
+            except Exception as e:
+                debug_logger.error(f"Error calculating duration: {e}")
+
+        progress_data["stage_details"][stage_value].update({
+            "status": FileStageStatus.PARTIAL_SUCCESS.value,
+            "end_time": now.isoformat(),
+            "duration": duration,
+            "partial_info": partial_info,
+        })
+
+        insert_logger.warning(
+            f"File {progress_data['file_id']} partial success at stage: {stage_value}, "
+            f"partial_info: {partial_info}"
+        )
+
+        return progress_data
+
+    def update_rollback_start(self, progress_data: Dict[str, Any], failed_stage: FileStage) -> Dict[str, Any]:
+        stage_value = FileStage.ROLLBACK.value
+        now = datetime.now()
+
+        if stage_value not in progress_data["stage_details"]:
+            progress_data["stage_details"][stage_value] = {}
+
+        progress_data["stage_details"][stage_value].update({
+            "status": FileStageStatus.RUNNING.value,
+            "start_time": now.isoformat(),
+        })
+
+        progress_data["current_stage"] = FileStage.ROLLBACK.value
+        progress_data["rollback_info"] = progress_data.get("rollback_info", {})
+        progress_data["rollback_info"]["failed_stage"] = failed_stage.value
+        progress_data["last_updated"] = now.isoformat()
+
+        insert_logger.info(
+            f"File {progress_data['file_id']} starting rollback from failed stage: {failed_stage.value}"
+        )
+
+        return progress_data
+
+    def update_rollback_step(self, progress_data: Dict[str, Any], step: str,
+                             status: str, details: Optional[str] = None) -> Dict[str, Any]:
+        rollback_info = progress_data.get("rollback_info", {})
+        rollback_info[step] = True if status == "success" else False
+        if details:
+            rollback_info[f"{step}_detail"] = details
+        progress_data["rollback_info"] = rollback_info
+        progress_data["last_updated"] = datetime.now().isoformat()
+        return progress_data
+
+    def update_rollback_success(self, progress_data: Dict[str, Any]) -> Dict[str, Any]:
+        stage_value = FileStage.ROLLBACK.value
+        now = datetime.now()
+
+        start_time = progress_data["stage_details"][stage_value].get("start_time")
+        duration = None
+        if start_time:
+            try:
+                start_dt = datetime.fromisoformat(start_time)
+                duration = round((now - start_dt).total_seconds(), 2)
+            except Exception as e:
+                debug_logger.error(f"Error calculating duration: {e}")
+
+        progress_data["stage_details"][stage_value].update({
+            "status": FileStageStatus.SUCCESS.value,
+            "end_time": now.isoformat(),
+            "duration": duration,
+        })
+
+        progress_data["current_stage"] = FileStage.FAILED.value
+        progress_data["last_updated"] = now.isoformat()
+
+        insert_logger.info(
+            f"File {progress_data['file_id']} rollback completed successfully, "
+            f"rollback_info: {progress_data.get('rollback_info')}"
+        )
+
+        return progress_data
+
+    def update_rollback_failed(self, progress_data: Dict[str, Any],
+                               error_message: str) -> Dict[str, Any]:
+        stage_value = FileStage.ROLLBACK.value
+        now = datetime.now()
+
+        start_time = progress_data["stage_details"][stage_value].get("start_time")
+        duration = None
+        if start_time:
+            try:
+                start_dt = datetime.fromisoformat(start_time)
+                duration = round((now - start_dt).total_seconds(), 2)
+            except Exception as e:
+                debug_logger.error(f"Error calculating duration: {e}")
+
+        progress_data["stage_details"][stage_value].update({
+            "status": FileStageStatus.FAILED.value,
+            "end_time": now.isoformat(),
+            "duration": duration,
+            "error_code": ErrorCode.ROLLBACK_ERROR.value,
+            "error_message": error_message,
+        })
+
+        progress_data["current_stage"] = FileStage.FAILED.value
+        progress_data["retryable"] = False
+        progress_data["last_updated"] = now.isoformat()
+
+        insert_logger.error(
+            f"File {progress_data['file_id']} rollback failed: {error_message}"
+        )
+
+        return progress_data
+
+    def update_cleanup_start(self, progress_data: Dict[str, Any]) -> Dict[str, Any]:
+        stage_value = FileStage.CLEANUP.value
+        now = datetime.now()
+
+        if stage_value not in progress_data["stage_details"]:
+            progress_data["stage_details"][stage_value] = {}
+
+        progress_data["stage_details"][stage_value].update({
+            "status": FileStageStatus.RUNNING.value,
+            "start_time": now.isoformat(),
+        })
+
+        progress_data["current_stage"] = FileStage.CLEANUP.value
+        progress_data["cleanup_info"] = progress_data.get("cleanup_info", {})
+        progress_data["last_updated"] = now.isoformat()
+
+        insert_logger.info(
+            f"File {progress_data['file_id']} starting cleanup before retry"
+        )
+
+        return progress_data
+
+    def update_cleanup_step(self, progress_data: Dict[str, Any], step: str,
+                            status: str, details: Optional[str] = None) -> Dict[str, Any]:
+        cleanup_info = progress_data.get("cleanup_info", {})
+        cleanup_info[step] = True if status == "success" else False
+        if details:
+            cleanup_info[f"{step}_detail"] = details
+        progress_data["cleanup_info"] = cleanup_info
+        progress_data["last_updated"] = datetime.now().isoformat()
+        return progress_data
+
+    def update_cleanup_success(self, progress_data: Dict[str, Any]) -> Dict[str, Any]:
+        stage_value = FileStage.CLEANUP.value
+        now = datetime.now()
+
+        start_time = progress_data["stage_details"][stage_value].get("start_time")
+        duration = None
+        if start_time:
+            try:
+                start_dt = datetime.fromisoformat(start_time)
+                duration = round((now - start_dt).total_seconds(), 2)
+            except Exception as e:
+                debug_logger.error(f"Error calculating duration: {e}")
+
+        progress_data["stage_details"][stage_value].update({
+            "status": FileStageStatus.SUCCESS.value,
+            "end_time": now.isoformat(),
+            "duration": duration,
+        })
+
+        progress_data["last_updated"] = now.isoformat()
+
+        insert_logger.info(
+            f"File {progress_data['file_id']} cleanup completed successfully, "
+            f"cleanup_info: {progress_data.get('cleanup_info')}"
+        )
+
+        return progress_data
+
+    def update_cleanup_failed(self, progress_data: Dict[str, Any],
+                              error_message: str) -> Dict[str, Any]:
+        stage_value = FileStage.CLEANUP.value
+        now = datetime.now()
+
+        start_time = progress_data["stage_details"][stage_value].get("start_time")
+        duration = None
+        if start_time:
+            try:
+                start_dt = datetime.fromisoformat(start_time)
+                duration = round((now - start_dt).total_seconds(), 2)
+            except Exception as e:
+                debug_logger.error(f"Error calculating duration: {e}")
+
+        progress_data["stage_details"][stage_value].update({
+            "status": FileStageStatus.FAILED.value,
+            "end_time": now.isoformat(),
+            "duration": duration,
+            "error_code": ErrorCode.CLEANUP_ERROR.value,
+            "error_message": error_message,
+        })
+
+        progress_data["last_updated"] = now.isoformat()
+
+        insert_logger.error(
+            f"File {progress_data['file_id']} cleanup failed: {error_message}"
+        )
+
+        return progress_data
+
+    def get_successful_stages(self, progress_data: Dict[str, Any]) -> List[FileStage]:
+        successful = []
+        for stage in self._get_stage_order():
+            stage_detail = progress_data["stage_details"].get(stage.value, {})
+            if stage_detail.get("status") == FileStageStatus.SUCCESS.value:
+                successful.append(stage)
+        return successful
+
+    def needs_rollback(self, progress_data: Dict[str, Any]) -> bool:
+        successful_stages = self.get_successful_stages(progress_data)
+        return any(s in [FileStage.MILVUS_INSERT, FileStage.ES_INDEX, FileStage.CHUNK, FileStage.PARSE]
+                   for s in successful_stages)
