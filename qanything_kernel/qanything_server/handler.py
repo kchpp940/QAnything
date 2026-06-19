@@ -667,8 +667,8 @@ async def local_doc_chat(req: request):
         if not llm_setting_str:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} llm_setting is empty.".format(bot_id)})
         llm_setting = json.loads(llm_setting_str)
-        from qanything_kernel.utils.llm_param_validator import normalize_llm_setting
-        llm_setting, _ = normalize_llm_setting(llm_setting)
+        from qanything_kernel.utils.llm_param_validator import process_bot_llm_setting
+        llm_setting, _ = process_bot_llm_setting(llm_setting, lenient=True)
         rerank = llm_setting.get('rerank', True)
         only_need_search_results = llm_setting.get('only_need_search_results', False)
         need_web_search = llm_setting.get('networking', False)
@@ -1277,10 +1277,11 @@ async def get_bot_info(req: request):
         llm_setting_str = bot_info[9]
         try:
             llm_setting = json.loads(llm_setting_str) if llm_setting_str else {}
-            from qanything_kernel.utils.llm_param_validator import normalize_llm_setting
-            llm_setting, _ = normalize_llm_setting(llm_setting)
+            from qanything_kernel.utils.llm_param_validator import process_bot_llm_setting
+            llm_setting, _ = process_bot_llm_setting(llm_setting, lenient=True)
         except (json.JSONDecodeError, TypeError):
-            llm_setting = {}
+            from qanything_kernel.utils.llm_param_validator import process_bot_llm_setting
+            llm_setting, _ = process_bot_llm_setting({}, lenient=True)
         info = {"bot_id": bot_info[0], "user_id": user_id, "bot_name": bot_info[1], "description": bot_info[2],
                 "head_image": bot_info[3], "prompt_setting": bot_info[4], "welcome_message": bot_info[5],
                 "kb_ids": kb_ids, "kb_names": kb_names,

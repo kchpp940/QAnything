@@ -104,16 +104,20 @@ def _run_post_process(setting: Dict[str, Any]) -> List[str]:
     return warnings
 
 
-def process_bot_llm_setting(setting: Optional[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[str]]:
+def process_bot_llm_setting(setting: Optional[Dict[str, Any]], lenient: bool = False) -> Tuple[Dict[str, Any], List[str]]:
     if setting is None:
         setting = {}
     if not isinstance(setting, dict):
-        return {}, ["llm_setting must be a dict/object"]
+        if lenient:
+            setting = {}
+        else:
+            return {}, ["llm_setting must be a dict/object"]
 
     schema = _load_schema()
     fields = schema.get('fields', {})
     result: Dict[str, Any] = {}
     errors: List[str] = []
+    warnings: List[str] = []
 
     for field_name, field_schema in fields.items():
         ftype = field_schema.get('type')
@@ -138,9 +142,17 @@ def process_bot_llm_setting(setting: Optional[Dict[str, Any]]) -> Tuple[Dict[str
         raw = setting[field_name]
         casted, cast_err = coercer(raw)
         if cast_err is not None:
+            if lenient and fill_default:
+                warnings.append(f"field '{field_name}': {cast_err}; falling back to default={default_value}")
+                result[field_name] = default_value
+                continue
             errors.append(f"field '{field_name}': {cast_err}")
             continue
         if casted is None and not allow_null:
+            if lenient and fill_default:
+                warnings.append(f"field '{field_name}': null not allowed; falling back to default={default_value}")
+                result[field_name] = default_value
+                continue
             errors.append(f"field '{field_name}': null value is not allowed")
             continue
 
@@ -160,21 +172,34 @@ def process_bot_llm_setting(setting: Optional[Dict[str, Any]]) -> Tuple[Dict[str
                 continue
             range_err = _validate_range(field_name, val, field_schema)
             if range_err is not None:
-                errors.append(range_err)
+                if lenient and field_schema.get('fill_default_for_bot', False):
+                    default_value = field_schema.get('default', None)
+                    warnings.append(f"{range_err}; falling back to default={default_value}")
+                    result[field_name] = default_value
+                else:
+                    errors.append(range_err)
+
+    if lenient:
+        for w in warnings:
+            errors.append(w)
 
     return result, errors
 
 
-def process_chat_request_llm_setting(setting: Optional[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[str]]:
+def process_chat_request_llm_setting(setting: Optional[Dict[str, Any]], lenient: bool = False) -> Tuple[Dict[str, Any], List[str]]:
     if setting is None:
         setting = {}
     if not isinstance(setting, dict):
-        return {}, ["llm_setting must be a dict/object"]
+        if lenient:
+            setting = {}
+        else:
+            return {}, ["llm_setting must be a dict/object"]
 
     schema = _load_schema()
     fields = schema.get('fields', {})
     result: Dict[str, Any] = {}
     errors: List[str] = []
+    warnings: List[str] = []
 
     for field_name, field_schema in fields.items():
         ftype = field_schema.get('type')
@@ -191,6 +216,10 @@ def process_chat_request_llm_setting(setting: Optional[Dict[str, Any]]) -> Tuple
                 if default_value is not None or (allow_null and default_value is None):
                     result[field_name] = default_value
                     continue
+                if lenient:
+                    warnings.append(f"field '{field_name}' is required; falling back to default={default_value}")
+                    result[field_name] = default_value
+                    continue
                 errors.append(f"field '{field_name}' is required")
             elif allow_null and field_name in setting and setting[field_name] is None:
                 result[field_name] = None
@@ -199,9 +228,17 @@ def process_chat_request_llm_setting(setting: Optional[Dict[str, Any]]) -> Tuple
         raw = setting[field_name]
         casted, cast_err = coercer(raw)
         if cast_err is not None:
+            if lenient and default_value is not None:
+                warnings.append(f"field '{field_name}': {cast_err}; falling back to default={default_value}")
+                result[field_name] = default_value
+                continue
             errors.append(f"field '{field_name}': {cast_err}")
             continue
         if casted is None and not allow_null:
+            if lenient and default_value is not None:
+                warnings.append(f"field '{field_name}': null not allowed; falling back to default={default_value}")
+                result[field_name] = default_value
+                continue
             errors.append(f"field '{field_name}': null value is not allowed")
             continue
 
@@ -221,21 +258,34 @@ def process_chat_request_llm_setting(setting: Optional[Dict[str, Any]]) -> Tuple
                 continue
             range_err = _validate_range(field_name, val, field_schema)
             if range_err is not None:
-                errors.append(range_err)
+                default_value = field_schema.get('default', None)
+                if lenient and default_value is not None:
+                    warnings.append(f"{range_err}; falling back to default={default_value}")
+                    result[field_name] = default_value
+                else:
+                    errors.append(range_err)
+
+    if lenient:
+        for w in warnings:
+            errors.append(w)
 
     return result, errors
 
 
-def normalize_llm_setting(setting: Optional[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[str]]:
+def normalize_llm_setting(setting: Optional[Dict[str, Any]], lenient: bool = True) -> Tuple[Dict[str, Any], List[str]]:
     if setting is None:
         return {}, []
     if not isinstance(setting, dict):
-        return {}, []
+        if lenient:
+            setting = {}
+        else:
+            return {}, []
 
     schema = _load_schema()
     fields = schema.get('fields', {})
     result = dict(setting)
     errors: List[str] = []
+    warnings: List[str] = []
 
     for field_name, field_schema in fields.items():
         if field_name not in result:
@@ -245,13 +295,22 @@ def normalize_llm_setting(setting: Optional[Dict[str, Any]]) -> Tuple[Dict[str, 
         if coercer is None:
             continue
         allow_null = field_schema.get('allow_null', False)
+        default_value = field_schema.get('default', None)
         if result[field_name] is None:
             continue
         casted, cast_err = coercer(result[field_name])
         if cast_err is not None:
+            if lenient and field_schema.get('fill_default_for_bot', False):
+                warnings.append(f"field '{field_name}': {cast_err}; falling back to default={default_value}")
+                result[field_name] = default_value
+                continue
             errors.append(f"field '{field_name}': {cast_err}")
             continue
         if casted is None and not allow_null:
+            if lenient and field_schema.get('fill_default_for_bot', False):
+                warnings.append(f"field '{field_name}': null not allowed; falling back to default={default_value}")
+                result[field_name] = default_value
+                continue
             continue
         result[field_name] = casted
 
@@ -265,6 +324,15 @@ def normalize_llm_setting(setting: Optional[Dict[str, Any]]) -> Tuple[Dict[str, 
                 continue
             range_err = _validate_range(field_name, val, field_schema)
             if range_err is not None:
-                errors.append(range_err)
+                default_value = field_schema.get('default', None)
+                if lenient and field_schema.get('fill_default_for_bot', False):
+                    warnings.append(f"{range_err}; falling back to default={default_value}")
+                    result[field_name] = default_value
+                else:
+                    errors.append(range_err)
+
+    if lenient:
+        for w in warnings:
+            errors.append(w)
 
     return result, errors
