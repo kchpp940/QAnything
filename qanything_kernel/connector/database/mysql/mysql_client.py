@@ -725,6 +725,14 @@ class KnowledgeBaseManager:
                 qa_info['retrieval_documents'] = json.loads(qa_info['retrieval_documents'])
             if 'source_documents' in qa_info:
                 qa_info['source_documents'] = json.loads(qa_info['source_documents'])
+            if 'web_search_trace' in qa_info:
+                if qa_info['web_search_trace']:
+                    try:
+                        qa_info['web_search_trace'] = json.loads(qa_info['web_search_trace'])
+                    except Exception:
+                        qa_info['web_search_trace'] = {}
+                else:
+                    qa_info['web_search_trace'] = {}
             if 'history' in qa_info:
                 qa_info['history'] = json.loads(qa_info['history'])
         if 'timestamp' in need_info:
@@ -783,6 +791,14 @@ class KnowledgeBaseManager:
         query = f"SELECT {need_info} FROM QaLogs WHERE qa_id = %s"
         qa_log = self.execute_query_(query, (qa_id,), fetch=True, user_dict=True)[0]
         qa_log['timestamp'] = qa_log['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+        if 'web_search_trace' in qa_log:
+            if qa_log['web_search_trace']:
+                try:
+                    qa_log['web_search_trace'] = json.loads(qa_log['web_search_trace'])
+                except Exception:
+                    qa_log['web_search_trace'] = {}
+            else:
+                qa_log['web_search_trace'] = {}
         user_id = qa_log['user_id']
         # 获取当前时间和7天前的时间
         current_time = datetime.utcnow()
@@ -808,6 +824,14 @@ class KnowledgeBaseManager:
                 break
             for log in logs:
                 log['timestamp'] = log['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+                if 'web_search_trace' in log:
+                    if log['web_search_trace']:
+                        try:
+                            log['web_search_trace'] = json.loads(log['web_search_trace'])
+                        except Exception:
+                            log['web_search_trace'] = {}
+                    else:
+                        log['web_search_trace'] = {}
             recent_logs.extend(logs)
             offset += limit
             # TODO 最多返回50条，后续可以有翻页逻辑
@@ -830,6 +854,14 @@ class KnowledgeBaseManager:
                 break
             for log in logs:
                 log['timestamp'] = log['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+                if 'web_search_trace' in log:
+                    if log['web_search_trace']:
+                        try:
+                            log['web_search_trace'] = json.loads(log['web_search_trace'])
+                        except Exception:
+                            log['web_search_trace'] = {}
+                    else:
+                        log['web_search_trace'] = {}
             older_logs.extend(logs)
             offset += limit
             # TODO 最多返回50条，后续可以有翻页逻辑

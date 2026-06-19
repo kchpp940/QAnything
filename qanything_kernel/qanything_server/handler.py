@@ -1103,7 +1103,7 @@ async def get_qa_info(req: request):
     page_limit = safe_get(req, 'page_limit', 10)
     default_need_info = ["qa_id", "user_id", "bot_id", "kb_ids", "query", "model", "product_source", "time_record",
                          "history", "condense_question", "prompt", "result", "retrieval_documents", "source_documents",
-                         "timestamp"]
+                         "web_search_trace", "timestamp"]
     need_info = safe_get(req, 'need_info', default_need_info)
     save_to_excel = safe_get(req, 'save_to_excel', False)
     qa_infos = local_doc_qa.milvus_summary.get_qalog_by_filter(need_info=need_info, user_id=user_id, query=query,
