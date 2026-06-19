@@ -1329,6 +1329,17 @@ async def new_bot(req: request):
     kb_ids = safe_get(req, "kb_ids", [])
     kb_ids_str = ",".join(kb_ids)
 
+    # 从请求中读取 llm_setting，默认包含 web_search_policy
+    llm_setting = safe_get(req, "llm_setting", {})
+    if isinstance(llm_setting, str):
+        try:
+            llm_setting = json.loads(llm_setting)
+        except Exception:
+            llm_setting = {}
+    if "web_search_policy" not in llm_setting:
+        llm_setting["web_search_policy"] = WEB_SEARCH_POLICY_DISABLED
+    llm_setting_str = json.dumps(llm_setting, ensure_ascii=False)
+
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
     if not_exist_kb_ids:
         msg = "invalid kb_id: {}, please check...".format(not_exist_kb_ids)
@@ -1336,7 +1347,7 @@ async def new_bot(req: request):
     debug_logger.info("new_bot %s", user_id)
     bot_id = 'BOT' + uuid.uuid4().hex
     local_doc_qa.milvus_summary.new_qanything_bot(bot_id, user_id, bot_name, desc, head_image, prompt_setting,
-                                                  welcome_message, kb_ids_str)
+                                                  welcome_message, kb_ids_str, llm_setting_str)
     create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return sanic_json({"code": 200, "msg": "success create qanything bot {}".format(bot_id),
                        "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time}})

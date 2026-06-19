@@ -523,17 +523,51 @@ const getMentionOptions = async () => {
 };
 onMounted(() => {
   getMentionOptions();
+  syncBotLlmSetting();
 });
 watch(
   () => props.botInfo,
   () => {
     getMentionOptions();
+    syncBotLlmSetting();
   },
   {
     immediate: true,
     deep: true,
   }
 );
+
+const syncBotLlmSetting = () => {
+  if (props.botInfo?.llm_setting) {
+    try {
+      const llm = typeof props.botInfo.llm_setting === 'string'
+        ? JSON.parse(props.botInfo.llm_setting)
+        : props.botInfo.llm_setting;
+      if (chatSettingFormActive.value) {
+        if (llm.web_search_policy) {
+          chatSettingFormActive.value.webSearchPolicy = llm.web_search_policy;
+        } else if (llm.networking !== undefined) {
+          chatSettingFormActive.value.webSearchPolicy = llm.networking ? 'always' : 'disabled';
+        }
+        if (llm.api_base) chatSettingFormActive.value.apiBase = llm.api_base;
+        if (llm.api_key) chatSettingFormActive.value.apiKey = llm.api_key;
+        if (llm.api_context_length) chatSettingFormActive.value.apiContextLength = llm.api_context_length;
+        if (llm.top_p) chatSettingFormActive.value.top_P = llm.top_p;
+        if (llm.top_k) chatSettingFormActive.value.top_K = llm.top_k;
+        if (llm.chunk_size) chatSettingFormActive.value.chunkSize = llm.chunk_size;
+        if (llm.temperature !== undefined) chatSettingFormActive.value.temperature = llm.temperature;
+        if (llm.model) chatSettingFormActive.value.apiModelName = llm.model;
+        if (llm.max_token !== undefined) chatSettingFormActive.value.maxToken = llm.max_token;
+        if (llm.rerank !== undefined) chatSettingFormActive.value.capabilities.rerank = llm.rerank;
+        if (llm.hybrid_search !== undefined) chatSettingFormActive.value.capabilities.mixedSearch = llm.hybrid_search;
+        if (llm.networking !== undefined) chatSettingFormActive.value.capabilities.networkSearch = llm.networking;
+        if (llm.only_need_search_results !== undefined) chatSettingFormActive.value.capabilities.onlySearch = llm.only_need_search_results;
+      }
+    } catch (e) {
+      console.warn('Failed to parse bot llm_setting', e);
+    }
+  }
+};
 // 统计几个 @ 超过10个报错
 const computedCallNumber = (question: string) => {
   const atCount = (question.match(/@/g) || []).length;
