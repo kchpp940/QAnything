@@ -2,6 +2,7 @@ from qanything_kernel.utils.custom_log import insert_logger
 from qanything_kernel.connector.database.mysql.mysql_client import KnowledgeBaseManager
 from qanything_kernel.configs.model_config import UPLOAD_ROOT_PATH
 from qanything_kernel.utils.custom_log import debug_logger
+from qanything_kernel.utils.general_utils import normalize_document_metadata
 from langchain_core.documents import Document
 from langchain.storage import InMemoryStore
 from typing import (
@@ -20,7 +21,8 @@ from tqdm import tqdm
 V = TypeVar("V")
 
 
-def _build_doc_from_json(doc_id: str, doc_json: dict, mysql_client: KnowledgeBaseManager) -> Optional[Document]:
+def _build_doc_from_json(doc_id: str, doc_json: dict, mysql_client: KnowledgeBaseManager,
+                         idx: int = 0, total: int = 1) -> Optional[Document]:
     if doc_json is None:
         return None
     user_id = doc_json['kwargs']['metadata'].get('user_id', '')
@@ -37,10 +39,6 @@ def _build_doc_from_json(doc_id: str, doc_json: dict, mysql_client: KnowledgeBas
                 f.write(json.dumps(doc_json, ensure_ascii=False))
     doc = Document(page_content=doc_json['kwargs']['page_content'], metadata=doc_json['kwargs']['metadata'])
     doc.metadata['doc_id'] = doc_id
-    doc.metadata.setdefault('file_id', file_id)
-    doc.metadata.setdefault('file_name', file_name)
-    doc.metadata.setdefault('kb_id', kb_id)
-    doc.metadata.setdefault('user_id', user_id)
     if file_name.endswith('.faq'):
         faq_dict = doc.metadata.get('faq_dict', {})
         if faq_dict:
@@ -48,6 +46,9 @@ def _build_doc_from_json(doc_id: str, doc_json: dict, mysql_client: KnowledgeBas
             nos_keys = faq_dict.get('nos_keys')
             doc.page_content = page_content
             doc.metadata['nos_keys'] = nos_keys
+            if 'retrieval_source' not in doc.metadata:
+                doc.metadata['retrieval_source'] = 'faq'
+    normalize_document_metadata(doc, idx_for_fallback=idx, total_docs=total, default_kb_id=kb_id)
     return doc
 
 
@@ -70,10 +71,11 @@ class MysqlStore(InMemoryStore):
         await loop.run_in_executor(None, self.mset, key_value_pairs)
 
     def mget(self, keys: Sequence[str]) -> List[Optional[V]]:
+        total = len(keys)
         docs = []
-        for doc_id in keys:
+        for idx, doc_id in enumerate(keys):
             doc_json = self.mysql_client.get_document_by_doc_id(doc_id)
-            doc = _build_doc_from_json(doc_id, doc_json, self.mysql_client)
+            doc = _build_doc_from_json(doc_id, doc_json, self.mysql_client, idx=idx, total=total)
             docs.append(doc)
         return docs
 

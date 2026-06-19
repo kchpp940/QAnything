@@ -79,24 +79,31 @@ class LocalDocQA:
         query = queries[0]
         web_content, web_documents = duckduckgo_search(query, top_k)
         source_documents = []
+        total = len(web_documents)
         for idx, doc in enumerate(web_documents):
             if 'title' not in doc.metadata:
                 continue
-            doc.metadata['retrieval_query'] = query
-            doc.metadata['retrieval_source'] = 'web_search'
             debug_logger.info(f"web search doc: {doc.metadata}")
             file_name = re.sub(r'[\uFF01-\uFF5E\u3000-\u303F]', '', doc.metadata['title'])
             doc.metadata['file_name'] = file_name + '.web'
             doc.metadata['file_url'] = doc.metadata['source']
-            doc.metadata['embed_version'] = self.embeddings.embed_version
-            doc.metadata['score'] = 1 - (idx / max(len(web_documents), 1))
             doc.metadata['file_id'] = 'websearch' + str(idx)
             doc.metadata['kb_id'] = 'web_search_kb'
             doc.metadata['doc_id'] = doc.metadata['file_id'] + '_0'
             doc.metadata['headers'] = {"新闻标题": file_name}
+            doc.metadata['retrieval_source'] = 'web_search'
+            doc.metadata['score'] = 1 - (idx / max(total, 1))
             doc.metadata['deleted'] = 0
+            normalize_document_metadata(doc, embed_version=self.embeddings.embed_version,
+                                        retrieval_query=query, default_retrieval_source='web_search',
+                                        default_kb_id='web_search_kb', idx_for_fallback=idx, total_docs=total)
             if 'description' in doc.metadata:
-                desc_doc = Document(page_content=doc.metadata['description'], metadata=copy.deepcopy(doc.metadata))
+                desc_md = copy.deepcopy(doc.metadata)
+                desc_md['doc_id'] = doc.metadata['file_id'] + '_desc'
+                desc_doc = Document(page_content=doc.metadata['description'], metadata=desc_md)
+                normalize_document_metadata(desc_doc, embed_version=self.embeddings.embed_version,
+                                            retrieval_query=query, default_retrieval_source='web_search',
+                                            default_kb_id='web_search_kb', idx_for_fallback=idx, total_docs=total)
                 source_documents.append(desc_doc)
             source_documents.append(doc)
         return web_content, source_documents
@@ -113,7 +120,6 @@ class LocalDocQA:
 
     @get_time_async
     async def get_source_documents(self, query, retriever: ParentRetriever, kb_ids, time_record, hybrid_search, top_k):
-        source_documents = []
         start_time = time.perf_counter()
         query_docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
                                                              hybrid_search=hybrid_search, top_k=top_k)
@@ -126,36 +132,27 @@ class LocalDocQA:
         end_time = time.perf_counter()
         time_record['retriever_search'] = round(end_time - start_time, 2)
         debug_logger.info(f"retriever_search time: {time_record['retriever_search']}s")
+        default_kb = kb_ids[0] if kb_ids and len(kb_ids) == 1 else ''
         total_docs = len(query_docs)
+        source_documents = []
         for idx, doc in enumerate(query_docs):
             file_id = doc.metadata.get('file_id', '')
-            doc_id = doc.metadata.get('doc_id', '')
             if not file_id:
-                debug_logger.warning(f"doc at idx {idx} missing file_id, doc_id: {doc_id}, skip")
+                debug_logger.warning(f"doc at idx {idx} missing file_id, doc_id: {doc.metadata.get('doc_id', '')}, skip")
                 continue
-            is_deleted = 0
             try:
                 if retriever.mysql_client.is_deleted_file(file_id):
-                    debug_logger.warning(f"file_id: {file_id} is deleted, skip doc_id: {doc_id}")
-                    is_deleted = 1
+                    debug_logger.warning(f"file_id: {file_id} is deleted, skip doc_id: {doc.metadata.get('doc_id', '')}")
                     continue
             except Exception as e:
                 debug_logger.warning(f"check is_deleted_file error for file_id {file_id}: {e}")
-            doc.metadata['retrieval_query'] = query
-            doc.metadata['embed_version'] = self.embeddings.embed_version
-            doc.metadata.setdefault('file_id', file_id)
-            doc.metadata.setdefault('doc_id', doc_id if doc_id else file_id + '_' + str(idx))
-            if kb_ids:
-                doc.metadata.setdefault('kb_id', kb_ids[0] if len(kb_ids) == 1 else doc.metadata.get('kb_id', kb_ids[0]))
-            doc.metadata.setdefault('retrieval_source', doc.metadata.get('retrieval_source', 'unknown'))
-            doc.metadata['deleted'] = is_deleted
-            if 'score' not in doc.metadata or doc.metadata['score'] is None:
-                doc.metadata['score'] = float(1 - (idx / max(total_docs, 1)))
-            else:
-                doc.metadata['score'] = float(doc.metadata['score'])
+            normalize_document_metadata(doc, embed_version=self.embeddings.embed_version,
+                                        retrieval_query=query, default_retrieval_source='unknown',
+                                        default_kb_id=default_kb, idx_for_fallback=idx, total_docs=total_docs)
+            doc.metadata['deleted'] = 0
             source_documents.append(doc)
         debug_logger.info(f"embed scores: {[doc.metadata['score'] for doc in source_documents]}")
-        debug_logger.info(f"retrieval_sources: {[doc.metadata.get('retrieval_source', '') for doc in source_documents]}")
+        debug_logger.info(f"retrieval_sources: {[doc.metadata['retrieval_source'] for doc in source_documents]}")
         return source_documents
 
     def reprocess_source_documents(self, custom_llm: OpenAILLM, query: str,
@@ -512,7 +509,7 @@ class LocalDocQA:
                     length_function=num_tokens_embed,
                 )
                 web_search_results = web_splitter.split_documents(web_search_results)
-
+                web_total = len(web_search_results)
                 current_doc_id = 0
                 current_file_id = web_search_results[0].metadata.get('file_id', 'websearch0')
                 for idx, doc in enumerate(web_search_results):
@@ -525,16 +522,11 @@ class LocalDocQA:
                         current_doc_id = 0
                         doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
                         current_doc_id += 1
-                    doc.metadata.setdefault('retrieval_source', 'web_search')
-                    doc.metadata.setdefault('kb_id', 'web_search_kb')
-                    doc.metadata.setdefault('file_id', current_file_id)
-                    doc.metadata.setdefault('deleted', 0)
-                    doc.metadata.setdefault('embed_version', self.embeddings.embed_version)
-                    doc.metadata.setdefault('retrieval_query', query)
-                    if 'score' not in doc.metadata or doc.metadata['score'] is None:
-                        doc.metadata['score'] = float(1 - (idx / max(len(web_search_results), 1)))
-                    else:
-                        doc.metadata['score'] = float(doc.metadata['score'])
+                    normalize_document_metadata(doc, embed_version=self.embeddings.embed_version,
+                                                retrieval_query=query, default_retrieval_source='web_search',
+                                                default_kb_id='web_search_kb', idx_for_fallback=idx,
+                                                total_docs=web_total)
+                    doc.metadata['deleted'] = 0
                     doc_json = doc.to_json()
                     if doc_json['kwargs'].get('metadata') is None:
                         doc_json['kwargs']['metadata'] = doc.metadata
@@ -581,26 +573,20 @@ class LocalDocQA:
                 debug_logger.error(f"query {query}: kb_ids: {kb_ids}, rerank error: {traceback.format_exc()}")
 
         source_documents = source_documents[:top_k]
-
-        for doc in source_documents:
+        total_final = len(source_documents)
+        for idx, doc in enumerate(source_documents):
             doc.page_content = re.sub(r'^\[headers]\(.*?\)\n', '', doc.page_content)
-            doc.metadata.setdefault('doc_id', doc.metadata.get('file_id', '') + '_0')
-            doc.metadata.setdefault('file_id', '')
-            doc.metadata.setdefault('kb_id', '')
-            doc.metadata.setdefault('retrieval_source', 'unknown')
-            if 'score' not in doc.metadata or doc.metadata['score'] is None:
-                doc.metadata['score'] = 0.0
-            else:
-                doc.metadata['score'] = float(doc.metadata['score'])
-            doc.metadata.setdefault('deleted', 0)
+            normalize_document_metadata(doc, embed_version=self.embeddings.embed_version,
+                                        retrieval_query=query, default_retrieval_source='unknown',
+                                        idx_for_fallback=idx, total_docs=total_final)
 
         high_score_faq_documents = [doc for doc in source_documents if
-                                    doc.metadata.get('file_name', '').endswith('.faq') and doc.metadata.get('score', 0.0) >= 0.9]
+                                    doc.metadata['file_name'].endswith('.faq') and doc.metadata['score'] >= 0.9]
         if high_score_faq_documents:
             source_documents = high_score_faq_documents
         for doc in source_documents:
             faq_dict = doc.metadata.get('faq_dict', {})
-            if doc.metadata.get('file_name', '').endswith('.faq') and faq_dict and clear_string_is_equal(
+            if doc.metadata['file_name'].endswith('.faq') and faq_dict and clear_string_is_equal(
                     faq_dict.get('question', ''), query):
                 debug_logger.info(f"match faq question: {query}")
                 if only_need_search_results:

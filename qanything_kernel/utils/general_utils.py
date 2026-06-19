@@ -38,7 +38,114 @@ __all__ = ['isURL', 'get_time', 'get_time_async', 'format_source_documents', 'sa
            'clear_string', 'simplify_filename', 'string_bytes_length', 'correct_kb_id', 'clear_kb_id',
            'clear_string_is_equal', 'export_qalogs_to_excel', 'deduplicate_documents', 'fast_estimate_file_char_count',
            'check_user_id_and_user_info', 'get_table_infos', 'format_time_record', 'get_time_range',
-           'html_to_markdown', "num_tokens_embed", "num_tokens_rerank", "get_all_subpages", "replace_image_references", 'check_and_transform_excel']
+           'html_to_markdown', "num_tokens_embed", "num_tokens_rerank", "get_all_subpages", "replace_image_references",
+           'check_and_transform_excel', 'normalize_document_metadata', 'RETRIEVAL_SOURCE_PRIORITY',
+           'REQUIRED_DOC_METADATA_FIELDS']
+
+
+REQUIRED_DOC_METADATA_FIELDS = [
+    'doc_id', 'file_id', 'file_name', 'kb_id', 'user_id',
+    'score', 'retrieval_source', 'embed_version', 'deleted',
+    'retrieval_query', 'headers', 'page_id', 'nos_keys', 'file_url',
+]
+
+RETRIEVAL_SOURCE_PRIORITY = {
+    'milvus': 4,
+    'es': 3,
+    'faq': 2,
+    'web_search': 1,
+    'unknown': 0,
+}
+
+
+def normalize_document_metadata(doc, embed_version=None, retrieval_query=None,
+                               default_retrieval_source='unknown', default_kb_id='',
+                               idx_for_fallback=0, total_docs=1):
+    if doc is None:
+        return None
+    md = doc.metadata
+    file_id = md.get('file_id', '')
+    doc_id = md.get('doc_id', md.get('doc_id', ''))
+    if not doc_id:
+        if file_id:
+            doc_id = f"{file_id}_{idx_for_fallback}"
+        else:
+            doc_id = f"doc_{idx_for_fallback}"
+    md['doc_id'] = doc_id
+    md.setdefault('file_id', file_id if file_id else '')
+    md.setdefault('file_name', md.get('file_name', ''))
+    if default_kb_id:
+        md.setdefault('kb_id', default_kb_id)
+    else:
+        md.setdefault('kb_id', md.get('kb_id', ''))
+    md.setdefault('user_id', md.get('user_id', ''))
+    raw_score = md.get('score')
+    if raw_score is None or raw_score == '':
+        raw_score = float(1 - (idx_for_fallback / max(total_docs, 1)))
+    try:
+        md['score'] = float(raw_score)
+    except (TypeError, ValueError):
+        md['score'] = float(1 - (idx_for_fallback / max(total_docs, 1)))
+    src = md.get('retrieval_source', default_retrieval_source)
+    if not src:
+        src = default_retrieval_source
+    md['retrieval_source'] = src
+    if embed_version is not None:
+        md['embed_version'] = embed_version
+    else:
+        md.setdefault('embed_version', '')
+    deleted = md.get('deleted')
+    if deleted is None:
+        deleted = 0
+    try:
+        md['deleted'] = int(deleted)
+    except (TypeError, ValueError):
+        md['deleted'] = 0
+    if retrieval_query is not None:
+        md['retrieval_query'] = retrieval_query
+    else:
+        md.setdefault('retrieval_query', '')
+    md.setdefault('headers', md.get('headers', {}))
+    md.setdefault('page_id', md.get('page_id', 0))
+    md.setdefault('nos_keys', md.get('nos_keys', ''))
+    md.setdefault('file_url', md.get('file_url', ''))
+    return doc
+
+
+def _get_dedup_key(doc):
+    doc_id = doc.metadata.get('doc_id', '')
+    if doc_id:
+        return ('doc_id', doc_id)
+    file_id = doc.metadata.get('file_id', '')
+    content = doc.page_content
+    return ('file_content', file_id, content)
+
+
+def _pick_better_doc(existing_doc, new_doc):
+    existing_score = existing_doc.metadata.get('score', 0.0) or 0.0
+    new_score = new_doc.metadata.get('score', 0.0) or 0.0
+    existing_src = existing_doc.metadata.get('retrieval_source', 'unknown')
+    new_src = new_doc.metadata.get('retrieval_source', 'unknown')
+    existing_prio = RETRIEVAL_SOURCE_PRIORITY.get(existing_src, 0)
+    new_prio = RETRIEVAL_SOURCE_PRIORITY.get(new_src, 0)
+    if new_score > existing_score:
+        return new_doc
+    if new_score == existing_score and new_prio > existing_prio:
+        return new_doc
+    return existing_doc
+
+
+def deduplicate_documents(source_docs):
+    unique_map = {}
+    order_keys = []
+    for doc in source_docs:
+        key = _get_dedup_key(doc)
+        if key not in unique_map:
+            unique_map[key] = doc
+            order_keys.append(key)
+        else:
+            unique_map[key] = _pick_better_doc(unique_map[key], doc)
+    return [unique_map[k] for k in order_keys]
 
 
 def get_invalid_user_id_msg(user_id):
@@ -53,24 +160,23 @@ def isURL(string):
 def format_source_documents(ori_source_documents):
     source_documents = []
     for inum, doc in enumerate(ori_source_documents):
-        score = doc.metadata.get('score', 0.0)
-        if score is None:
-            score = 0.0
-        source_info = {'file_id': doc.metadata.get('file_id', ''),
-                       'file_name': doc.metadata.get('file_name', ''),
-                       'content': doc.page_content,
-                       'retrieval_query': doc.metadata.get('retrieval_query', ''),
-                       'file_url': doc.metadata.get('file_url', ''),
-                       'score': str(float(score)),
-                       'embed_version': doc.metadata.get('embed_version', ''),
-                       'nos_keys': doc.metadata.get('nos_keys', ''),
-                       'doc_id': doc.metadata.get('doc_id', doc.metadata.get('file_id', '') + '_' + str(inum)),
-                       'retrieval_source': doc.metadata.get('retrieval_source', 'unknown'),
-                       'headers': doc.metadata.get('headers', {}),
-                       'page_id': doc.metadata.get('page_id', 0),
-                       'kb_id': doc.metadata.get('kb_id', ''),
-                       'deleted': doc.metadata.get('deleted', 0),
-                       }
+        normalize_document_metadata(doc, idx_for_fallback=inum, total_docs=max(len(ori_source_documents), 1))
+        source_info = {
+            'file_id': doc.metadata['file_id'],
+            'file_name': doc.metadata['file_name'],
+            'content': doc.page_content,
+            'retrieval_query': doc.metadata['retrieval_query'],
+            'file_url': doc.metadata['file_url'],
+            'score': str(doc.metadata['score']),
+            'embed_version': doc.metadata['embed_version'],
+            'nos_keys': doc.metadata['nos_keys'],
+            'doc_id': doc.metadata['doc_id'],
+            'retrieval_source': doc.metadata['retrieval_source'],
+            'headers': doc.metadata['headers'],
+            'page_id': doc.metadata['page_id'],
+            'kb_id': doc.metadata['kb_id'],
+            'deleted': doc.metadata['deleted'],
+        }
         source_documents.append(source_info)
     return source_documents
 

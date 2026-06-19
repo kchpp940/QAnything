@@ -6,7 +6,7 @@ from qanything_kernel.core.retriever.docstrore import MysqlStore
 from qanything_kernel.configs.model_config import DEFAULT_CHILD_CHUNK_SIZE, DEFAULT_PARENT_CHUNK_SIZE, SEPARATORS
 from qanything_kernel.utils.custom_log import debug_logger, insert_logger
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from qanything_kernel.utils.general_utils import num_tokens_embed, get_time_async
+from qanything_kernel.utils.general_utils import num_tokens_embed, get_time_async, normalize_document_metadata
 import copy
 from typing import List, Optional, Tuple, Dict
 from langchain_core.documents import Document
@@ -216,10 +216,14 @@ class ParentRetriever:
         expr = f'kb_id in {partition_keys}'
         self.retriever.set_search_kwargs("similarity", k=top_k, expr=expr)
         query_docs = await self.retriever.aget_relevant_documents(query)
-        for doc in query_docs:
+        milvus_total = len(query_docs)
+        for idx, doc in enumerate(query_docs):
             doc.metadata['retrieval_source'] = 'milvus'
             if 'doc_id' not in doc.metadata and self.retriever.id_key in doc.metadata:
                 doc.metadata['doc_id'] = doc.metadata[self.retriever.id_key]
+            default_kb = partition_keys[0] if len(partition_keys) == 1 else ''
+            normalize_document_metadata(doc, retrieval_query=query, default_retrieval_source='milvus',
+                                        default_kb_id=default_kb, idx_for_fallback=idx, total_docs=milvus_total)
         milvus_end_time = time.perf_counter()
         time_record['retriever_search_by_milvus'] = round(milvus_end_time - milvus_start_time, 2)
 
@@ -236,38 +240,38 @@ class ParentRetriever:
                     doc_id = d.metadata[self.retriever.id_key]
                     es_score = d.metadata.get('_score', 1.0 - (idx / max(len(es_sub_docs), 1)))
                     if doc_id not in es_id_to_score or es_score > es_id_to_score[doc_id]:
-                        es_id_to_score[doc_id] = es_score
+                        es_id_to_score[doc_id] = float(es_score)
 
-            milvus_keys = set()
+            milvus_doc_ids = set()
             for d in query_docs:
-                doc_id = d.metadata.get('doc_id', d.metadata.get(self.retriever.id_key, ''))
-                file_id = d.metadata.get('file_id', '')
-                if doc_id:
-                    milvus_keys.add((doc_id, file_id))
-                    milvus_keys.add(doc_id)
+                did = d.metadata.get('doc_id', '')
+                if did:
+                    milvus_doc_ids.add(did)
 
             es_ids = []
             for d in es_sub_docs:
                 if self.retriever.id_key not in d.metadata:
                     continue
                 doc_id = d.metadata[self.retriever.id_key]
-                file_id = d.metadata.get('file_id', '')
-                key_pair = (doc_id, file_id)
                 if doc_id in es_ids:
                     continue
-                if doc_id in milvus_keys or key_pair in milvus_keys:
+                if doc_id in milvus_doc_ids:
                     continue
                 es_ids.append(doc_id)
 
             es_docs = await self.retriever.docstore.amget(es_ids)
             es_docs = [d for d in es_docs if d is not None]
-            for doc in es_docs:
+            es_total = len(es_docs)
+            for idx, doc in enumerate(es_docs):
                 doc.metadata['retrieval_source'] = 'es'
                 if 'doc_id' not in doc.metadata and self.retriever.id_key in doc.metadata:
                     doc.metadata['doc_id'] = doc.metadata[self.retriever.id_key]
                 doc_id = doc.metadata.get('doc_id', '')
-                if 'score' not in doc.metadata and doc_id in es_id_to_score:
-                    doc.metadata['score'] = float(es_id_to_score[doc_id])
+                if doc_id in es_id_to_score:
+                    doc.metadata['score'] = es_id_to_score[doc_id]
+                default_kb = partition_keys[0] if len(partition_keys) == 1 else ''
+                normalize_document_metadata(doc, retrieval_query=query, default_retrieval_source='es',
+                                            default_kb_id=default_kb, idx_for_fallback=idx, total_docs=es_total)
             time_record['retriever_search_by_es'] = round(time.perf_counter() - milvus_end_time, 2)
             debug_logger.info(f"Got {len(query_docs)} documents from vectorstore and {len(es_sub_docs)} documents from es, total {len(query_docs) + len(es_docs)} merged documents.")
             query_docs.extend(es_docs)
