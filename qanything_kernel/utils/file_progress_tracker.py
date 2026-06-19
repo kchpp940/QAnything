@@ -350,11 +350,50 @@ class FileProgressTracker:
         return progress_data
 
     def update_rollback_step(self, progress_data: Dict[str, Any], step: str,
-                             status: str, details: Optional[str] = None) -> Dict[str, Any]:
+                             status: str, details: Optional[str] = None,
+                             store: Optional[str] = None,
+                             residual_count: Optional[int] = None,
+                             cleared_count: Optional[int] = None,
+                             error_reason: Optional[str] = None) -> Dict[str, Any]:
         rollback_info = progress_data.get("rollback_info", {})
+        if "steps" not in rollback_info:
+            rollback_info["steps"] = {}
+
+        step_record = {
+            "status": status,
+            "success": status == "success",
+            "timestamp": datetime.now().isoformat(),
+        }
+        if details:
+            step_record["details"] = details
+        if store:
+            step_record["store"] = store
+        if residual_count is not None:
+            step_record["residual_count"] = residual_count
+        if cleared_count is not None:
+            step_record["cleared_count"] = cleared_count
+        if error_reason:
+            step_record["error_reason"] = error_reason
+
+        rollback_info["steps"][step] = step_record
         rollback_info[step] = True if status == "success" else False
         if details:
             rollback_info[f"{step}_detail"] = details
+        if error_reason:
+            rollback_info[f"{step}_error"] = error_reason
+
+        failures = []
+        for s_name, s_data in rollback_info.get("steps", {}).items():
+            if not s_data.get("success") and s_name.endswith("_cleared"):
+                failures.append({
+                    "step": s_name,
+                    "store": s_data.get("store", "unknown"),
+                    "residual": s_data.get("residual_count", "unknown"),
+                    "reason": s_data.get("error_reason") or s_data.get("details", "")
+                })
+        rollback_info["failures"] = failures
+        rollback_info["has_failure"] = len(failures) > 0
+
         progress_data["rollback_info"] = rollback_info
         progress_data["last_updated"] = datetime.now().isoformat()
         return progress_data
@@ -443,11 +482,50 @@ class FileProgressTracker:
         return progress_data
 
     def update_cleanup_step(self, progress_data: Dict[str, Any], step: str,
-                            status: str, details: Optional[str] = None) -> Dict[str, Any]:
+                            status: str, details: Optional[str] = None,
+                            store: Optional[str] = None,
+                            residual_count: Optional[int] = None,
+                            cleared_count: Optional[int] = None,
+                            error_reason: Optional[str] = None) -> Dict[str, Any]:
         cleanup_info = progress_data.get("cleanup_info", {})
+        if "steps" not in cleanup_info:
+            cleanup_info["steps"] = {}
+
+        step_record = {
+            "status": status,
+            "success": status == "success",
+            "timestamp": datetime.now().isoformat(),
+        }
+        if details:
+            step_record["details"] = details
+        if store:
+            step_record["store"] = store
+        if residual_count is not None:
+            step_record["residual_count"] = residual_count
+        if cleared_count is not None:
+            step_record["cleared_count"] = cleared_count
+        if error_reason:
+            step_record["error_reason"] = error_reason
+
+        cleanup_info["steps"][step] = step_record
         cleanup_info[step] = True if status == "success" else False
         if details:
             cleanup_info[f"{step}_detail"] = details
+        if error_reason:
+            cleanup_info[f"{step}_error"] = error_reason
+
+        failures = []
+        for s_name, s_data in cleanup_info.get("steps", {}).items():
+            if not s_data.get("success") and s_name.endswith("_cleared"):
+                failures.append({
+                    "step": s_name,
+                    "store": s_data.get("store", "unknown"),
+                    "residual": s_data.get("residual_count", "unknown"),
+                    "reason": s_data.get("error_reason") or s_data.get("details", "")
+                })
+        cleanup_info["failures"] = failures
+        cleanup_info["has_failure"] = len(failures) > 0
+
         progress_data["cleanup_info"] = cleanup_info
         progress_data["last_updated"] = datetime.now().isoformat()
         return progress_data

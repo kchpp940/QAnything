@@ -33,23 +33,63 @@ class StoreElasticSearchClient:
             debug_logger.warning("ES native client unavailable, cannot search by file_id")
             return []
         try:
-            query = {
+            metadata_query = {
                 "query": {
-                    "prefix": {
-                        "_id": file_id + "_"
+                    "bool": {
+                        "must": [
+                            {"term": {"metadata.file_id.keyword": file_id}}
+                        ]
                     }
                 },
                 "_source": False,
                 "size": max_results
             }
-            res = self._es_client.search(index=ES_INDEX_NAME, body=query)
-            hits = res.get("hits", {}).get("hits", [])
-            doc_ids = [hit["_id"] for hit in hits]
-            total = res.get("hits", {}).get("total", {}).get("value", len(doc_ids))
-            debug_logger.info(f"ES search by file_id {file_id}: found {total} docs, fetched {len(doc_ids)} ids")
-            return doc_ids
+            fallback_query = {
+                "query": {
+                    "prefix": {"_id": file_id + "_"}
+                },
+                "_source": False,
+                "size": max_results
+            }
+
+            try:
+                meta_res = self._es_client.search(index=ES_INDEX_NAME, body=metadata_query)
+                meta_hits = meta_res.get("hits", {}).get("hits", [])
+                meta_total = meta_res.get("hits", {}).get("total", {}).get("value", len(meta_hits))
+                meta_ids = [hit["_id"] for hit in meta_hits]
+                debug_logger.info(
+                    f"ES metadata search for {file_id}: total={meta_total}, fetched={len(meta_ids)} ids"
+                )
+            except Exception as meta_err:
+                debug_logger.warning(
+                    f"ES metadata.file_id query failed for {file_id}: {meta_err}, fallback to _id prefix"
+                )
+                meta_ids = []
+                meta_total = 0
+
+            fallback_ids = []
+            fallback_total = 0
+            try:
+                fb_res = self._es_client.search(index=ES_INDEX_NAME, body=fallback_query)
+                fb_hits = fb_res.get("hits", {}).get("hits", [])
+                fallback_total = fb_res.get("hits", {}).get("total", {}).get("value", len(fb_hits))
+                fallback_ids = [hit["_id"] for hit in fb_hits]
+                debug_logger.info(
+                    f"ES _id-prefix fallback for {file_id}: total={fallback_total}, fetched={len(fallback_ids)} ids"
+                )
+            except Exception as fb_err:
+                debug_logger.warning(
+                    f"ES _id prefix fallback failed for {file_id}: {fb_err}"
+                )
+
+            all_ids = list(dict.fromkeys(meta_ids + fallback_ids))
+            debug_logger.info(
+                f"ES combined search for {file_id}: "
+                f"metadata={meta_total}, prefix={fallback_total}, unique_total={len(all_ids)}"
+            )
+            return all_ids
         except Exception as e:
-            debug_logger.error(f"ES search by file_id failed for {file_id}: {e}")
+            debug_logger.error(f"ES search_by_file_id failed for {file_id}: {e}")
             return []
 
     def delete_by_file_id(self, file_id):

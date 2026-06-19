@@ -175,6 +175,16 @@
                     <p v-if="record.retry_count > 0" class="retry-count">
                       已重试 {{ record.retry_count }} 次
                     </p>
+                    <div v-if="record.progress_detail && hasCleanupFailures(record.progress_detail)" class="rollback-cleanup-details">
+                      <div class="details-header">{{ common.cleanupFailuresTitle }}</div>
+                      <ul class="details-list">
+                        <li v-for="(f, idx) in getCleanupFailures(record.progress_detail)" :key="idx" class="detail-item failure">
+                          <span class="store-name">[{{ f.store }}]</span>
+                          <span class="residual-info">{{ common.leftResidual }}: {{ f.residual }}</span>
+                          <span class="reason-text">{{ common.reason }}: {{ f.reason }}</span>
+                        </li>
+                      </ul>
+                    </div>
                   </div>
                 </div>
                 <div v-else>
@@ -667,6 +677,27 @@ const getStageStatusText = (status: string): string => {
     partial_success: common.statusPartialSuccess,
   };
   return statusMap[status] || status;
+};
+
+const hasCleanupFailures = (progressDetail: any): boolean => {
+  if (!progressDetail) return false;
+  const ri = progressDetail.rollback_info;
+  const ci = progressDetail.cleanup_info;
+  return (ri?.has_failure || ci?.has_failure) && (ri?.failures?.length > 0 || ci?.failures?.length > 0);
+};
+
+const getCleanupFailures = (progressDetail: any): Array<any> => {
+  if (!progressDetail) return [];
+  const out: Array<any> = [];
+  const ri = progressDetail.rollback_info;
+  if (ri?.failures?.length > 0) {
+    ri.failures.forEach((f: any) => out.push({ ...f, phase: 'rollback' }));
+  }
+  const ci = progressDetail.cleanup_info;
+  if (ci?.failures?.length > 0) {
+    ci.failures.forEach((f: any) => out.push({ ...f, phase: 'cleanup' }));
+  }
+  return out;
 };
 
 const getProgressColor = (status: string): string => {
@@ -1220,6 +1251,50 @@ onBeforeUnmount(() => {
 
 :deep(.ant-table-empty .ant-table-placeholder .ant-table-cell) {
   color: #999999 !important;
+}
+
+:deep(.error-detail) {
+  .rollback-cleanup-details {
+    margin-top: 8px;
+    padding: 6px 8px;
+    background: #fff2e6;
+    border-left: 3px solid #fa8c16;
+    border-radius: 2px;
+
+    .details-header {
+      font-size: 12px;
+      font-weight: 600;
+      color: #d46b08;
+      margin-bottom: 4px;
+    }
+
+    .details-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+
+      .detail-item {
+        font-size: 11px;
+        line-height: 1.5;
+        margin-bottom: 3px;
+        color: #613400;
+
+        &.failure {
+          color: #cf1322;
+        }
+
+        .store-name {
+          font-weight: 600;
+          margin-right: 6px;
+        }
+
+        .residual-info,
+        .reason-text {
+          margin-right: 6px;
+        }
+      }
+    }
+  }
 }
 </style>
 
