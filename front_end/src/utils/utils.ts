@@ -8,7 +8,17 @@
  */
 
 import { useUser } from '@/store/useUser';
-import { IChatSetting, IFileListItem, ITimeInfo, ITokenInfo } from './types';
+import {
+  IChatSetting,
+  IFileListItem,
+  ITimeInfo,
+  ITokenInfo,
+  IRetrievalTrace,
+  ITraceDisplayData,
+  ICandidateTraceInfo,
+  IDataSourceItem,
+} from './types';
+import { getLanguage } from '@/language';
 
 export function addWindowsAttr(name, value) {
   window[name] = value;
@@ -275,4 +285,97 @@ export function getContentDispositionByHeader(headers: Headers): string {
   return decodeURIComponent(
     (headers['content-disposition']?.split('filename=') || [])[1].slice(1, -1) || ''
   );
+}
+
+const getStageName = (stage: string): string => {
+  const common = getLanguage().common;
+  const stageMap: { [key: string]: string } = {
+    retrieval: common.traceStageRetrieval || '向量检索',
+    web_search: common.traceStageWebSearch || '联网搜索',
+    rerank: common.traceStageRerank || '重排序',
+    topk_filter: common.traceStageTopK || 'TopK截断',
+    faq_match: common.traceStageFAQ || 'FAQ匹配',
+    prompt_assembly: common.traceStagePrompt || 'Prompt拼接',
+  };
+  return stageMap[stage] || stage;
+};
+
+const getStageDescription = (stage: string): string => {
+  const descMap: { [key: string]: string } = {
+    retrieval: '向量相似度检索阶段',
+    web_search: '联网搜索阶段',
+    rerank: 'Rerank重排序阶段',
+    topk_filter: 'TopK截断阶段',
+    faq_match: 'FAQ匹配阶段',
+    prompt_assembly: 'Prompt拼接阶段',
+  };
+  return descMap[stage] || stage;
+};
+
+export function processRetrievalTrace(
+  trace: IRetrievalTrace,
+  sourceDocs: IDataSourceItem[]
+): ITraceDisplayData {
+  const allStages = trace.stages.map(s => s.stage);
+  const candidateMap = new Map<string, ICandidateTraceInfo>();
+  const selectedDocIds = new Set(sourceDocs.map(d => d.doc_id || d.file_id));
+
+  trace.stages.forEach(stage => {
+    stage.docs.forEach(doc => {
+      const key = doc.doc_id || doc.file_id;
+      if (!candidateMap.has(key)) {
+        candidateMap.set(key, {
+          doc_id: doc.doc_id,
+          file_id: doc.file_id,
+          file_name: doc.file_name,
+          content: doc.content,
+          final_selected: false,
+          final_filter_reason: null,
+          stage_traces: allStages.map(s => ({
+            stage: s,
+            stage_name: getStageName(s),
+            stage_description: getStageDescription(s),
+            trace: null,
+          })),
+        });
+      }
+      const candidate = candidateMap.get(key)!;
+      const stageTrace = candidate.stage_traces.find(st => st.stage === stage.stage);
+      if (stageTrace) {
+        stageTrace.trace = doc;
+      }
+    });
+  });
+
+  candidateMap.forEach(candidate => {
+    const key = candidate.doc_id || candidate.file_id;
+    candidate.final_selected = selectedDocIds.has(key);
+    if (!candidate.final_selected) {
+      const filteredStages = candidate.stage_traces.filter(st => st.trace && !st.trace.selected);
+      const lastFilteredStage = filteredStages[filteredStages.length - 1];
+      candidate.final_filter_reason = lastFilteredStage?.trace?.filter_reason || null;
+    }
+  });
+
+  const candidates = Array.from(candidateMap.values());
+  const selectedCandidates = candidates
+    .filter(c => c.final_selected)
+    .sort((a, b) => {
+      const aPos = a.stage_traces.find(st => st.stage === 'prompt_assembly')?.trace
+        ?.prompt_position;
+      const bPos = b.stage_traces.find(st => st.stage === 'prompt_assembly')?.trace
+        ?.prompt_position;
+      if (aPos !== null && aPos !== undefined && bPos !== null && bPos !== undefined) {
+        return (aPos ?? 999) - (bPos ?? 999);
+      }
+      return 0;
+    });
+  const filteredCandidates = candidates.filter(c => !c.final_selected);
+
+  return {
+    selected_candidates: selectedCandidates,
+    filtered_candidates: filteredCandidates,
+    original_query: trace.original_query,
+    retrieval_query: trace.retrieval_query,
+  };
 }

@@ -25,6 +25,7 @@ export interface ITraceDoc {
   rerank_score: number | null;
   selected: boolean;
   filter_reason: string | null;
+  prompt_position?: number | null; // 在 prompt 中的位置，null 表示未进入 prompt
 }
 
 export interface ITraceStage {
@@ -39,9 +40,32 @@ export interface IRetrievalTrace {
   stages: ITraceStage[];
 }
 
+export interface ICandidateTraceInfo {
+  doc_id: string;
+  file_id: string;
+  file_name: string;
+  content: string;
+  final_selected: boolean; // 最终是否入选进入 source_documents
+  final_filter_reason?: string | null; // 最终未入选的原因
+  stage_traces: Array<{
+    stage: string;
+    stage_name: string;
+    stage_description: string;
+    trace: ITraceDoc | null;
+  }>;
+}
+
+export interface ITraceDisplayData {
+  selected_candidates: ICandidateTraceInfo[]; // 最终入选的候选
+  filtered_candidates: ICandidateTraceInfo[]; // 被过滤的候选
+  original_query: string;
+  retrieval_query: string;
+}
+
 export interface IDataSourceItem {
   dataSource?: string; //数据来源
   detailDataSource?: string; //详细来源信息
+  doc_id?: string; // 文档chunk id
   file_name: string | null; //文件名
   content: string | null; //内容
   score: number | null; // 相关性
@@ -50,6 +74,12 @@ export interface IDataSourceItem {
   showDetailDataSource?: boolean; //是否展示详细来源信息
   showTraceDetail?: boolean; //是否展示溯源详情
   trace_info?: ITraceDoc[]; //该来源的各阶段溯源信息
+  candidate_trace?: ICandidateTraceInfo; // 完整的候选链路信息
+}
+
+export interface IChatItemTraceData {
+  activeTab: 'selected' | 'filtered'; // 当前激活的 Tab
+  displayData: ITraceDisplayData | null; // 展示用的 trace 数据
 }
 
 export interface IChatItem {
@@ -58,7 +88,7 @@ export interface IChatItem {
   answer?: string; //问题 | 回复内容
   like?: boolean; //点赞
   unlike?: boolean; //点踩
-  copied?: boolean; //点拷贝置为true 提示拷贝成功 然后置为false  重置原因:点击拷贝后添加颜色提示拷贝过了 1s后置为普通颜色
+  copied?: boolean; //点拷贝置为true 提示拷贝成功 然后置为false  重置原因:点击拷贝后添加颜色提示过了 1s后置为普通颜色
   onlySearch?: boolean; // 只检索知识库来源不回答
 
   showTools?: boolean; //当期问答是否结束 结束展示复制等小工具和取消闪烁
@@ -68,7 +98,8 @@ export interface IChatItem {
   qaId?: any; // 同上
 
   itemInfo?: IChatItemInfo; // 当前对话相关信息 token time chatSetting
-  retrieval_trace?: IRetrievalTrace; // 检索溯源信息
+  retrieval_trace?: IRetrievalTrace; // 检索溯源信息（原始数据）
+  trace_data?: IChatItemTraceData; // 处理后的溯源展示数据
 }
 
 // 历史记录

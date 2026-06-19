@@ -34,7 +34,7 @@ import re
 
 class LocalDocQA:
     @staticmethod
-    def create_trace_doc(doc, stage, retrieval_score=None, rerank_score=None, selected=True, filter_reason=None):
+    def create_trace_doc(doc, stage, retrieval_score=None, rerank_score=None, selected=True, filter_reason=None, prompt_position=None):
         return {
             "doc_id": doc.metadata.get("doc_id", ""),
             "file_id": doc.metadata.get("file_id", ""),
@@ -44,7 +44,8 @@ class LocalDocQA:
             "retrieval_score": retrieval_score,
             "rerank_score": rerank_score,
             "selected": selected,
-            "filter_reason": filter_reason
+            "filter_reason": filter_reason,
+            "prompt_position": prompt_position
         }
 
     def __init__(self, port):
@@ -769,18 +770,20 @@ class LocalDocQA:
                                                                                                   prompt_template=prompt_template)
 
             prompt_stage_docs = []
-            selected_doc_ids_prompt = {doc.metadata.get('doc_id') for doc in retrieval_documents}
+            selected_doc_ids_prompt = {doc.metadata.get('doc_id'): idx + 1 for idx, doc in enumerate(retrieval_documents)}
             for doc in docs_before_reprocess:
                 doc_id = doc.metadata.get('doc_id', '')
                 selected = doc_id in selected_doc_ids_prompt
                 filter_reason = None if selected else f"token限制裁剪(可用token:{limited_token_nums})"
+                prompt_position = selected_doc_ids_prompt.get(doc_id) if selected else None
 
                 prompt_stage_docs.append(self.create_trace_doc(
                     doc, "prompt_assembly",
                     retrieval_score=doc.metadata.get('score'),
                     rerank_score=doc.metadata.get('score') if rerank else None,
                     selected=selected,
-                    filter_reason=filter_reason
+                    filter_reason=filter_reason,
+                    prompt_position=prompt_position
                 ))
 
             retrieval_trace["stages"].append({
