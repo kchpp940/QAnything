@@ -52,6 +52,67 @@
                 </div>
               </template>
               <template v-if="item.source.length">
+                <!-- web_search_trace 信息展示 -->
+                <div v-if="item.web_search_trace" class="web-search-trace">
+                  <div class="trace-header">
+                    <span
+                      :class="[
+                        'trace-status',
+                        item.web_search_trace.triggered ? 'status-triggered' : 'status-skipped',
+                      ]"
+                    >
+                      {{
+                        item.web_search_trace.triggered
+                          ? common.webSearchEnabled
+                          : common.webSearchDisabled
+                      }}
+                    </span>
+                    <span class="trace-reason">
+                      {{ getTriggerReasonText(item.web_search_trace.trigger_reason) }}
+                    </span>
+                  </div>
+                  <div class="trace-stats">
+                    <span class="stat-item">
+                      <span class="stat-label">{{ common.sourceTypeLocal }}:</span>
+                      <span class="stat-value">{{ item.web_search_trace.local_doc_count }}</span>
+                    </span>
+                    <span class="stat-item">
+                      <span class="stat-label">{{ common.sourceTypeWeb }}:</span>
+                      <span class="stat-value">{{ item.web_search_trace.web_result_count }}</span>
+                    </span>
+                    <span v-if="item.web_search_trace.web_ratio > 0" class="stat-item">
+                      <span class="stat-label">{{ common.webSearchResultRatio }}:</span>
+                      <span class="stat-value">{{
+                        (item.web_search_trace.web_ratio * 100).toFixed(1)
+                      }}%</span>
+                    </span>
+                    <span v-if="item.web_search_trace.local_recall_score > 0" class="stat-item">
+                      <span class="stat-label">{{ common.localRecallScore }}:</span>
+                      <span class="stat-value">{{ item.web_search_trace.local_recall_score.toFixed(3) }}</span>
+                    </span>
+                    <span v-if="item.web_search_trace.execution_time_ms > 0" class="stat-item">
+                      <span class="stat-label">{{ common.webExecutionTime }}:</span>
+                      <span class="stat-value">{{ item.web_search_trace.execution_time_ms }}ms</span>
+                    </span>
+                  </div>
+                  <div class="trace-actions">
+                    <a-switch
+                      class="web-next-toggle"
+                      :checked="manualWebEnabled"
+                      size="small"
+                      @change="toggleManualWeb"
+                    >
+                      <template #checkedChildren>ON</template>
+                      <template #unCheckedChildren>OFF</template>
+                    </a-switch>
+                    <span class="toggle-hint">
+                      {{ manualWebEnabled ? common.webSearchEnabled : common.webSearchDisabled }} · {{
+                        common.manualWebSearch
+                      }}
+                    </span>
+                  </div>
+                </div>
+
                 <div
                   :class="[
                     'source-total',
@@ -59,26 +120,19 @@
                   ]"
                 >
                   <span v-if="language === 'zh'">
-                    找到了{{ getFilteredSource(item.source).length }}个信息来源
-                    <span v-if="getWebSourceCount(item.source) > 0" class="source-stats">
+                    找到了{{ item.source.length }}个信息来源
+                    <span class="source-stats">
                       （{{ common.sourceTypeLocal }}: {{ getLocalSourceCount(item.source) }}，
                       {{ common.sourceTypeWeb }}: {{ getWebSourceCount(item.source) }}）
                     </span>
                   </span>
                   <span v-else>
-                    Found {{ getFilteredSource(item.source).length }} source of information
-                    <span v-if="getWebSourceCount(item.source) > 0" class="source-stats">
+                    Found {{ item.source.length }} source of information
+                    <span class="source-stats">
                       ({{ common.sourceTypeLocal }}: {{ getLocalSourceCount(item.source) }},
                       {{ common.sourceTypeWeb }}: {{ getWebSourceCount(item.source) }})
                     </span>
                   </span>
-                  <a-switch
-                    v-if="getWebSourceCount(item.source) > 0"
-                    class="web-source-switch"
-                    :checked="!hideWebSources[index]"
-                    size="small"
-                    @change="toggleWebSources(index)"
-                  />
                   <SvgIcon
                     v-show="!showSourceIdxs.includes(index)"
                     name="down"
@@ -91,61 +145,121 @@
                   />
                 </div>
                 <div v-show="showSourceIdxs.includes(index)" class="source-list">
-                  <div
-                    v-for="(sourceItem, sourceIndex) in getFilteredSource(item.source, index)"
-                    :key="sourceIndex"
-                    :class="['data-source', `source-${sourceItem.source_type || 'local'}`]"
-                  >
-                    <p v-show="sourceItem.file_name" class="control">
-                      <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
-                      <span
-                        :class="['source-type-tag', `trust-${sourceItem.trust_level || 'high'}`]"
-                      >
-                        {{ sourceItem.source_type === 'web' ? common.sourceTypeWeb : common.sourceTypeLocal }}
+                  <!-- 本地知识库分组 -->
+                  <div v-if="getLocalSourceCount(item.source) > 0" class="source-group">
+                    <div class="source-group-header">
+                      <SvgIcon name="icon-database" class="group-icon" />
+                      <span class="group-title">{{ common.sourceGroupLocal }}</span>
+                      <span class="group-count">({{ getLocalSourceCount(item.source) }})</span>
+                    </div>
+                    <div
+                      v-for="(sourceItem, sourceIndex) in getLocalSources(item.source)"
+                      :key="'local-' + sourceIndex"
+                      :class="['data-source', 'source-local']"
+                    >
+                      <p v-show="sourceItem.file_name" class="control">
+                        <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
+                        <span :class="['source-type-tag', 'trust-high']">
+                          {{ common.trustLevelHigh }}
+                        </span>
+                        <span
+                          :class="[
+                            'file',
+                            checkFileType(sourceItem.file_name) ? 'filename-active' : '',
+                          ]"
+                          @click="handleChatSource(sourceItem)"
+                        >
+                          {{ sourceItem.file_name }}
+                        </span>
+                        <SvgIcon
+                          v-show="sourceItem.showDetailDataSource"
+                          name="iconup"
+                          @click="hideDetail(item, sourceIndex)"
+                        />
+                        <SvgIcon
+                          v-show="!sourceItem.showDetailDataSource"
+                          name="icondown"
+                          @click="showDetail(item, sourceIndex)"
+                        />
+                      </p>
+                      <Transition name="sourceitem">
+                        <div v-show="sourceItem.showDetailDataSource" class="source-content">
+                          <p v-html="sourceItem.content?.replaceAll('\n', '<br/>')"></p>
+                          <p class="score">
+                            <span class="tips">{{ common.correlation }}</span
+                            >{{ sourceItem.score }}
+                          </p>
+                        </div>
+                      </Transition>
+                    </div>
+                  </div>
+                  <div v-else class="source-group-empty">
+                    {{ common.noLocalResults }}
+                  </div>
+
+                  <!-- 联网搜索分组 -->
+                  <div v-if="getWebSourceCount(item.source) > 0" class="source-group">
+                    <div class="source-group-header source-group-header-web">
+                      <SvgIcon name="network-search" class="group-icon" />
+                      <span class="group-title">{{ common.sourceGroupWeb }}</span>
+                      <span class="group-count">({{ getWebSourceCount(item.source) }})</span>
+                      <span :class="['source-type-tag', 'trust-medium', 'group-tag']">
+                        {{ common.trustLevelMedium }}
                       </span>
-                      <a
-                        v-if="sourceItem.file_id.startsWith('http')"
-                        :href="sourceItem.file_id"
-                        target="_blank"
-                      >
-                        {{ sourceItem.file_name }}
-                      </a>
-                      <span
-                        v-else
-                        :class="[
-                          'file',
-                          checkFileType(sourceItem.file_name) ? 'filename-active' : '',
-                        ]"
-                        @click="handleChatSource(sourceItem)"
-                      >
-                        {{ sourceItem.file_name }}
-                      </span>
-                      <SvgIcon
-                        v-show="sourceItem.showDetailDataSource"
-                        name="iconup"
-                        @click="hideDetail(item, sourceIndex)"
-                      />
-                      <SvgIcon
-                        v-show="!sourceItem.showDetailDataSource"
-                        name="icondown"
-                        @click="showDetail(item, sourceIndex)"
-                      />
-                    </p>
-                    <Transition name="sourceitem">
-                      <div v-show="sourceItem.showDetailDataSource" class="source-content">
-                        <p v-html="sourceItem.content?.replaceAll('\n', '<br/>')"></p>
-                        <p class="score">
-                          <span class="tips">{{ common.correlation }}</span
-                          >{{ sourceItem.score }}
-                        </p>
-                        <p v-if="sourceItem.source_type === 'web'" class="web-meta">
-                          <span class="tips">{{ common.trustLevelMedium }}</span>
-                          <span v-if="sourceItem.web_timestamp" class="web-time">
-                            {{ formatWebTimestamp(sourceItem.web_timestamp) }}
-                          </span>
-                        </p>
-                      </div>
-                    </Transition>
+                    </div>
+                    <div
+                      v-for="(sourceItem, sourceIndex) in getWebSources(item.source)"
+                      :key="'web-' + sourceIndex"
+                      :class="['data-source', 'source-web']"
+                    >
+                      <p v-show="sourceItem.file_name" class="control">
+                        <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
+                        <a
+                          v-if="sourceItem.file_id.startsWith('http')"
+                          :href="sourceItem.file_id"
+                          target="_blank"
+                        >
+                          {{ sourceItem.file_name }}
+                        </a>
+                        <span
+                          v-else
+                          :class="[
+                            'file',
+                            checkFileType(sourceItem.file_name) ? 'filename-active' : '',
+                          ]"
+                          @click="handleChatSource(sourceItem)"
+                        >
+                          {{ sourceItem.file_name }}
+                        </span>
+                        <SvgIcon
+                          v-show="sourceItem.showDetailDataSource"
+                          name="iconup"
+                          @click="hideDetail(item, sourceIndex)"
+                        />
+                        <SvgIcon
+                          v-show="!sourceItem.showDetailDataSource"
+                          name="icondown"
+                          @click="showDetail(item, sourceIndex)"
+                        />
+                      </p>
+                      <Transition name="sourceitem">
+                        <div v-show="sourceItem.showDetailDataSource" class="source-content">
+                          <p v-html="sourceItem.content?.replaceAll('\n', '<br/>')"></p>
+                          <p class="score">
+                            <span class="tips">{{ common.correlation }}</span
+                            >{{ sourceItem.score }}
+                          </p>
+                          <p class="web-meta">
+                            <span v-if="sourceItem.web_timestamp" class="web-time">
+                              {{ formatWebTimestamp(sourceItem.web_timestamp) }}
+                            </span>
+                          </p>
+                        </div>
+                      </Transition>
+                    </div>
+                  </div>
+                  <div v-else class="source-group-empty">
+                    {{ common.noWebResults }}
                   </div>
                 </div>
               </template>
@@ -193,28 +307,25 @@
       </div>
       <div class="question-box">
         <div class="question">
-          <!--          <a-popover placement="topLeft">-->
-          <!--            <template #content>-->
-          <!--              <p v-if="network">退出联网检索</p>-->
-          <!--              <p v-else>开启联网检索</p>-->
-          <!--            </template>-->
-          <!--            <span :class="['network', `network-${network}`]">-->
-          <!--              <SvgIcon name="network" @click="networkChat" />-->
-          <!--            </span>-->
-          <!--          </a-popover>-->
-          <!--          <a-popover v-if="chatType === 'share'" placement="topLeft">-->
-          <!--            <template #content>-->
-          <!--              <p v-if="control">{{ bots.multiTurnConversation2 }}</p>-->
-          <!--              <p v-else>{{ bots.multiTurnConversation1 }}</p>-->
-          <!--            </template>-->
-          <!--            <span :class="['control', `control-${control}`]">-->
-          <!--              <SvgIcon name="chat-control" @click="controlChat" />-->
-          <!--            </span>-->
-          <!--          </a-popover>-->
-
-          <!--          <span v-if="chatType === 'share'" class="download" @click="downloadChat">-->
-          <!--            <SvgIcon name="chat-download" />-->
-          <!--          </span>-->
+          <a-popover placement="topLeft">
+            <template #content>
+              <div class="web-search-popover">
+                <p><strong>{{ common.manualWebSearch }}</strong></p>
+                <p>{{ common.manualWebSearchDescription }}</p>
+              </div>
+            </template>
+            <span
+              :class="[
+                'network',
+                manualWebEnabled ? 'network-true' : 'network-false',
+                chatSettingFormActive.value.webSearchPolicy === 'disabled' ? 'isPreventClick' : '',
+              ]"
+              @click="toggleManualWeb"
+            >
+              <SvgIcon name="network-search" v-if="manualWebEnabled" />
+              <SvgIcon name="network-search-off" v-else />
+            </span>
+          </a-popover>
           <ChatTextarea v-model:input-value="question" :options="mentionOptions" @send="send">
             <a-button type="primary" :disabled="showLoading" @click="send">
               <SvgIcon name="sendplane"></SvgIcon>
@@ -312,6 +423,15 @@ const showLoading = ref(false);
 
 const showSourceIdxs = ref([]);
 
+// 单次联网开关
+const manualWebEnabled = ref(false);
+
+// 切换单次联网开关
+const toggleManualWeb = () => {
+  if (chatSettingFormActive.value.webSearchPolicy === 'disabled') return;
+  manualWebEnabled.value = !manualWebEnabled.value;
+};
+
 //取消请求用
 let ctrl: AbortController;
 
@@ -376,6 +496,7 @@ const addAnswer = (question: string) => {
     source: [],
     picList: null,
     showTools: false,
+    web_search_trace: undefined,
   });
 };
 
@@ -454,6 +575,10 @@ const send = async () => {
     Connection: 'keep-alive',
   };
 
+  // 发送后重置单次联网开关
+  const willManualReset = manualWebEnabled.value;
+  manualWebEnabled.value = false;
+
   fetchEventSource(apiBase + '/local_doc_qa/local_doc_chat', {
     method: 'POST',
     headers: headers,
@@ -465,7 +590,9 @@ const send = async () => {
       history: history.value,
       question: q,
       streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
-      // networking: chatSettingFormActive.value.capabilities.networkSearch,
+      networking: chatSettingFormActive.value.capabilities.networkSearch,
+      web_search_policy: chatSettingFormActive.value.webSearchPolicy || 'disabled',
+      manual_enabled: willManualReset,
       product_source: 'saas',
       // rerank: chatSettingFormActive.value.capabilities.rerank,
       // only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
@@ -510,6 +637,10 @@ const send = async () => {
 
       if (res?.source_documents?.length) {
         QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+      }
+
+      if (res?.web_search_trace) {
+        QA_List.value[QA_List.value.length - 1].web_search_trace = res.web_search_trace;
       }
 
       // if (res?.history.length) {
@@ -566,12 +697,6 @@ const hideSourceList = index => {
   showSourceIdxs.value = showSourceIdxs.value.filter(item => item !== index);
 };
 
-const hideWebSources = ref<Record<number, boolean>>({});
-
-const toggleWebSources = index => {
-  hideWebSources.value[index] = !hideWebSources.value[index];
-};
-
 const getLocalSourceCount = sources => {
   if (!sources || !sources.length) return 0;
   return sources.filter(s => (s.source_type || 'local') === 'local').length;
@@ -582,13 +707,26 @@ const getWebSourceCount = sources => {
   return sources.filter(s => s.source_type === 'web').length;
 };
 
-const getFilteredSource = (sources, index?) => {
+const getLocalSources = sources => {
   if (!sources || !sources.length) return [];
-  const idx = index ?? 0;
-  if (hideWebSources.value[idx]) {
-    return sources.filter(s => (s.source_type || 'local') === 'local');
-  }
-  return sources;
+  return sources.filter(s => (s.source_type || 'local') === 'local');
+};
+
+const getWebSources = sources => {
+  if (!sources || !sources.length) return [];
+  return sources.filter(s => s.source_type === 'web');
+};
+
+const getTriggerReasonText = reason => {
+  const reasonMap: Record<string, string> = {
+    policy_always: common.triggerReasonPolicyAlways,
+    policy_low_recall: common.triggerReasonPolicyLowRecall,
+    policy_manual: common.triggerReasonPolicyManual,
+    skipped_disabled: common.triggerReasonSkippedDisabled,
+    skipped_manual_off: common.triggerReasonSkippedManualOff,
+    skipped_high_recall: common.triggerReasonSkippedHighRecall,
+  };
+  return reasonMap[reason] || reason;
 };
 
 const formatWebTimestamp = timestamp => {
@@ -1011,6 +1149,185 @@ scrollBottom();
 
       .web-time {
         margin-left: 12px;
+      }
+    }
+
+    /* web-search-trace 样式 */
+    .web-search-trace {
+      background: linear-gradient(135deg, #f0f4ff 0%, #f5f0ff 100%);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 12px;
+      margin-left: 48px;
+      border: 1px solid #e0e5f5;
+
+      .trace-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 8px;
+
+        .trace-status {
+          padding: 2px 8px;
+          border-radius: 4px;
+          font-size: 12px;
+          font-weight: 500;
+          margin-right: 8px;
+
+          &.status-triggered {
+            background: rgba(90, 71, 229, 0.1);
+            color: #5a47e5;
+          }
+
+          &.status-skipped {
+            background: rgba(153, 153, 153, 0.1);
+            color: #999;
+          }
+        }
+
+        .trace-reason {
+          font-size: 13px;
+          color: #666;
+        }
+      }
+
+      .trace-stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 20px;
+        margin-bottom: 8px;
+        font-size: 12px;
+
+        .stat-item {
+          display: flex;
+          align-items: center;
+
+          .stat-label {
+            color: #999;
+            margin-right: 4px;
+          }
+
+          .stat-value {
+            color: #333;
+            font-weight: 500;
+          }
+        }
+      }
+
+      .trace-actions {
+        display: flex;
+        align-items: center;
+        padding-top: 8px;
+        border-top: 1px dashed #d8dcf0;
+
+        .web-next-toggle {
+          margin-right: 8px;
+        }
+
+        .toggle-hint {
+          font-size: 12px;
+          color: #666;
+        }
+      }
+    }
+
+    /* source-group 分组样式 */
+    .source-group {
+      margin-bottom: 16px;
+
+      &:last-child {
+        margin-bottom: 0;
+      }
+
+      .source-group-header {
+        display: flex;
+        align-items: center;
+        padding: 8px 12px;
+        background: #f5f7fa;
+        border-radius: 6px 6px 0 0;
+        font-size: 13px;
+        font-weight: 500;
+        color: #333;
+        margin-bottom: 8px;
+
+        .group-icon {
+          width: 16px;
+          height: 16px;
+          margin-right: 6px;
+        }
+
+        .group-title {
+          flex: 1;
+        }
+
+        .group-count {
+          color: #999;
+          font-weight: normal;
+          margin-right: 8px;
+        }
+
+        .group-tag {
+          margin-left: 8px;
+          margin-right: 0;
+        }
+
+        &.source-group-header-web {
+          background: rgba(90, 71, 229, 0.05);
+          color: #5a47e5;
+        }
+      }
+
+      .source-group-empty {
+        padding: 16px;
+        text-align: center;
+        color: #bbb;
+        font-size: 12px;
+        background: #fafafa;
+        border-radius: 6px;
+      }
+
+      .data-source {
+        margin-left: 0;
+        margin-bottom: 8px;
+
+        &:last-child {
+          margin-bottom: 0;
+        }
+      }
+    }
+
+    /* 单次联网按钮激活状态 */
+    .network {
+      cursor: pointer;
+      margin-right: 8px;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      color: #999;
+
+      &.network-true {
+        color: #5a47e5;
+
+        svg {
+          filter: drop-shadow(0 0 4px rgba(90, 71, 229, 0.4));
+        }
+      }
+
+      &.isPreventClick {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
+    }
+
+    .web-search-popover {
+      max-width: 240px;
+
+      p {
+        margin: 0 0 4px 0;
+        font-size: 12px;
+
+        &:last-child {
+          margin-bottom: 0;
+        }
       }
     }
 

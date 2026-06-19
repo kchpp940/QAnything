@@ -1360,6 +1360,179 @@ $avatar-width: 96px;
       }
     }
 
+    /* web-search-trace 样式 */
+    .web-search-trace {
+      background: linear-gradient(135deg, #f0f4ff 0%, #f5f0ff 100%);
+      border-radius: 8px;
+      padding: 12px 16px;
+      margin-bottom: 12px;
+      border: 1px solid #e0e5f5;
+
+      .trace-header {
+        display: flex;
+        align-items: center;
+        margin-bottom: 8px;
+
+        .trace-status {
+          padding: 2px 8px;
+          border-radius: 4px;
+          font-size: 12px;
+          font-weight: 500;
+          margin-right: 8px;
+
+          &.status-triggered {
+            background: rgba(90, 71, 229, 0.1);
+            color: #5a47e5;
+          }
+
+          &.status-skipped {
+            background: rgba(153, 153, 153, 0.1);
+            color: #999;
+          }
+        }
+
+        .trace-reason {
+          font-size: 13px;
+          color: #666;
+        }
+      }
+
+      .trace-stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px 20px;
+        margin-bottom: 8px;
+        font-size: 12px;
+
+        .stat-item {
+          display: flex;
+          align-items: center;
+
+          .stat-label {
+            color: #999;
+            margin-right: 4px;
+          }
+
+          .stat-value {
+            color: #333;
+            font-weight: 500;
+          }
+        }
+      }
+
+      .trace-actions {
+        display: flex;
+        align-items: center;
+        padding-top: 8px;
+        border-top: 1px dashed #d8dcf0;
+
+        .web-next-toggle {
+          margin-right: 8px;
+        }
+
+        .toggle-hint {
+          font-size: 12px;
+          color: #666;
+        }
+      }
+    }
+
+    /* source-group 分组样式 */
+    .source-group {
+      margin-bottom: 16px;
+
+      &:last-child {
+        margin-bottom: 0;
+      }
+
+      .source-group-header {
+        display: flex;
+        align-items: center;
+        padding: 8px 12px;
+        background: #f5f7fa;
+        border-radius: 6px 6px 0 0;
+        font-size: 13px;
+        font-weight: 500;
+        color: #333;
+        margin-bottom: 8px;
+
+        .group-icon {
+          width: 16px;
+          height: 16px;
+          margin-right: 6px;
+        }
+
+        .group-title {
+          flex: 1;
+        }
+
+        .group-count {
+          color: #999;
+          font-weight: normal;
+          margin-right: 8px;
+        }
+
+        .group-tag {
+          margin-left: 8px;
+          margin-right: 0;
+        }
+
+        &.source-group-header-web {
+          background: rgba(90, 71, 229, 0.05);
+          color: #5a47e5;
+        }
+      }
+
+      .source-group-empty {
+        padding: 16px;
+        text-align: center;
+        color: #bbb;
+        font-size: 12px;
+        background: #fafafa;
+        border-radius: 6px;
+      }
+
+      .data-source {
+        margin-left: 0;
+        margin-bottom: 8px;
+
+        &:last-child {
+          margin-bottom: 0;
+        }
+      }
+    }
+
+    /* 单次联网按钮激活状态 */
+    .question-icon.web-search-toggle {
+      transition: all 0.2s ease;
+
+      &.isActive {
+        color: #5a47e5;
+
+        svg {
+          filter: drop-shadow(0 0 4px rgba(90, 71, 229, 0.4));
+        }
+      }
+
+      &.isPreventClick {
+        opacity: 0.3;
+        cursor: not-allowed;
+      }
+    }
+
+    .web-search-popover {
+      max-width: 240px;
+
+      p {
+        margin: 0 0 4px 0;
+        font-size: 12px;
+
+        &:last-child {
+          margin-bottom: 0;
+        }
+      }
+    }
+
     .feed-back {
       display: flex;
       height: 20px;
