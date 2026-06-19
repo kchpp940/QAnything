@@ -25,6 +25,8 @@ from langchain_community.tools.tavily_search import TavilySearchResults
 from langchain.pydantic_v1 import BaseModel, Field
 from langchain.tools import BaseTool, StructuredTool, tool
 from langchain_core.utils.function_calling import convert_to_openai_function
+import time
+from qanything_kernel.configs.model_config import TRUST_LEVEL_WEB, SOURCE_TYPE_WEB
 
 api_wrapper = DuckDuckGoSearchAPIWrapper(time = None, max_results = 3, backend = "lite")
 html2text = Html2TextTransformer()
@@ -53,11 +55,14 @@ def duckduckgo_search(query: str, top_k: int):
     #print(docs_transformed[0].page_content)
     # 这里加上title是不是好一点
     search_contents = []
+    web_timestamp = int(time.time())
     for i, doc in enumerate(docs_transformed):
         title_content = results[i]["title"]
         search_contents.append(f">>>>>>>>>>>>>>>>>>>>以下是标题为<h1>{title_content}</h1>的网页内容\n{doc.page_content}\n<<<<<<<<<<<<<<<<<以上是标题为<h1>{title_content}</h1>的网页内容\n")
+        doc.metadata['source_type'] = SOURCE_TYPE_WEB
+        doc.metadata['trust_level'] = TRUST_LEVEL_WEB
+        doc.metadata['web_timestamp'] = web_timestamp
     return "\n\n".join([doc for doc in search_contents]), docs_transformed
-    #return ", ".join([res["snippet"] for res in results])
 
 web_search_tool = StructuredTool.from_function(
     func=duckduckgo_search,

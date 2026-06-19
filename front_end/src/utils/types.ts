@@ -24,7 +24,13 @@ export interface IDataSourceItem {
   file_id: string | null; // 来源文件id（知识库的文件）
   file_url: string | null; // 来源网址（联网检索）
   showDetailDataSource?: boolean; //是否展示详细来源信息
+  source_type?: 'local' | 'web'; // 来源类型：本地知识库或联网搜索
+  trust_level?: 'high' | 'medium' | 'low'; // 可信级别
+  web_timestamp?: number; // 联网搜索时间戳
 }
+
+// 联网检索策略
+export type WebSearchPolicy = 'disabled' | 'manual' | 'low_recall' | 'always';
 
 export interface IChatItem {
   type: 'ai' | 'user'; //区别用户提问 和ai回复
@@ -107,7 +113,7 @@ export interface IFileListItem {
 
 // 模型设置
 type ICapabilities = {
-  /* 是否联网搜索 */
+  /* 是否联网搜索（已废弃，使用 webSearchPolicy 替代） */
   networkSearch: boolean;
   /* 是否混合搜索 */
   mixedSearch: boolean;
@@ -146,6 +152,8 @@ export interface IChatSetting {
   top_K: number;
   /* 模型能力 */
   capabilities: ICapabilities;
+  /* 联网检索策略 */
+  webSearchPolicy: WebSearchPolicy;
   /* 是否开启（只有一个） */
   active: boolean;
 }

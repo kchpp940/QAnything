@@ -101,6 +101,7 @@ const saveBotInfo = async () => {
         welcome_message: welcomeMessage.value,
         only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
         networking: chatSettingFormActive.value.capabilities.networkSearch,
+        web_search_policy: chatSettingFormActive.value.webSearchPolicy || 'disabled',
         api_base: chatSettingFormActive.value.apiBase,
         api_key: chatSettingFormActive.value.apiKey,
         api_context_length: chatSettingFormActive.value.apiContextLength,

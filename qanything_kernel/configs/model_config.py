@@ -24,6 +24,24 @@ PDF_MODEL_PATH = os.path.join(root_path, "qanything_kernel/dependent_server/pdf_
 # LLM streaming reponse
 STREAMING = True
 
+# 联网检索策略
+WEB_SEARCH_POLICY_DISABLED = "disabled"        # 禁用联网
+WEB_SEARCH_POLICY_MANUAL = "manual"            # 仅用户手动开启
+WEB_SEARCH_POLICY_LOW_RECALL = "low_recall"    # 本地低召回才联网
+WEB_SEARCH_POLICY_ALWAYS = "always"            # 始终联网
+
+# 来源可信级别
+TRUST_LEVEL_LOCAL = "high"       # 本地知识库 - 高可信
+TRUST_LEVEL_WEB = "medium"       # 联网搜索 - 中等可信
+
+# 来源类型
+SOURCE_TYPE_LOCAL = "local"      # 本地知识库
+SOURCE_TYPE_WEB = "web"          # 联网搜索
+
+# 低召回阈值（本地检索分数低于此值视为低召回）
+LOW_RECALL_SCORE_THRESHOLD = 0.3
+LOW_RECALL_DOC_THRESHOLD = 2     # 本地检索文档数少于此值视为低召回
+
 SYSTEM = """
 You are always a reliable assistant that can answer questions with the help of external documents.
 You are an AI assistant that follows instructions extremely well. Help as much as you can. 

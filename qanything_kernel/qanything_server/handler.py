@@ -5,7 +5,9 @@ from qanything_kernel.core.local_doc_qa import LocalDocQA
 from qanything_kernel.utils.custom_log import debug_logger, qa_logger
 from qanything_kernel.configs.model_config import (BOT_DESC, BOT_IMAGE, BOT_PROMPT, BOT_WELCOME,
                                                    DEFAULT_PARENT_CHUNK_SIZE, MAX_CHARS, VECTOR_SEARCH_TOP_K,
-                                                   UPLOAD_ROOT_PATH, IMAGES_ROOT_PATH)
+                                                   UPLOAD_ROOT_PATH, IMAGES_ROOT_PATH, WEB_SEARCH_POLICY_DISABLED,
+                                                   WEB_SEARCH_POLICY_MANUAL, WEB_SEARCH_POLICY_LOW_RECALL,
+                                                   WEB_SEARCH_POLICY_ALWAYS)
 from qanything_kernel.utils.general_utils import *
 from langchain.schema import Document
 from sanic.response import ResponseStream
@@ -30,8 +32,7 @@ __all__ = ["new_knowledge_base", "upload_files", "list_kbs", "list_docs", "delet
            "rename_knowledge_base", "get_total_status", "clean_files_by_status", "upload_weblink", "local_doc_chat",
            "document", "upload_faqs", "get_doc_completed", "get_qa_info", "get_user_id", "get_doc",
            "get_rerank_results", "get_user_status", "health_check", "update_chunks", "get_file_base64",
-           "get_random_qa", "get_related_qa", "new_bot", "delete_bot", "update_bot", "get_bot_info",
-           "get_retrieval_diagnosis"]
+           "get_random_qa", "get_related_qa", "new_bot", "delete_bot", "update_bot", "get_bot_info"]
 
 INVALID_USER_ID = f"fail, Invalid user_id: . user_id 必须只含有字母，数字和下划线且字母开头"
 
@@ -671,6 +672,9 @@ async def local_doc_chat(req: request):
         rerank = llm_setting.get('rerank', True)
         only_need_search_results = llm_setting.get('only_need_search_results', False)
         need_web_search = llm_setting.get('networking', False)
+        web_search_policy = llm_setting.get('web_search_policy', None)
+        if web_search_policy is None:
+            web_search_policy = WEB_SEARCH_POLICY_ALWAYS if need_web_search else WEB_SEARCH_POLICY_DISABLED
         api_base = llm_setting.get('api_base', '')
         api_key = llm_setting.get('api_key', 'ollama')
         api_context_length = llm_setting.get('api_context_length', 4096)
@@ -687,6 +691,9 @@ async def local_doc_chat(req: request):
         rerank = safe_get(req, 'rerank', default=True)
         only_need_search_results = safe_get(req, 'only_need_search_results', False)
         need_web_search = safe_get(req, 'networking', False)
+        web_search_policy = safe_get(req, 'web_search_policy', None)
+        if web_search_policy is None:
+            web_search_policy = WEB_SEARCH_POLICY_ALWAYS if need_web_search else WEB_SEARCH_POLICY_DISABLED
         api_base = safe_get(req, 'api_base', '')
         # 如果api_base中包含0.0.0.0或127.0.0.1或localhost，替换为GATEWAY_IP
         api_base = api_base.replace('0.0.0.0', GATEWAY_IP).replace('127.0.0.1', GATEWAY_IP).replace('localhost',
@@ -751,6 +758,7 @@ async def local_doc_chat(req: request):
     debug_logger.info("only_need_search_results: %s", only_need_search_results)
     debug_logger.info("bot_id: %s", bot_id)
     debug_logger.info("need_web_search: %s", need_web_search)
+    debug_logger.info("web_search_policy: %s", web_search_policy)
     debug_logger.info("api_base: %s", api_base)
     debug_logger.info("api_key: %s", api_key)
     debug_logger.info("api_context_length: %s", api_context_length)
@@ -801,6 +809,7 @@ async def local_doc_chat(req: request):
                                                                                     custom_prompt=custom_prompt,
                                                                                     time_record=time_record,
                                                                                     need_web_search=need_web_search,
+                                                                                    web_search_policy=web_search_policy,
                                                                                     hybrid_search=hybrid_search,
                                                                                     web_chunk_size=chunk_size,
                                                                                     temperature=temperature,
@@ -808,9 +817,7 @@ async def local_doc_chat(req: request):
                                                                                     api_key=api_key,
                                                                                     api_context_length=api_context_length,
                                                                                     top_p=top_p,
-                                                                                    top_k=top_k,
-                                                                                    user_id=user_id,
-                                                                                    bot_id=bot_id
+                                                                                    top_k=top_k
                                                                                     ):
                 chunk_data = resp["result"]
                 if not chunk_data:
@@ -819,7 +826,6 @@ async def local_doc_chat(req: request):
                 if chunk_str.startswith("[DONE]"):
                     retrieval_documents = format_source_documents(resp["retrieval_documents"])
                     source_documents = format_source_documents(resp["source_documents"])
-                    retrieval_trace = resp.get("retrieval_trace")
                     result = next_history[-1][1]
                     # result = resp['result']
                     time_record['chat_completed'] = round(time.perf_counter() - preprocess_start, 2)
@@ -832,8 +838,7 @@ async def local_doc_chat(req: request):
                                  'history': history,
                                  'condense_question': resp['condense_question'], 'prompt': resp['prompt'],
                                  'result': result, 'retrieval_documents': retrieval_documents,
-                                 'source_documents': source_documents, 'retrieval_trace': retrieval_trace,
-                                 'bot_id': bot_id}
+                                 'source_documents': source_documents, 'bot_id': bot_id}
                     local_doc_qa.milvus_summary.add_qalog(**chat_data)
                     qa_logger.info("chat_data: %s", chat_data)
                     debug_logger.info("response: %s", chat_data['result'])
@@ -847,7 +852,6 @@ async def local_doc_chat(req: request):
                         "condense_question": resp['condense_question'],
                         "source_documents": source_documents,
                         "retrieval_documents": retrieval_documents,
-                        "retrieval_trace": retrieval_trace,
                         "time_record": formatted_time_record,
                         "show_images": resp.get('show_images', [])
                     }
@@ -887,6 +891,7 @@ async def local_doc_chat(req: request):
                                                                            time_record=time_record,
                                                                            only_need_search_results=only_need_search_results,
                                                                            need_web_search=need_web_search,
+                                                                           web_search_policy=web_search_policy,
                                                                            hybrid_search=hybrid_search,
                                                                            web_chunk_size=chunk_size,
                                                                            temperature=temperature,
@@ -894,9 +899,7 @@ async def local_doc_chat(req: request):
                                                                            api_key=api_key,
                                                                            api_context_length=api_context_length,
                                                                            top_p=top_p,
-                                                                           top_k=top_k,
-                                                                           user_id=user_id,
-                                                                           bot_id=bot_id
+                                                                           top_k=top_k
                                                                            ):
             pass
         if only_need_search_results:
@@ -904,13 +907,12 @@ async def local_doc_chat(req: request):
                 {"code": 200, "question": question, "source_documents": format_source_documents(resp)})
         retrieval_documents = format_source_documents(resp["retrieval_documents"])
         source_documents = format_source_documents(resp["source_documents"])
-        retrieval_trace = resp.get("retrieval_trace")
         formatted_time_record = format_time_record(time_record)
         chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, 'time_record': formatted_time_record,
                      'history': history, "condense_question": resp['condense_question'], "model": model,
                      "product_source": request_source,
                      'retrieval_documents': retrieval_documents, 'prompt': resp['prompt'], 'result': resp['result'],
-                     'source_documents': source_documents, 'retrieval_trace': retrieval_trace, 'bot_id': bot_id}
+                     'source_documents': source_documents, 'bot_id': bot_id}
         local_doc_qa.milvus_summary.add_qalog(**chat_data)
         qa_logger.info("chat_data: %s", chat_data)
         debug_logger.info("response: %s", chat_data['result'])
@@ -918,7 +920,6 @@ async def local_doc_chat(req: request):
                            "response": resp["result"], "model": model,
                            "history": history, "condense_question": resp['condense_question'],
                            "source_documents": source_documents, "retrieval_documents": retrieval_documents,
-                           "retrieval_trace": retrieval_trace,
                            "time_record": formatted_time_record})
 
 
@@ -1395,6 +1396,9 @@ async def update_bot(req: request):
     networking = safe_get(req, "networking")
     if networking is not None:
         llm_setting["networking"] = networking
+    web_search_policy = safe_get(req, "web_search_policy")
+    if web_search_policy is not None:
+        llm_setting["web_search_policy"] = web_search_policy
     only_need_search_results = safe_get(req, "only_need_search_results")
     if only_need_search_results is not None:
         llm_setting["only_need_search_results"] = only_need_search_results
@@ -1471,52 +1475,3 @@ async def get_file_base64(req: request):
     with open(file_location, "rb") as f:
         file_base64 = base64.b64encode(f.read()).decode()
     return sanic_json({"code": 200, "msg": "success", "file_base64": file_base64})
-
-
-@get_time_async
-async def get_retrieval_diagnosis(req: request):
-    local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
-    user_id = safe_get(req, 'user_id')
-    user_info = safe_get(req, 'user_info', "1234")
-    passed, msg = check_user_id_and_user_info(user_id, user_info)
-    if not passed:
-        return sanic_json({"code": 2001, "msg": msg})
-    user_id = user_id + '__' + user_info
-
-    kb_id = safe_get(req, 'kb_id')
-    if not kb_id:
-        return sanic_json({"code": 2005, "msg": "fail, kb_id is required"})
-    kb_id = correct_kb_id(kb_id)
-
-    time_start = safe_get(req, 'time_start')
-    time_end = safe_get(req, 'time_end')
-    time_range = get_time_range(time_start, time_end)
-    if not time_range:
-        return sanic_json({"code": 2002, "msg": f'输入非法！time_start格式错误，示例：2024-10-05，请检查！'})
-
-    data_type = safe_get(req, 'data_type', 'summary')
-
-    if data_type == 'summary':
-        result = local_doc_qa.milvus_summary.get_retrieval_diagnosis_summary(kb_id, time_range)
-        for row in result:
-            if 'date' in row and hasattr(row['date'], 'strftime'):
-                row['date'] = row['date'].strftime("%Y-%m-%d")
-        return sanic_json({"code": 200, "msg": "success", "data": result})
-
-    elif data_type == 'failure_distribution':
-        result = local_doc_qa.milvus_summary.get_retrieval_diagnosis_failure_distribution(kb_id, time_range)
-        return sanic_json({"code": 200, "msg": "success", "data": result})
-
-    elif data_type == 'low_confidence':
-        top_k = safe_get(req, 'top_k', 20)
-        result = local_doc_qa.milvus_summary.get_retrieval_diagnosis_low_confidence(kb_id, time_range, top_k)
-        return sanic_json({"code": 200, "msg": "success", "data": result})
-
-    elif data_type == 'list':
-        page_id = safe_get(req, 'page_id', 1)
-        page_limit = safe_get(req, 'page_limit', 10)
-        result = local_doc_qa.milvus_summary.get_retrieval_diagnosis_list(kb_id, time_range, page_id, page_limit)
-        return sanic_json({"code": 200, "msg": "success", "data": result})
-
-    else:
-        return sanic_json({"code": 2003, "msg": "fail, unknown data_type, supported: summary, failure_distribution, low_confidence, list"})

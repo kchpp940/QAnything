@@ -208,7 +208,6 @@ class KnowledgeBaseManager:
                 result TEXT NOT NULL,
                 retrieval_documents MEDIUMTEXT NOT NULL,
                 source_documents MEDIUMTEXT NOT NULL,
-                retrieval_trace MEDIUMTEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
@@ -253,32 +252,6 @@ class KnowledgeBaseManager:
         """
         self.execute_query_(query, (), commit=True)
 
-        query = """
-            CREATE TABLE IF NOT EXISTS RetrievalDiagnosis (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                diagnosis_id VARCHAR(255) UNIQUE,
-                user_id VARCHAR(255) NOT NULL,
-                bot_id VARCHAR(255),
-                kb_ids VARCHAR(2048) NOT NULL,
-                query VARCHAR(512) NOT NULL,
-                condense_question VARCHAR(1024),
-                retrieval_time_ms INT DEFAULT 0,
-                candidate_count INT DEFAULT 0,
-                milvus_hit_count INT DEFAULT 0,
-                es_hit_count INT DEFAULT 0,
-                rerank_before_order MEDIUMTEXT,
-                rerank_after_order MEDIUMTEXT,
-                rerank_used BOOL DEFAULT 0,
-                empty_recall_reason VARCHAR(512),
-                final_citation_count INT DEFAULT 0,
-                top_score FLOAT DEFAULT 0,
-                retrieval_trace MEDIUMTEXT,
-                time_record MEDIUMTEXT,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """
-        self.execute_query_(query, (), commit=True)
-
         # 修改索引创建方式
         index_queries = [
             "CREATE INDEX index_kb_id_deleted ON File (kb_id, deleted)",
@@ -286,14 +259,9 @@ class KnowledgeBaseManager:
             "CREATE INDEX index_bot_id ON QaLogs (bot_id)",
             "CREATE INDEX index_query ON QaLogs (query)",
             "CREATE INDEX index_timestamp ON QaLogs (timestamp)",
-            "CREATE INDEX idx_diag_kb_id ON RetrievalDiagnosis (kb_ids)",
-            "CREATE INDEX idx_diag_timestamp ON RetrievalDiagnosis (timestamp)",
-            "CREATE INDEX idx_diag_empty_recall ON RetrievalDiagnosis (empty_recall_reason)",
             # 如果没有的话，给QanythingBot添加一列：llm_setting VARCHAR(512)
             "ALTER TABLE QanythingBot ADD COLUMN llm_setting VARCHAR(512) DEFAULT '{}'",
             "ALTER TABLE QanythingBot DROP COLUMN model",
-            "ALTER TABLE RetrievalDiagnosis ADD COLUMN retrieval_trace MEDIUMTEXT",
-            "ALTER TABLE QaLogs ADD COLUMN retrieval_trace MEDIUMTEXT",
         ]
 
         for query in index_queries:
@@ -703,22 +671,21 @@ class KnowledgeBaseManager:
         debug_logger.info(f"delete_faqs count: {total_deleted}")
 
     def add_qalog(self, user_id, bot_id, kb_ids, query, model, product_source, time_record, history, condense_question,
-                  prompt, result, retrieval_documents, source_documents, retrieval_trace=None):
+                  prompt, result, retrieval_documents, source_documents):
         debug_logger.info("add_qalog: {}".format(query))
         qa_id = uuid.uuid4().hex
         kb_ids = json.dumps(kb_ids, ensure_ascii=False)
         retrieval_documents = json.dumps(retrieval_documents, ensure_ascii=False)
         source_documents = json.dumps(source_documents, ensure_ascii=False)
-        retrieval_trace = json.dumps(retrieval_trace, ensure_ascii=False) if retrieval_trace is not None else None
         history = json.dumps(history, ensure_ascii=False)
         time_record = json.dumps(time_record, ensure_ascii=False)
         insert_query = (
             "INSERT INTO QaLogs (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record, "
-            "history, condense_question, prompt, result, retrieval_documents, source_documents, retrieval_trace) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            "history, condense_question, prompt, result, retrieval_documents, source_documents) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
         self.execute_query_(insert_query, (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record,
                                            history, condense_question, prompt, result, retrieval_documents,
-                                           source_documents, retrieval_trace), commit=True)
+                                           source_documents), commit=True)
 
     def get_qalog_by_filter(self, need_info, user_id=None, query=None, bot_id=None, time_range=None, any_kb_id=None, qa_ids=None):
         # 判断哪些条件不是None，构建搜索query
@@ -915,165 +882,3 @@ class KnowledgeBaseManager:
         result = self.execute_query_(query, (file_id,), fetch=True)
         file_location = result[0][0] if result else None
         return file_location
-
-    def add_retrieval_diagnosis(self, user_id, bot_id, kb_ids, query, condense_question,
-                                retrieval_trace, time_record):
-        diagnosis_id = uuid.uuid4().hex
-        kb_ids = json.dumps(kb_ids, ensure_ascii=False)
-        retrieval_trace_json = json.dumps(retrieval_trace, ensure_ascii=False)
-        time_record_json = json.dumps(time_record, ensure_ascii=False)
-
-        candidates = retrieval_trace.get('candidates', [])
-
-        milvus_hit_count = 0
-        es_hit_count = 0
-        for c in candidates:
-            for src in c.get('retrieval_sources', []):
-                if src.get('source') == 'milvus':
-                    milvus_hit_count += 1
-                elif src.get('source') == 'es':
-                    es_hit_count += 1
-
-        def _get_stage_trace(candidate, stage_name):
-            for s in candidate.get('stage_traces', []):
-                if s.get('stage') == stage_name:
-                    return s
-            return None
-
-        before_rerank_cands = []
-        after_rerank_cands = []
-        for c in candidates:
-            br = _get_stage_trace(c, 'before_rerank')
-            if br is not None:
-                before_rerank_cands.append({
-                    'doc_id': c['doc_id'], 'file_id': c['file_id'],
-                    'score': br.get('score', 0), 'rank': br.get('rank'),
-                })
-            ar = _get_stage_trace(c, 'after_rerank')
-            if ar is not None:
-                after_rerank_cands.append({
-                    'doc_id': c['doc_id'], 'file_id': c['file_id'],
-                    'score': ar.get('score', 0), 'rank': ar.get('rank'),
-                })
-
-        before_rerank_cands.sort(key=lambda x: (x.get('rank') or 999999, -x.get('score', 0)))
-        after_rerank_cands.sort(key=lambda x: (x.get('rank') or 999999, -x.get('score', 0)))
-
-        rerank_before_order = [{'doc_id': c['doc_id'], 'file_id': c['file_id'], 'score': c['score']} for c in before_rerank_cands]
-        rerank_after_order = [{'doc_id': c['doc_id'], 'file_id': c['file_id'], 'score': c['score']} for c in after_rerank_cands]
-
-        metadata = retrieval_trace.get('metadata', {})
-        rerank_used = metadata.get('rerank_used', False)
-        empty_recall_reason = metadata.get('empty_recall_reason', '')
-        retrieval_time_ms = retrieval_trace.get('retrieval_time_ms', 0)
-
-        final_citations = [c for c in candidates if c.get('final_selected')]
-        candidate_count = len(final_citations)
-        final_citation_count = len(final_citations)
-        if final_citations:
-            top_score = float(max((_get_stage_trace(c, 'final_citation') or {}).get('score', 0) for c in final_citations))
-        else:
-            top_score = 0.0
-
-        insert_query = (
-            "INSERT INTO RetrievalDiagnosis "
-            "(diagnosis_id, user_id, bot_id, kb_ids, query, condense_question, "
-            "retrieval_time_ms, candidate_count, milvus_hit_count, es_hit_count, "
-            "rerank_before_order, rerank_after_order, rerank_used, "
-            "empty_recall_reason, final_citation_count, top_score, retrieval_trace, time_record) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-        )
-        self.execute_query_(insert_query, (
-            diagnosis_id, user_id, bot_id, kb_ids, query, condense_question,
-            retrieval_time_ms, candidate_count, milvus_hit_count, es_hit_count,
-            json.dumps(rerank_before_order, ensure_ascii=False),
-            json.dumps(rerank_after_order, ensure_ascii=False),
-            rerank_used,
-            empty_recall_reason, final_citation_count, top_score,
-            retrieval_trace_json, time_record_json
-        ), commit=True)
-        return diagnosis_id
-
-    def get_retrieval_diagnosis_summary(self, kb_id, time_range):
-        query = """
-            SELECT
-                DATE(timestamp) AS date,
-                COUNT(*) AS total_count,
-                SUM(CASE WHEN empty_recall_reason IS NOT NULL AND empty_recall_reason != '' THEN 1 ELSE 0 END) AS empty_count,
-                SUM(CASE WHEN empty_recall_reason IS NULL OR empty_recall_reason = '' THEN 1 ELSE 0 END) AS success_count,
-                AVG(retrieval_time_ms) AS avg_retrieval_time_ms,
-                AVG(candidate_count) AS avg_candidate_count,
-                AVG(final_citation_count) AS avg_citation_count,
-                AVG(top_score) AS avg_top_score
-            FROM RetrievalDiagnosis
-            WHERE kb_ids LIKE %s AND timestamp BETWEEN %s AND %s
-            GROUP BY DATE(timestamp)
-            ORDER BY DATE(timestamp)
-        """
-        result = self.execute_query_(query, (f'%{kb_id}%', time_range[0], time_range[1]), fetch=True, user_dict=True)
-        return result
-
-    def get_retrieval_diagnosis_failure_distribution(self, kb_id, time_range):
-        query = """
-            SELECT
-                COALESCE(NULLIF(empty_recall_reason, ''), 'unknown') AS reason,
-                COUNT(*) AS count
-            FROM RetrievalDiagnosis
-            WHERE kb_ids LIKE %s AND timestamp BETWEEN %s AND %s
-              AND (empty_recall_reason IS NOT NULL AND empty_recall_reason != '')
-            GROUP BY empty_recall_reason
-            ORDER BY count DESC
-        """
-        result = self.execute_query_(query, (f'%{kb_id}%', time_range[0], time_range[1]), fetch=True, user_dict=True)
-        return result
-
-    def get_retrieval_diagnosis_low_confidence(self, kb_id, time_range, top_k=20):
-        query = """
-            SELECT query, condense_question, top_score, final_citation_count,
-                   retrieval_time_ms, empty_recall_reason, timestamp
-            FROM RetrievalDiagnosis
-            WHERE kb_ids LIKE %s AND timestamp BETWEEN %s AND %s
-              AND top_score < 0.5
-            ORDER BY top_score ASC
-            LIMIT %s
-        """
-        result = self.execute_query_(query, (f'%{kb_id}%', time_range[0], time_range[1], top_k), fetch=True, user_dict=True)
-        for row in result:
-            if 'timestamp' in row:
-                row['timestamp'] = row['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
-        return result
-
-    def get_retrieval_diagnosis_list(self, kb_id, time_range, page_id=1, page_limit=10):
-        count_query = """
-            SELECT COUNT(*) AS total
-            FROM RetrievalDiagnosis
-            WHERE kb_ids LIKE %s AND timestamp BETWEEN %s AND %s
-        """
-        count_result = self.execute_query_(count_query, (f'%{kb_id}%', time_range[0], time_range[1]), fetch=True, user_dict=True)
-        total = count_result[0]['total'] if count_result else 0
-        query = """
-            SELECT diagnosis_id, user_id, bot_id, kb_ids, query, condense_question,
-                   retrieval_time_ms, candidate_count, milvus_hit_count, es_hit_count,
-                   rerank_before_order, rerank_after_order, rerank_used,
-                   empty_recall_reason, final_citation_count, top_score, retrieval_trace, time_record, timestamp
-            FROM RetrievalDiagnosis
-            WHERE kb_ids LIKE %s AND timestamp BETWEEN %s AND %s
-            ORDER BY timestamp DESC
-            LIMIT %s OFFSET %s
-        """
-        offset = (page_id - 1) * page_limit
-        result = self.execute_query_(query, (f'%{kb_id}%', time_range[0], time_range[1], page_limit, offset), fetch=True, user_dict=True)
-        for row in result:
-            if 'timestamp' in row:
-                row['timestamp'] = row['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
-            if 'kb_ids' in row:
-                row['kb_ids'] = json.loads(row['kb_ids'])
-            if 'time_record' in row:
-                row['time_record'] = json.loads(row['time_record'])
-            if 'retrieval_trace' in row and row['retrieval_trace']:
-                row['retrieval_trace'] = json.loads(row['retrieval_trace'])
-            if 'rerank_before_order' in row:
-                row['rerank_before_order'] = json.loads(row['rerank_before_order'])
-            if 'rerank_after_order' in row:
-                row['rerank_after_order'] = json.loads(row['rerank_after_order'])
-        return {"total": total, "page_id": page_id, "page_limit": page_limit, "records": result}

@@ -262,7 +262,7 @@
       <a-form-item :label="common.capabilitiesLabel" name="capabilities">
         <a-checkbox-group v-model:value="capabilitiesOptionsState" style="width: 100%">
           <a-row>
-            <a-col v-for="key in Object.keys(chatSettingForm.capabilities)" :key="key" :span="6">
+            <a-col v-for="key in filteredCapabilities" :key="key" :span="6">
               <a-popover placement="topLeft">
                 <template #content>
                   <p>{{ common[`${key}Description`] }}</p>
@@ -272,6 +272,38 @@
             </a-col>
           </a-row>
         </a-checkbox-group>
+      </a-form-item>
+      <a-form-item :label="common.webSearchPolicy" name="webSearchPolicy">
+        <a-select
+          v-model:value="chatSettingForm.webSearchPolicy"
+          style="width: 100%"
+          @change="onWebSearchPolicyChange"
+        >
+          <a-select-option value="disabled">
+            <div class="policy-option">
+              <span class="policy-name">{{ common.webSearchPolicyDisabled }}</span>
+              <span class="policy-desc">{{ common.webSearchPolicyDisabledDescription }}</span>
+            </div>
+          </a-select-option>
+          <a-select-option value="manual">
+            <div class="policy-option">
+              <span class="policy-name">{{ common.webSearchPolicyManual }}</span>
+              <span class="policy-desc">{{ common.webSearchPolicyManualDescription }}</span>
+            </div>
+          </a-select-option>
+          <a-select-option value="low_recall">
+            <div class="policy-option">
+              <span class="policy-name">{{ common.webSearchPolicyLowRecall }}</span>
+              <span class="policy-desc">{{ common.webSearchPolicyLowRecallDescription }}</span>
+            </div>
+          </a-select-option>
+          <a-select-option value="always">
+            <div class="policy-option">
+              <span class="policy-name">{{ common.webSearchPolicyAlways }}</span>
+              <span class="policy-desc">{{ common.webSearchPolicyAlwaysDescription }}</span>
+            </div>
+          </a-select-option>
+        </a-select>
       </a-form-item>
       <a-form-item
         v-if="chatSettingForm.modelType === '自定义模型配置'"
@@ -303,6 +335,18 @@ const formRef = ref(null);
 const capabilitiesOptionsState = ref([]);
 
 const chatSettingForm = ref<IChatSetting>();
+
+const filteredCapabilities = computed(() => {
+  if (!chatSettingForm.value?.capabilities) return [];
+  return Object.keys(chatSettingForm.value.capabilities).filter(key => key !== 'networkSearch');
+});
+
+const onWebSearchPolicyChange = (value: string) => {
+  if (chatSettingForm.value?.capabilities) {
+    chatSettingForm.value.capabilities.networkSearch = value === 'always';
+    transformCheckbox(0);
+  }
+};
 
 // 如果是openAI，做选择操作，默认填入model和apiContextLength，但是也需要自定义添加
 const VNodes = defineComponent({
@@ -460,13 +504,15 @@ function transformCheckbox(type: 0 | 1) {
     capabilitiesOptionsState.value = [];
     const capabilities = chatSettingForm.value.capabilities;
     for (let item in capabilities) {
-      if (capabilities[item]) {
+      if (capabilities[item] && item !== 'networkSearch') {
         capabilitiesOptionsState.value.push(item);
       }
     }
   } else {
     for (let item in chatSettingForm.value.capabilities) {
-      chatSettingForm.value.capabilities[item] = false;
+      if (item !== 'networkSearch') {
+        chatSettingForm.value.capabilities[item] = false;
+      }
     }
     capabilitiesOptionsState.value.forEach(item => {
       chatSettingForm.value.capabilities[item] = true;
@@ -485,6 +531,10 @@ const initForm = () => {
     if (activeForm.apiContextLength !== apiContextLength) {
       apiContextTokenK.value = activeForm.apiContextLength / 1024;
     }
+  }
+  // 向后兼容：如果没有 webSearchPolicy，根据 capabilities.networkSearch 初始化
+  if (!activeForm.webSearchPolicy) {
+    activeForm.webSearchPolicy = activeForm.capabilities?.networkSearch ? 'always' : 'disabled';
   }
   chatSettingForm.value = { ...activeForm };
 };
@@ -660,6 +710,24 @@ onBeforeMount(() => {
         .ant-form-item-control:first-child:not([class^="'ant-col-'"]):not([class*="' ant-col-'"])
     ) {
     padding-left: 16px;
+  }
+}
+
+.policy-option {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.4;
+
+  .policy-name {
+    font-weight: 500;
+    font-size: 14px;
+    color: #333;
+  }
+
+  .policy-desc {
+    font-size: 12px;
+    color: #999;
+    margin-top: 2px;
   }
 }
 </style>

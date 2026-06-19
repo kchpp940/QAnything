@@ -58,8 +58,27 @@
                     !showSourceIdxs.includes(index) ? 'source-total-last' : '',
                   ]"
                 >
-                  <span v-if="language === 'zh'">找到了{{ item.source.length }}个信息来源：</span>
-                  <span v-else>Found {{ item.source.length }} source of information</span>
+                  <span v-if="language === 'zh'">
+                    找到了{{ getFilteredSource(item.source).length }}个信息来源
+                    <span v-if="getWebSourceCount(item.source) > 0" class="source-stats">
+                      （{{ common.sourceTypeLocal }}: {{ getLocalSourceCount(item.source) }}，
+                      {{ common.sourceTypeWeb }}: {{ getWebSourceCount(item.source) }}）
+                    </span>
+                  </span>
+                  <span v-else>
+                    Found {{ getFilteredSource(item.source).length }} source of information
+                    <span v-if="getWebSourceCount(item.source) > 0" class="source-stats">
+                      ({{ common.sourceTypeLocal }}: {{ getLocalSourceCount(item.source) }},
+                      {{ common.sourceTypeWeb }}: {{ getWebSourceCount(item.source) }})
+                    </span>
+                  </span>
+                  <a-switch
+                    v-if="getWebSourceCount(item.source) > 0"
+                    class="web-source-switch"
+                    :checked="!hideWebSources[index]"
+                    size="small"
+                    @change="toggleWebSources(index)"
+                  />
                   <SvgIcon
                     v-show="!showSourceIdxs.includes(index)"
                     name="down"
@@ -73,12 +92,17 @@
                 </div>
                 <div v-show="showSourceIdxs.includes(index)" class="source-list">
                   <div
-                    v-for="(sourceItem, sourceIndex) in item.source"
+                    v-for="(sourceItem, sourceIndex) in getFilteredSource(item.source, index)"
                     :key="sourceIndex"
-                    class="data-source"
+                    :class="['data-source', `source-${sourceItem.source_type || 'local'}`]"
                   >
                     <p v-show="sourceItem.file_name" class="control">
                       <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
+                      <span
+                        :class="['source-type-tag', `trust-${sourceItem.trust_level || 'high'}`]"
+                      >
+                        {{ sourceItem.source_type === 'web' ? common.sourceTypeWeb : common.sourceTypeLocal }}
+                      </span>
                       <a
                         v-if="sourceItem.file_id.startsWith('http')"
                         :href="sourceItem.file_id"
@@ -113,6 +137,12 @@
                         <p class="score">
                           <span class="tips">{{ common.correlation }}</span
                           >{{ sourceItem.score }}
+                        </p>
+                        <p v-if="sourceItem.source_type === 'web'" class="web-meta">
+                          <span class="tips">{{ common.trustLevelMedium }}</span>
+                          <span v-if="sourceItem.web_timestamp" class="web-time">
+                            {{ formatWebTimestamp(sourceItem.web_timestamp) }}
+                          </span>
                         </p>
                       </div>
                     </Transition>
@@ -536,6 +566,37 @@ const hideSourceList = index => {
   showSourceIdxs.value = showSourceIdxs.value.filter(item => item !== index);
 };
 
+const hideWebSources = ref<Record<number, boolean>>({});
+
+const toggleWebSources = index => {
+  hideWebSources.value[index] = !hideWebSources.value[index];
+};
+
+const getLocalSourceCount = sources => {
+  if (!sources || !sources.length) return 0;
+  return sources.filter(s => (s.source_type || 'local') === 'local').length;
+};
+
+const getWebSourceCount = sources => {
+  if (!sources || !sources.length) return 0;
+  return sources.filter(s => s.source_type === 'web').length;
+};
+
+const getFilteredSource = (sources, index?) => {
+  if (!sources || !sources.length) return [];
+  const idx = index ?? 0;
+  if (hideWebSources.value[idx]) {
+    return sources.filter(s => (s.source_type || 'local') === 'local');
+  }
+  return sources;
+};
+
+const formatWebTimestamp = timestamp => {
+  if (!timestamp) return '';
+  const date = new Date(timestamp * 1000);
+  return date.toLocaleString();
+};
+
 //下载 清除聊天记录相关
 const { showModal } = storeToRefs(useChat());
 const { clearQAList } = useBotsChat();
@@ -898,6 +959,58 @@ scrollBottom();
         color: #5a47e5;
         text-decoration: underline;
         cursor: pointer;
+      }
+    }
+
+    .source-total {
+      .source-stats {
+        color: #999;
+        font-size: 12px;
+        margin-left: 8px;
+      }
+
+      .web-source-switch {
+        margin-left: auto;
+        margin-right: 8px;
+      }
+    }
+
+    .source-web {
+      background: rgba(90, 71, 229, 0.03);
+      border-left: 3px solid #5a47e5;
+    }
+
+    .source-type-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      margin-right: 8px;
+      line-height: 1.4;
+
+      &.trust-high {
+        background: rgba(82, 196, 26, 0.1);
+        color: #52c41a;
+      }
+
+      &.trust-medium {
+        background: rgba(250, 173, 20, 0.1);
+        color: #faad14;
+      }
+
+      &.trust-low {
+        background: rgba(255, 77, 79, 0.1);
+        color: #ff4d4f;
+      }
+    }
+
+    .web-meta {
+      margin-top: 12px;
+      font-size: 12px;
+      color: #999;
+
+      .web-time {
+        margin-left: 12px;
       }
     }
 

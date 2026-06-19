@@ -1,6 +1,9 @@
 from qanything_kernel.configs.model_config import VECTOR_SEARCH_TOP_K, VECTOR_SEARCH_SCORE_THRESHOLD, \
     PROMPT_TEMPLATE, STREAMING, SYSTEM, INSTRUCTIONS, SIMPLE_PROMPT_TEMPLATE, CUSTOM_PROMPT_TEMPLATE, \
-    LOCAL_RERANK_MODEL_NAME, LOCAL_EMBED_MAX_LENGTH, SEPARATORS
+    LOCAL_RERANK_MODEL_NAME, LOCAL_EMBED_MAX_LENGTH, SEPARATORS, WEB_SEARCH_POLICY_DISABLED, \
+    WEB_SEARCH_POLICY_MANUAL, WEB_SEARCH_POLICY_LOW_RECALL, WEB_SEARCH_POLICY_ALWAYS, \
+    TRUST_LEVEL_LOCAL, TRUST_LEVEL_WEB, SOURCE_TYPE_LOCAL, SOURCE_TYPE_WEB, \
+    LOW_RECALL_SCORE_THRESHOLD, LOW_RECALL_DOC_THRESHOLD
 from typing import List, Tuple, Union, Dict
 import time
 from scipy.spatial import cKDTree
@@ -30,7 +33,6 @@ from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
 import traceback
 import re
-import hashlib
 
 
 class LocalDocQA:
@@ -123,48 +125,23 @@ class LocalDocQA:
         end_time = time.perf_counter()
         time_record['retriever_search'] = round(end_time - start_time, 2)
         debug_logger.info(f"retriever_search time: {time_record['retriever_search']}s")
-
-        raw_candidates = []
-        for doc in query_docs:
-            if retriever.mysql_client.is_deleted_file(doc.metadata.get('file_id', '')):
-                debug_logger.warning(f"file_id: {doc.metadata.get('file_id', '')} is deleted")
-                continue
-            doc_id = doc.metadata.get('doc_id', '')
-            file_id = doc.metadata.get('file_id', '')
-            chunk_index = doc_id.split('_')[-1] if '_' in doc_id else '0'
-            content_hash = hashlib.md5(doc.page_content.encode()).hexdigest()[:8]
-            source = doc.metadata.get('retrieval_source', 'unknown')
-            candidate_id = f"{source}_{doc_id}_{chunk_index}_{content_hash}"
-            raw_candidates.append({
-                'candidate_id': candidate_id,
-                'doc_id': doc_id,
-                'file_id': file_id,
-                'chunk_index': chunk_index,
-                'content_hash': content_hash,
-                'score': float(doc.metadata.get('score', 1.0)),
-                'source': source,
-            })
-
-        milvus_hit_count = sum(1 for c in raw_candidates if c['source'] == 'milvus')
-        es_hit_count = sum(1 for c in raw_candidates if c['source'] == 'es')
-
+        # debug_logger.info(f"query_docs num: {len(query_docs)}, query_docs: {query_docs}")
         for idx, doc in enumerate(query_docs):
-            if retriever.mysql_client.is_deleted_file(doc.metadata.get('file_id', '')):
+            if retriever.mysql_client.is_deleted_file(doc.metadata['file_id']):
+                debug_logger.warning(f"file_id: {doc.metadata['file_id']} is deleted")
                 continue
-            doc.metadata['retrieval_query'] = query
+            doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
             doc.metadata['embed_version'] = self.embeddings.embed_version
+            doc.metadata['source_type'] = SOURCE_TYPE_LOCAL
+            doc.metadata['trust_level'] = TRUST_LEVEL_LOCAL
             if 'score' not in doc.metadata:
-                doc.metadata['score'] = 1 - (idx / len(query_docs))
+                doc.metadata['score'] = 1 - (idx / len(query_docs))  # TODO 这个score怎么获取呢
             source_documents.append(doc)
         debug_logger.info(f"embed scores: {[doc.metadata['score'] for doc in source_documents]}")
+        # if cosine_thresh:
+        #     source_documents = [item for item in source_documents if float(item.metadata['score']) > cosine_thresh]
 
-        retrieval_source_info = {
-            'milvus_hit_count': milvus_hit_count,
-            'es_hit_count': es_hit_count,
-            'retrieval_time_ms': int((end_time - start_time) * 1000),
-            'raw_candidates': raw_candidates,
-        }
-        return source_documents, retrieval_source_info
+        return source_documents
 
     def reprocess_source_documents(self, custom_llm: OpenAILLM, query: str,
                                    source_docs: List[Document],
@@ -399,7 +376,7 @@ class LocalDocQA:
         return relevant_docs
 
     @staticmethod
-    async def generate_response(query, res, condense_question, source_documents, time_record, chat_history, streaming, prompt, retrieval_trace=None):
+    async def generate_response(query, res, condense_question, source_documents, time_record, chat_history, streaming, prompt):
         """
         生成response并使用yield返回。
 
@@ -411,7 +388,6 @@ class LocalDocQA:
         :param chat_history: 聊天历史
         :param streaming: 是否启用流式输出
         :param prompt: 生成response时的prompt类型
-        :param retrieval_trace: 统一的检索链路追踪快照
         """
         history = chat_history + [[query, res]]
 
@@ -424,8 +400,7 @@ class LocalDocQA:
             "result": res,
             "condense_question": condense_question,
             "retrieval_documents": source_documents,
-            "source_documents": source_documents,
-            "retrieval_trace": retrieval_trace,
+            "source_documents": source_documents
         }
 
         if 'llm_completed' not in time_record:
@@ -445,11 +420,34 @@ class LocalDocQA:
             response['result'] = "data: [DONE]\n\n"
             yield response, history
 
+    def check_low_recall(self, source_documents):
+        """检查本地检索是否为低召回状态"""
+        if len(source_documents) < LOW_RECALL_DOC_THRESHOLD:
+            return True
+        if source_documents:
+            max_score = max(float(doc.metadata.get('score', 0)) for doc in source_documents)
+            if max_score < LOW_RECALL_SCORE_THRESHOLD:
+                return True
+        return False
+
+    def should_do_web_search(self, web_search_policy, need_web_search, source_documents):
+        """根据联网策略判断是否需要进行联网搜索"""
+        if web_search_policy == WEB_SEARCH_POLICY_DISABLED:
+            return False
+        if web_search_policy == WEB_SEARCH_POLICY_ALWAYS:
+            return True
+        if web_search_policy == WEB_SEARCH_POLICY_MANUAL:
+            return need_web_search
+        if web_search_policy == WEB_SEARCH_POLICY_LOW_RECALL:
+            return self.check_low_recall(source_documents)
+        return False
+
     async def get_knowledge_based_answer(self, model, max_token, kb_ids, query, retriever, custom_prompt, time_record,
                                          temperature, api_base, api_key, api_context_length, top_p, top_k, web_chunk_size,
                                          chat_history=None, streaming: bool = STREAMING, rerank: bool = False,
                                          only_need_search_results: bool = False, need_web_search=False,
-                                         hybrid_search=False, user_id=None, bot_id=None):
+                                         web_search_policy=WEB_SEARCH_POLICY_DISABLED,
+                                         hybrid_search=False):
         custom_llm = OpenAILLM(model, max_token, api_base, api_key, api_context_length, top_p, temperature)
         if chat_history is None:
             chat_history = []
@@ -506,13 +504,16 @@ class LocalDocQA:
                 retrieval_query = condense_question
 
         if kb_ids:
-            source_documents, retrieval_source_info = await self.get_source_documents(retrieval_query, retriever, kb_ids, time_record,
+            source_documents = await self.get_source_documents(retrieval_query, retriever, kb_ids, time_record,
                                                                hybrid_search, top_k)
         else:
             source_documents = []
-            retrieval_source_info = {'milvus_hit_count': 0, 'es_hit_count': 0, 'retrieval_time_ms': 0}
 
-        if need_web_search:
+        do_web_search = self.should_do_web_search(web_search_policy, need_web_search, source_documents)
+        time_record['web_search_policy'] = web_search_policy
+        time_record['web_search_triggered'] = do_web_search
+
+        if do_web_search:
             t1 = time.perf_counter()
             web_search_results = self.web_page_search(query, top_k=3)
             web_splitter = RecursiveCharacterTextSplitter(
@@ -551,65 +552,6 @@ class LocalDocQA:
         #     return
 
         source_documents = deduplicate_documents(source_documents)
-
-        candidate_map = {}
-        for c in retrieval_source_info.get('raw_candidates', []):
-            doc_id = c['doc_id']
-            if doc_id in candidate_map:
-                candidate_map[doc_id]['retrieval_sources'].append({
-                    'source': c['source'],
-                    'retrieval_score': c['score'],
-                })
-                candidate_map[doc_id]['stage_traces'].append(
-                    {'stage': 'retrieval', 'source': c['source'], 'score': c['score']}
-                )
-            else:
-                candidate_map[doc_id] = {
-                    'id': c['candidate_id'],
-                    'doc_id': doc_id,
-                    'file_id': c['file_id'],
-                    'chunk_index': c['chunk_index'],
-                    'content_hash': c['content_hash'],
-                    'retrieval_sources': [{'source': c['source'], 'retrieval_score': c['score']}],
-                    'stage_traces': [{'stage': 'retrieval', 'source': c['source'], 'score': c['score']}],
-                    'final_selected': False,
-                    'final_filter_reason': '',
-                }
-
-        for rank, doc in enumerate(source_documents):
-            doc_id = doc.metadata.get('doc_id', '')
-            content_hash = hashlib.md5(doc.page_content.encode()).hexdigest()[:8]
-            chunk_index = doc_id.split('_')[-1] if '_' in doc_id else '0'
-            source = doc.metadata.get('retrieval_source', 'web')
-            candidate_id = f"{source}_{doc_id}_{chunk_index}_{content_hash}"
-            if doc_id not in candidate_map:
-                candidate_map[doc_id] = {
-                    'id': candidate_id,
-                    'doc_id': doc_id,
-                    'file_id': doc.metadata.get('file_id', ''),
-                    'chunk_index': chunk_index,
-                    'content_hash': content_hash,
-                    'retrieval_sources': [{'source': source, 'retrieval_score': float(doc.metadata.get('score', 0))}],
-                    'stage_traces': [{'stage': 'retrieval', 'source': source, 'score': float(doc.metadata.get('score', 0))}],
-                    'final_selected': False,
-                    'final_filter_reason': '',
-                }
-            else:
-                existing_sources = [s['source'] for s in candidate_map[doc_id]['retrieval_sources']]
-                if source not in existing_sources:
-                    candidate_map[doc_id]['retrieval_sources'].append({
-                        'source': source,
-                        'retrieval_score': float(doc.metadata.get('score', 0)),
-                    })
-                    candidate_map[doc_id]['stage_traces'].append(
-                        {'stage': 'retrieval', 'source': source, 'score': float(doc.metadata.get('score', 0))}
-                    )
-            candidate_map[doc_id]['stage_traces'].append(
-                {'stage': 'before_rerank', 'score': float(doc.metadata.get('score', 0)), 'rank': rank + 1}
-            )
-
-        rerank_actually_used = False
-        rerank_filtered_ids = set()
         if rerank and len(source_documents) > 1 and num_tokens_rerank(query) <= 300:
             try:
                 t1 = time.perf_counter()
@@ -617,13 +559,7 @@ class LocalDocQA:
                 source_documents = await self.rerank.arerank_documents(condense_question, source_documents)
                 t2 = time.perf_counter()
                 time_record['rerank'] = round(t2 - t1, 2)
-                rerank_actually_used = True
-                for rank, doc in enumerate(source_documents):
-                    doc_id = doc.metadata.get('doc_id', '')
-                    if doc_id in candidate_map:
-                        candidate_map[doc_id]['stage_traces'].append(
-                            {'stage': 'after_rerank', 'score': float(doc.metadata.get('score', 0)), 'rank': rank + 1}
-                        )
+                # 过滤掉低分的文档
                 debug_logger.info(f"rerank step1 num: {len(source_documents)}")
                 debug_logger.info(f"rerank step1 scores: {[doc.metadata['score'] for doc in source_documents]}")
                 if len(source_documents) > 1:
@@ -640,76 +576,12 @@ class LocalDocQA:
                             saved_docs.append(doc)
                     source_documents = saved_docs
                     debug_logger.info(f"rerank step3 num: {len(source_documents)}")
-                for doc in source_documents:
-                    rerank_filtered_ids.add(doc.metadata.get('doc_id', ''))
             except Exception as e:
                 time_record['rerank'] = 0.0
                 debug_logger.error(f"query {query}: kb_ids: {kb_ids}, rerank error: {traceback.format_exc()}")
 
+        # es检索+milvus检索结果最多可能是2k
         source_documents = source_documents[:top_k]
-
-        empty_recall_reason = ''
-        if not source_documents:
-            if not kb_ids:
-                empty_recall_reason = 'no_knowledge_base'
-            elif retrieval_source_info.get('milvus_hit_count', 0) == 0 and retrieval_source_info.get('es_hit_count', 0) == 0:
-                empty_recall_reason = 'vector_and_es_empty'
-            elif rerank_actually_used:
-                empty_recall_reason = 'rerank_filtered_all'
-            else:
-                empty_recall_reason = 'unknown_empty_recall'
-
-        final_doc_ids = set()
-        for doc in source_documents:
-            doc_id = doc.metadata.get('doc_id', '')
-            final_doc_ids.add(doc_id)
-            if doc_id in candidate_map:
-                candidate_map[doc_id]['final_selected'] = True
-                candidate_map[doc_id]['stage_traces'].append(
-                    {'stage': 'final_citation', 'score': float(doc.metadata.get('score', 0))}
-                )
-
-        for doc_id, cand in candidate_map.items():
-            if cand['final_selected']:
-                continue
-            stages = set(s['stage'] for s in cand['stage_traces'])
-            if rerank_actually_used and 'after_rerank' in stages:
-                after_rerank_trace = next((s for s in cand['stage_traces'] if s['stage'] == 'after_rerank'), None)
-                if after_rerank_trace and after_rerank_trace.get('score', 0) < 0.28:
-                    cand['final_filter_reason'] = 'rerank_score_below_threshold'
-                elif rerank_filtered_ids and doc_id not in rerank_filtered_ids:
-                    cand['final_filter_reason'] = 'rerank_relative_diff'
-                else:
-                    cand['final_filter_reason'] = 'top_k_truncated'
-            elif 'before_rerank' in stages:
-                if not rerank_actually_used and doc_id not in final_doc_ids:
-                    cand['final_filter_reason'] = 'top_k_truncated'
-                else:
-                    cand['final_filter_reason'] = 'dropped_in_rerank'
-            else:
-                cand['final_filter_reason'] = 'dropped_before_rerank'
-
-        retrieval_trace = {
-            'retrieval_time_ms': retrieval_source_info.get('retrieval_time_ms', 0),
-            'candidates': list(candidate_map.values()),
-            'metadata': {
-                'rerank_used': rerank_actually_used,
-                'empty_recall_reason': empty_recall_reason,
-            }
-        }
-
-        try:
-            self.milvus_summary.add_retrieval_diagnosis(
-                user_id=user_id,
-                bot_id=bot_id,
-                kb_ids=kb_ids,
-                query=query,
-                condense_question=condense_question,
-                retrieval_trace=retrieval_trace,
-                time_record=time_record,
-            )
-        except Exception as e:
-            debug_logger.error(f"Failed to save retrieval diagnosis: {e}")
 
         # rerank之后删除headers，只保留文本内容，用于后续处理
         for doc in source_documents:
@@ -729,8 +601,7 @@ class LocalDocQA:
                     return
                 res = doc.metadata['faq_dict']['answer']
                 async for response, history in self.generate_response(query, res, condense_question, source_documents,
-                                                                      time_record, chat_history, streaming, 'MATCH_FAQ',
-                                                                      retrieval_trace=retrieval_trace):
+                                                                      time_record, chat_history, streaming, 'MATCH_FAQ'):
                     yield response, history
                 return
 
@@ -771,8 +642,7 @@ class LocalDocQA:
                         f"\n计算方式：{tokens_msg}")
                     async for response, history in self.generate_response(query, res, condense_question, source_documents,
                                                                           time_record, chat_history, streaming,
-                                                                          'TOKENS_NOT_ENOUGH',
-                                                                          retrieval_trace=retrieval_trace):
+                                                                          'TOKENS_NOT_ENOUGH'):
                         yield response, history
                     return
 
@@ -839,8 +709,7 @@ class LocalDocQA:
                         "result": resp,
                         "condense_question": condense_question,
                         "retrieval_documents": retrieval_documents,
-                        "source_documents": source_documents,
-                        "retrieval_trace": retrieval_trace}
+                        "source_documents": source_documents}
             time_record['prompt_tokens'] = prompt_tokens if prompt_tokens != 0 else est_prompt_tokens
             time_record['completion_tokens'] = completion_tokens if completion_tokens != 0 else num_tokens(acc_resp)
             time_record['total_tokens'] = total_tokens if total_tokens != 0 else time_record['prompt_tokens'] + \

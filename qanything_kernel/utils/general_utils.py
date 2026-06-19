@@ -66,6 +66,9 @@ def format_source_documents(ori_source_documents):
                        'retrieval_source': doc.metadata.get('retrieval_source', ''),
                        'headers': doc.metadata.get('headers', {}),
                        'page_id': doc.metadata.get('page_id', 0),
+                       'source_type': doc.metadata.get('source_type', 'local'),
+                       'trust_level': doc.metadata.get('trust_level', 'high'),
+                       'web_timestamp': doc.metadata.get('web_timestamp', 0),
                        }
         source_documents.append(source_info)
     return source_documents

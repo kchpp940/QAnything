@@ -87,11 +87,6 @@ export const routes: RouteRecordRaw[] = [
         name: 'details',
         component: () => import('@/views/Statistics/components/Details.vue'),
       },
-      {
-        path: 'retrieval-diagnosis',
-        name: 'retrieval-diagnosis',
-        component: () => import('@/views/Statistics/components/RetrievalDiagnosis.vue'),
-      },
     ],
   },
   {
