@@ -124,16 +124,19 @@ class FileProgressTracker:
             "retry_count": 0,
             "last_updated": datetime.now().isoformat(),
             "rollback_info": {
+                "milvus_checked": False,
                 "milvus_cleared": False,
+                "es_checked": False,
                 "es_cleared": False,
+                "mysql_checked": False,
                 "mysql_cleared": False,
             },
             "cleanup_info": {
                 "milvus_checked": False,
-                "es_checked": False,
-                "mysql_checked": False,
                 "milvus_cleared": False,
+                "es_checked": False,
                 "es_cleared": False,
+                "mysql_checked": False,
                 "mysql_cleared": False,
             },
         }

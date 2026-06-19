@@ -58,62 +58,137 @@ db_config = {
 
 async def rollback_file_data(progress_tracker, progress_data, file_id, file_name, kb_id,
                              milvus_kb, es_client, mysql_client, failed_stage, chunks_number=0):
+    has_failure = False
     try:
         progress_data = progress_tracker.update_rollback_start(progress_data, failed_stage)
         progress_tracker.save_progress(file_id, progress_data)
 
-        if failed_stage in [FileStage.MILVUS_INSERT, FileStage.ES_INDEX]:
-            try:
+        try:
+            existing_file_ids = milvus_kb.get_files([file_id])
+            has_milvus_data = len(existing_file_ids) > 0
+            progress_data = progress_tracker.update_rollback_step(
+                progress_data, "milvus_checked", "success",
+                f"found {len(existing_file_ids)} residual entries in Milvus" if has_milvus_data else "no residual Milvus data"
+            )
+            if has_milvus_data:
                 milvus_kb.delete_files([file_id])
-                progress_data = progress_tracker.update_rollback_step(
-                    progress_data, "milvus_cleared", "success"
-                )
-                insert_logger.info(f"Rollback: Milvus data cleared for file {file_id}")
-            except Exception as e:
-                error_detail = f"Failed to clear Milvus data: {str(e)}"
-                progress_data = progress_tracker.update_rollback_step(
-                    progress_data, "milvus_cleared", "failed", error_detail
-                )
-                insert_logger.error(f"Rollback Milvus error: {error_detail}")
-
-            try:
-                if chunks_number > 0:
-                    es_client.delete_files([file_id], [chunks_number])
+                verify_ids = milvus_kb.get_files([file_id])
+                if len(verify_ids) == 0:
+                    progress_data = progress_tracker.update_rollback_step(
+                        progress_data, "milvus_cleared", "success",
+                        "Milvus data cleared and verified"
+                    )
+                    insert_logger.info(f"Rollback: Milvus data cleared for file {file_id}")
                 else:
-                    mysql_docs = mysql_client.get_document_by_file_id(file_id)
-                    if mysql_docs:
-                        actual_chunks = len(mysql_docs)
-                        es_client.delete_files([file_id], [actual_chunks])
+                    has_failure = True
+                    progress_data = progress_tracker.update_rollback_step(
+                        progress_data, "milvus_cleared", "failed",
+                        f"Milvus still has {len(verify_ids)} entries after deletion"
+                    )
+                    insert_logger.error(f"Rollback: Milvus verification failed for file {file_id}")
+            else:
                 progress_data = progress_tracker.update_rollback_step(
-                    progress_data, "es_cleared", "success"
+                    progress_data, "milvus_cleared", "success", "no residual Milvus data"
                 )
-                insert_logger.info(f"Rollback: ES data cleared for file {file_id}")
-            except Exception as e:
-                error_detail = f"Failed to clear ES data: {str(e)}"
-                progress_data = progress_tracker.update_rollback_step(
-                    progress_data, "es_cleared", "failed", error_detail
-                )
-                insert_logger.error(f"Rollback ES error: {error_detail}")
+        except Exception as e:
+            has_failure = True
+            error_detail = f"Milvus rollback error: {str(e)}"
+            progress_data = progress_tracker.update_rollback_step(
+                progress_data, "milvus_checked", "failed", error_detail
+            )
+            progress_data = progress_tracker.update_rollback_step(
+                progress_data, "milvus_cleared", "failed", error_detail
+            )
+            insert_logger.error(f"Rollback Milvus error for file {file_id}: {error_detail}")
 
-            try:
+        try:
+            es_doc_ids = es_client.search_by_file_id(file_id)
+            has_es_data = len(es_doc_ids) > 0
+            progress_data = progress_tracker.update_rollback_step(
+                progress_data, "es_checked", "success",
+                f"found {len(es_doc_ids)} residual docs in ES" if has_es_data else "no residual ES data"
+            )
+            if has_es_data:
+                es_client.delete(es_doc_ids)
+                verify_ids = es_client.search_by_file_id(file_id)
+                if len(verify_ids) == 0:
+                    progress_data = progress_tracker.update_rollback_step(
+                        progress_data, "es_cleared", "success",
+                        f"ES data cleared and verified ({len(es_doc_ids)} docs deleted)"
+                    )
+                    insert_logger.info(f"Rollback: ES data cleared for file {file_id}, {len(es_doc_ids)} docs")
+                else:
+                    has_failure = True
+                    progress_data = progress_tracker.update_rollback_step(
+                        progress_data, "es_cleared", "failed",
+                        f"ES still has {len(verify_ids)} docs after deletion"
+                    )
+                    insert_logger.error(f"Rollback: ES verification failed for file {file_id}")
+            else:
+                progress_data = progress_tracker.update_rollback_step(
+                    progress_data, "es_cleared", "success", "no residual ES data"
+                )
+        except Exception as e:
+            has_failure = True
+            error_detail = f"ES rollback error: {str(e)}"
+            progress_data = progress_tracker.update_rollback_step(
+                progress_data, "es_checked", "failed", error_detail
+            )
+            progress_data = progress_tracker.update_rollback_step(
+                progress_data, "es_cleared", "failed", error_detail
+            )
+            insert_logger.error(f"Rollback ES error for file {file_id}: {error_detail}")
+
+        try:
+            mysql_docs = mysql_client.get_document_by_file_id(file_id)
+            mysql_count = len(mysql_docs) if mysql_docs else 0
+            has_mysql_data = mysql_count > 0
+            progress_data = progress_tracker.update_rollback_step(
+                progress_data, "mysql_checked", "success",
+                f"found {mysql_count} residual docs in MySQL" if has_mysql_data else "no residual MySQL data"
+            )
+            if has_mysql_data:
                 mysql_client.delete_documents([file_id])
+                try:
+                    mysql_client.update_chunks_number(file_id, 0)
+                except Exception:
+                    pass
+                verify_docs = mysql_client.get_document_by_file_id(file_id)
+                verify_count = len(verify_docs) if verify_docs else 0
+                if verify_count == 0:
+                    progress_data = progress_tracker.update_rollback_step(
+                        progress_data, "mysql_cleared", "success",
+                        f"MySQL data cleared and verified ({mysql_count} docs deleted)"
+                    )
+                    insert_logger.info(f"Rollback: MySQL Documents cleared for file {file_id}")
+                else:
+                    has_failure = True
+                    progress_data = progress_tracker.update_rollback_step(
+                        progress_data, "mysql_cleared", "failed",
+                        f"MySQL still has {verify_count} docs after deletion"
+                    )
+                    insert_logger.error(f"Rollback: MySQL verification failed for file {file_id}")
+            else:
                 progress_data = progress_tracker.update_rollback_step(
-                    progress_data, "mysql_cleared", "success"
+                    progress_data, "mysql_cleared", "success", "no residual MySQL data"
                 )
-                insert_logger.info(f"Rollback: MySQL Documents cleared for file {file_id}")
-            except Exception as e:
-                error_detail = f"Failed to clear MySQL Documents: {str(e)}"
-                progress_data = progress_tracker.update_rollback_step(
-                    progress_data, "mysql_cleared", "failed", error_detail
-                )
-                insert_logger.error(f"Rollback MySQL error: {error_detail}")
+        except Exception as e:
+            has_failure = True
+            error_detail = f"MySQL rollback error: {str(e)}"
+            progress_data = progress_tracker.update_rollback_step(
+                progress_data, "mysql_checked", "failed", error_detail
+            )
+            progress_data = progress_tracker.update_rollback_step(
+                progress_data, "mysql_cleared", "failed", error_detail
+            )
+            insert_logger.error(f"Rollback MySQL error for file {file_id}: {error_detail}")
 
-            try:
-                mysql_client.update_chunks_number(file_id, 0)
-            except Exception:
-                pass
-
-        progress_data = progress_tracker.update_rollback_success(progress_data)
+        if has_failure:
+            progress_data = progress_tracker.update_rollback_failed(
+                progress_data, "One or more rollback steps failed, manual intervention may be required"
+            )
+        else:
+            progress_data = progress_tracker.update_rollback_success(progress_data)
         progress_tracker.save_progress(file_id, progress_data)
         return progress_data
 
@@ -127,7 +202,8 @@ async def rollback_file_data(progress_tracker, progress_data, file_id, file_name
 
 async def cleanup_before_retry(progress_tracker, progress_data, file_id, file_name, kb_id,
                                milvus_kb, es_client, mysql_client):
-    needs_cleanup = False
+    has_cleanup_failure = False
+    needs_wait = False
     try:
         progress_data = progress_tracker.update_cleanup_start(progress_data)
         progress_tracker.save_progress(file_id, progress_data)
@@ -137,21 +213,31 @@ async def cleanup_before_retry(progress_tracker, progress_data, file_id, file_na
             has_milvus_data = len(existing_file_ids) > 0
             progress_data = progress_tracker.update_cleanup_step(
                 progress_data, "milvus_checked", "success",
-                f"found residual data in Milvus" if has_milvus_data else "no residual Milvus data"
+                f"found {len(existing_file_ids)} residual entries in Milvus" if has_milvus_data else "no residual Milvus data"
             )
             if has_milvus_data:
                 milvus_kb.delete_files([file_id])
-                needs_cleanup = True
-                progress_data = progress_tracker.update_cleanup_step(
-                    progress_data, "milvus_cleared", "success",
-                    "cleared Milvus chunks from Milvus"
-                )
-                insert_logger.info(f"Cleanup: Cleared Milvus data for retry file {file_id}")
+                needs_wait = True
+                verify_ids = milvus_kb.get_files([file_id])
+                if len(verify_ids) == 0:
+                    progress_data = progress_tracker.update_cleanup_step(
+                        progress_data, "milvus_cleared", "success",
+                        "Milvus data cleared and verified"
+                    )
+                    insert_logger.info(f"Cleanup: Milvus data cleared for retry file {file_id}")
+                else:
+                    has_cleanup_failure = True
+                    progress_data = progress_tracker.update_cleanup_step(
+                        progress_data, "milvus_cleared", "failed",
+                        f"Milvus still has {len(verify_ids)} entries after deletion"
+                    )
+                    insert_logger.error(f"Cleanup: Milvus verification failed for retry file {file_id}")
             else:
                 progress_data = progress_tracker.update_cleanup_step(
                     progress_data, "milvus_cleared", "success", "no residual Milvus data"
                 )
         except Exception as e:
+            has_cleanup_failure = True
             error_detail = f"Milvus cleanup error: {str(e)}"
             progress_data = progress_tracker.update_cleanup_step(
                 progress_data, "milvus_checked", "failed", error_detail
@@ -162,64 +248,98 @@ async def cleanup_before_retry(progress_tracker, progress_data, file_id, file_na
             insert_logger.error(f"Cleanup Milvus error for file {file_id}: {error_detail}")
 
         try:
-            mysql_docs = mysql_client.get_document_by_file_id(file_id)
-            actual_chunks = len(mysql_docs) if mysql_docs else 0
-            has_mysql_data = actual_chunks > 0
-            progress_data = progress_tracker.update_cleanup_step(
-                progress_data, "mysql_checked", "success",
-                f"found {actual_chunks} docs in MySQL"
-            )
-            if has_mysql_data:
-                needs_cleanup = True
-                mysql_client.delete_documents([file_id])
-                mysql_client.update_chunks_number(file_id, 0)
-                progress_data = progress_tracker.update_cleanup_step(
-                    progress_data, "mysql_cleared", "success",
-                    f"cleared {actual_chunks} docs from MySQL"
-                )
-                insert_logger.info(f"Cleanup: Cleared {actual_chunks} MySQL docs for retry file {file_id}")
-            else:
-                progress_data = progress_tracker.update_cleanup_step(
-                    progress_data, "mysql_cleared", "success", "no residual MySQL data"
-                )
-
-            has_es_data = actual_chunks > 0
+            es_doc_ids = es_client.search_by_file_id(file_id)
+            has_es_data = len(es_doc_ids) > 0
             progress_data = progress_tracker.update_cleanup_step(
                 progress_data, "es_checked", "success",
-                f"expected {actual_chunks} docs in ES"
+                f"found {len(es_doc_ids)} residual docs in ES" if has_es_data else "no residual ES data"
             )
             if has_es_data:
-                needs_cleanup = True
-                es_client.delete_files([file_id], [actual_chunks])
-                progress_data = progress_tracker.update_cleanup_step(
-                    progress_data, "es_cleared", "success",
-                    f"requested clear of {actual_chunks} docs from ES"
-                )
-                insert_logger.info(f"Cleanup: Requested ES clear of {actual_chunks} docs for retry file {file_id}")
+                es_client.delete(es_doc_ids)
+                needs_wait = True
+                verify_ids = es_client.search_by_file_id(file_id)
+                if len(verify_ids) == 0:
+                    progress_data = progress_tracker.update_cleanup_step(
+                        progress_data, "es_cleared", "success",
+                        f"ES data cleared and verified ({len(es_doc_ids)} docs deleted)"
+                    )
+                    insert_logger.info(f"Cleanup: ES data cleared for retry file {file_id}, {len(es_doc_ids)} docs")
+                else:
+                    has_cleanup_failure = True
+                    progress_data = progress_tracker.update_cleanup_step(
+                        progress_data, "es_cleared", "failed",
+                        f"ES still has {len(verify_ids)} docs after deletion"
+                    )
+                    insert_logger.error(f"Cleanup: ES verification failed for retry file {file_id}")
             else:
                 progress_data = progress_tracker.update_cleanup_step(
-                    progress_data, "es_cleared", "success", "no residual ES data expected"
+                    progress_data, "es_cleared", "success", "no residual ES data"
                 )
         except Exception as e:
-            error_detail = f"MySQL/ES cleanup error: {str(e)}"
-            progress_data = progress_tracker.update_cleanup_step(
-                progress_data, "mysql_checked", "failed", error_detail
-            )
-            progress_data = progress_tracker.update_cleanup_step(
-                progress_data, "mysql_cleared", "failed", error_detail
-            )
+            has_cleanup_failure = True
+            error_detail = f"ES cleanup error: {str(e)}"
             progress_data = progress_tracker.update_cleanup_step(
                 progress_data, "es_checked", "failed", error_detail
             )
             progress_data = progress_tracker.update_cleanup_step(
                 progress_data, "es_cleared", "failed", error_detail
             )
-            insert_logger.error(f"Cleanup MySQL/ES error for file {file_id}: {error_detail}")
+            insert_logger.error(f"Cleanup ES error for file {file_id}: {error_detail}")
 
-        progress_data = progress_tracker.update_cleanup_success(progress_data)
+        try:
+            mysql_docs = mysql_client.get_document_by_file_id(file_id)
+            mysql_count = len(mysql_docs) if mysql_docs else 0
+            has_mysql_data = mysql_count > 0
+            progress_data = progress_tracker.update_cleanup_step(
+                progress_data, "mysql_checked", "success",
+                f"found {mysql_count} residual docs in MySQL" if has_mysql_data else "no residual MySQL data"
+            )
+            if has_mysql_data:
+                mysql_client.delete_documents([file_id])
+                try:
+                    mysql_client.update_chunks_number(file_id, 0)
+                except Exception:
+                    pass
+                needs_wait = True
+                verify_docs = mysql_client.get_document_by_file_id(file_id)
+                verify_count = len(verify_docs) if verify_docs else 0
+                if verify_count == 0:
+                    progress_data = progress_tracker.update_cleanup_step(
+                        progress_data, "mysql_cleared", "success",
+                        f"MySQL data cleared and verified ({mysql_count} docs deleted)"
+                    )
+                    insert_logger.info(f"Cleanup: MySQL data cleared for retry file {file_id}")
+                else:
+                    has_cleanup_failure = True
+                    progress_data = progress_tracker.update_cleanup_step(
+                        progress_data, "mysql_cleared", "failed",
+                        f"MySQL still has {verify_count} docs after deletion"
+                    )
+                    insert_logger.error(f"Cleanup: MySQL verification failed for retry file {file_id}")
+            else:
+                progress_data = progress_tracker.update_cleanup_step(
+                    progress_data, "mysql_cleared", "success", "no residual MySQL data"
+                )
+        except Exception as e:
+            has_cleanup_failure = True
+            error_detail = f"MySQL cleanup error: {str(e)}"
+            progress_data = progress_tracker.update_cleanup_step(
+                progress_data, "mysql_checked", "failed", error_detail
+            )
+            progress_data = progress_tracker.update_cleanup_step(
+                progress_data, "mysql_cleared", "failed", error_detail
+            )
+            insert_logger.error(f"Cleanup MySQL error for file {file_id}: {error_detail}")
+
+        if has_cleanup_failure:
+            progress_data = progress_tracker.update_cleanup_failed(
+                progress_data, "One or more cleanup steps failed, file cannot be retried safely"
+            )
+        else:
+            progress_data = progress_tracker.update_cleanup_success(progress_data)
         progress_tracker.save_progress(file_id, progress_data)
 
-        if needs_cleanup:
+        if needs_wait and not has_cleanup_failure:
             insert_logger.info(f"Cleanup completed for retry file {file_id}, waiting 2s for data consistency...")
             await asyncio.sleep(2)
 
@@ -267,6 +387,30 @@ async def process_data(retriever, milvus_kb, mysql_client, es_client, file_info,
             progress_tracker, progress_data, file_id, file_name, kb_id,
             milvus_kb, es_client, mysql_client
         )
+
+        cleanup_info = progress_data.get("cleanup_info", {})
+        milvus_clear_ok = cleanup_info.get("milvus_cleared") is True
+        es_clear_ok = cleanup_info.get("es_cleared") is True
+        mysql_clear_ok = cleanup_info.get("mysql_cleared") is True
+
+        if not (milvus_clear_ok and es_clear_ok and mysql_clear_ok):
+            failed_targets = []
+            if not milvus_clear_ok:
+                failed_targets.append("Milvus")
+            if not es_clear_ok:
+                failed_targets.append("ES")
+            if not mysql_clear_ok:
+                failed_targets.append("MySQL")
+            block_msg = f"Retry blocked: residual data in {', '.join(failed_targets)} could not be cleared"
+            insert_logger.error(f"File {file_id}: {block_msg}")
+            progress_data = progress_tracker.update_stage_failed(
+                progress_data, FileStage.CLEANUP, ErrorCode.CLEANUP_ERROR, block_msg
+            )
+            progress_data["retryable"] = False
+            progress_tracker.save_progress(file_id, progress_data)
+            status = 'red'
+            msg = block_msg
+            return status, content_length, chunks_number, msg
 
     try:
         progress_data = progress_tracker.update_stage_start(progress_data, FileStage.PARSE)
@@ -350,12 +494,10 @@ async def process_data(retriever, milvus_kb, mysql_client, es_client, file_info,
         )
         progress_tracker.save_progress(file_id, progress_data)
 
-        if timeout_stage in [FileStage.MILVUS_INSERT, FileStage.ES_INDEX] or \
-           (timeout_stage == FileStage.PARSE and 'parse_time' in time_record):
-            progress_data = await rollback_file_data(
-                progress_tracker, progress_data, file_id, file_name, kb_id,
-                milvus_kb, es_client, mysql_client, timeout_stage, chunks_number
-            )
+        progress_data = await rollback_file_data(
+            progress_tracker, progress_data, file_id, file_name, kb_id,
+            milvus_kb, es_client, mysql_client, timeout_stage, chunks_number
+        )
 
         status = 'red'
         time_record['insert_timeout'] = True
@@ -386,12 +528,10 @@ async def process_data(retriever, milvus_kb, mysql_client, es_client, file_info,
         )
         progress_tracker.save_progress(file_id, progress_data)
 
-        if failed_stage in [FileStage.MILVUS_INSERT, FileStage.ES_INDEX] or \
-           (failed_stage == FileStage.PARSE and 'parse_time' in time_record):
-            progress_data = await rollback_file_data(
-                progress_tracker, progress_data, file_id, file_name, kb_id,
-                milvus_kb, es_client, mysql_client, failed_stage, chunks_number
-            )
+        progress_data = await rollback_file_data(
+            progress_tracker, progress_data, file_id, file_name, kb_id,
+            milvus_kb, es_client, mysql_client, failed_stage, chunks_number
+        )
 
         status = 'red'
         time_record['insert_error'] = True
