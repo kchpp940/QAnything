@@ -36,6 +36,7 @@ class LocalDocQA:
     @staticmethod
     def create_trace_doc(doc, stage, retrieval_score=None, rerank_score=None, selected=True, filter_reason=None, prompt_position=None):
         return {
+            "trace_id": doc.metadata.get("trace_id", ""),
             "doc_id": doc.metadata.get("doc_id", ""),
             "file_id": doc.metadata.get("file_id", ""),
             "file_name": doc.metadata.get("file_name", ""),
@@ -46,6 +47,29 @@ class LocalDocQA:
             "selected": selected,
             "filter_reason": filter_reason,
             "prompt_position": prompt_position
+        }
+
+    @staticmethod
+    def init_candidate_trace(doc, stage, retrieval_score=None, rerank_score=None, selected=True, filter_reason=None):
+        trace_id = doc.metadata.get("trace_id", "")
+        first_stage_trace = LocalDocQA.create_trace_doc(doc, stage, retrieval_score, rerank_score, selected, filter_reason)
+        return {
+            "trace_id": trace_id,
+            "doc_id": doc.metadata.get("doc_id", ""),
+            "file_id": doc.metadata.get("file_id", ""),
+            "file_name": doc.metadata.get("file_name", ""),
+            "content": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
+            "final_selected": False,
+            "final_filter_reason": None,
+            "prompt_position": None,
+            "stage_traces": {
+                "retrieval": None,
+                "web_search": None,
+                "rerank": None,
+                "topk_filter": None,
+                "faq_match": None,
+                "prompt_assembly": None
+            }
         }
 
     def __init__(self, port):
@@ -446,8 +470,12 @@ class LocalDocQA:
         retrieval_trace = {
             "original_query": query,
             "retrieval_query": query,
-            "stages": []
+            "stages": [],
+            "candidates": []
         }
+
+        candidate_traces = {}
+        trace_id_counter = 0
 
         if chat_history:
             formatted_chat_history = []
@@ -505,11 +533,20 @@ class LocalDocQA:
             source_documents = await self.get_source_documents(retrieval_query, retriever, kb_ids, time_record,
                                                                hybrid_search, top_k)
             for doc in source_documents:
+                trace_id = f"cand_{trace_id_counter}"
+                trace_id_counter += 1
+                doc.metadata['trace_id'] = trace_id
                 retrieval_stage_docs.append(self.create_trace_doc(
                     doc, "retrieval",
                     retrieval_score=doc.metadata.get('score'),
                     selected=True
                 ))
+                candidate_traces[trace_id] = self.init_candidate_trace(
+                    doc, "retrieval",
+                    retrieval_score=doc.metadata.get('score'),
+                    selected=True
+                )
+                candidate_traces[trace_id]["stage_traces"]["retrieval"] = retrieval_stage_docs[-1]
         else:
             source_documents = []
 
@@ -542,6 +579,9 @@ class LocalDocQA:
                     current_doc_id = 0
                     doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
                     current_doc_id += 1
+                trace_id = f"cand_{trace_id_counter}"
+                trace_id_counter += 1
+                doc.metadata['trace_id'] = trace_id
                 doc_json = doc.to_json()
                 if doc_json['kwargs'].get('metadata') is None:
                     doc_json['kwargs']['metadata'] = doc.metadata
@@ -551,6 +591,12 @@ class LocalDocQA:
                     retrieval_score=doc.metadata.get('score'),
                     selected=True
                 ))
+                candidate_traces[trace_id] = self.init_candidate_trace(
+                    doc, "web_search",
+                    retrieval_score=doc.metadata.get('score'),
+                    selected=True
+                )
+                candidate_traces[trace_id]["stage_traces"]["web_search"] = web_search_stage_docs[-1]
 
             t2 = time.perf_counter()
             time_record['web_search'] = round(t2 - t1, 2)
@@ -612,6 +658,7 @@ class LocalDocQA:
                 selected_doc_ids_step3 = {doc.metadata.get('doc_id') for doc in source_documents}
                 for doc in docs_before_rerank:
                     doc_id = doc.metadata.get('doc_id', '')
+                    trace_id = doc.metadata.get('trace_id', '')
                     rerank_score = doc_rerank_scores.get(doc_id)
                     filter_reason = None
                     selected = True
@@ -628,31 +675,42 @@ class LocalDocQA:
                         relative_diff = (top_score - rerank_score) / top_score if top_score > 0 else 0
                         filter_reason = f"与最高分({top_score:.4f})相对差异({relative_diff:.4f})超过50%"
 
-                    rerank_stage_docs.append(self.create_trace_doc(
+                    trace_doc = self.create_trace_doc(
                         doc, "rerank",
                         retrieval_score=doc.metadata.get('score'),
                         rerank_score=rerank_score,
                         selected=selected,
                         filter_reason=filter_reason
-                    ))
+                    )
+                    rerank_stage_docs.append(trace_doc)
+                    if trace_id and trace_id in candidate_traces:
+                        candidate_traces[trace_id]["stage_traces"]["rerank"] = trace_doc
             except Exception as e:
                 time_record['rerank'] = 0.0
                 debug_logger.error(f"query {query}: kb_ids: {kb_ids}, rerank error: {traceback.format_exc()}")
                 for doc in docs_before_rerank:
-                    rerank_stage_docs.append(self.create_trace_doc(
+                    trace_id = doc.metadata.get('trace_id', '')
+                    trace_doc = self.create_trace_doc(
                         doc, "rerank",
                         retrieval_score=doc.metadata.get('score'),
                         selected=True,
                         filter_reason="rerank失败，使用原始检索结果"
-                    ))
+                    )
+                    rerank_stage_docs.append(trace_doc)
+                    if trace_id and trace_id in candidate_traces:
+                        candidate_traces[trace_id]["stage_traces"]["rerank"] = trace_doc
         else:
             for doc in source_documents:
-                rerank_stage_docs.append(self.create_trace_doc(
+                trace_id = doc.metadata.get('trace_id', '')
+                trace_doc = self.create_trace_doc(
                     doc, "rerank",
                     retrieval_score=doc.metadata.get('score'),
                     selected=True,
                     filter_reason="未启用rerank或不满足rerank条件"
-                ))
+                )
+                rerank_stage_docs.append(trace_doc)
+                if trace_id and trace_id in candidate_traces:
+                    candidate_traces[trace_id]["stage_traces"]["rerank"] = trace_doc
 
         retrieval_trace["stages"].append({
             "stage": "rerank",
@@ -667,14 +725,18 @@ class LocalDocQA:
         selected_doc_ids = {doc.metadata.get('doc_id') for doc in source_documents}
         for doc in docs_before_topk:
             doc_id = doc.metadata.get('doc_id', '')
+            trace_id = doc.metadata.get('trace_id', '')
             selected = doc_id in selected_doc_ids
-            topk_stage_docs.append(self.create_trace_doc(
+            trace_doc = self.create_trace_doc(
                 doc, "topk_filter",
                 retrieval_score=doc.metadata.get('score'),
                 rerank_score=doc.metadata.get('score') if rerank else None,
                 selected=selected,
                 filter_reason=None if selected else f"排名超出top_k({top_k})限制"
-            ))
+            )
+            topk_stage_docs.append(trace_doc)
+            if trace_id and trace_id in candidate_traces:
+                candidate_traces[trace_id]["stage_traces"]["topk_filter"] = trace_doc
 
         retrieval_trace["stages"].append({
             "stage": "topk_filter",
@@ -708,18 +770,22 @@ class LocalDocQA:
         selected_doc_ids_faq = {doc.metadata.get('doc_id') for doc in source_documents}
         for doc in docs_before_faq:
             doc_id = doc.metadata.get('doc_id', '')
+            trace_id = doc.metadata.get('trace_id', '')
             selected = doc_id in selected_doc_ids_faq
             filter_reason = None
             if faq_matched and not selected:
                 filter_reason = faq_filter_reason
 
-            faq_stage_docs.append(self.create_trace_doc(
+            trace_doc = self.create_trace_doc(
                 doc, "faq_match",
                 retrieval_score=doc.metadata.get('score'),
                 rerank_score=doc.metadata.get('score') if rerank else None,
                 selected=selected,
                 filter_reason=filter_reason
-            ))
+            )
+            faq_stage_docs.append(trace_doc)
+            if trace_id and trace_id in candidate_traces:
+                candidate_traces[trace_id]["stage_traces"]["faq_match"] = trace_doc
 
         retrieval_trace["stages"].append({
             "stage": "faq_match",
@@ -729,6 +795,15 @@ class LocalDocQA:
 
         if faq_exact_match_doc:
             debug_logger.info(f"match faq question: {query}")
+            for trace_id, candidate in candidate_traces.items():
+                faq_stage = candidate["stage_traces"]["faq_match"]
+                if faq_stage:
+                    candidate["final_selected"] = faq_stage["selected"]
+                    if faq_stage["selected"]:
+                        candidate["final_filter_reason"] = None
+                    else:
+                        candidate["final_filter_reason"] = faq_stage["filter_reason"]
+            retrieval_trace["candidates"] = list(candidate_traces.values())
             if only_need_search_results:
                 yield {
                     "source_documents": source_documents,
@@ -773,24 +848,34 @@ class LocalDocQA:
             selected_doc_ids_prompt = {doc.metadata.get('doc_id'): idx + 1 for idx, doc in enumerate(retrieval_documents)}
             for doc in docs_before_reprocess:
                 doc_id = doc.metadata.get('doc_id', '')
+                trace_id = doc.metadata.get('trace_id', '')
                 selected = doc_id in selected_doc_ids_prompt
                 filter_reason = None if selected else f"token限制裁剪(可用token:{limited_token_nums})"
                 prompt_position = selected_doc_ids_prompt.get(doc_id) if selected else None
 
-                prompt_stage_docs.append(self.create_trace_doc(
+                trace_doc = self.create_trace_doc(
                     doc, "prompt_assembly",
                     retrieval_score=doc.metadata.get('score'),
                     rerank_score=doc.metadata.get('score') if rerank else None,
                     selected=selected,
                     filter_reason=filter_reason,
                     prompt_position=prompt_position
-                ))
+                )
+                prompt_stage_docs.append(trace_doc)
+                if trace_id and trace_id in candidate_traces:
+                    candidate_traces[trace_id]["stage_traces"]["prompt_assembly"] = trace_doc
+                    candidate_traces[trace_id]["final_selected"] = selected
+                    candidate_traces[trace_id]["prompt_position"] = prompt_position
+                    if not selected:
+                        candidate_traces[trace_id]["final_filter_reason"] = filter_reason
 
             retrieval_trace["stages"].append({
                 "stage": "prompt_assembly",
                 "description": f"Prompt拼接阶段(可用token:{limited_token_nums})",
                 "docs": prompt_stage_docs
             })
+
+            retrieval_trace["candidates"] = list(candidate_traces.values())
 
             if len(retrieval_documents) < len(source_documents):
                 if len(retrieval_documents) == 0:
@@ -839,6 +924,22 @@ class LocalDocQA:
                     "{{custom_prompt}}", simple_custom_prompt)
 
 
+
+        if "candidates" not in retrieval_trace:
+            stage_order = ["retrieval", "web_search", "rerank", "topk_filter", "faq_match", "prompt_assembly"]
+            for trace_id, candidate in candidate_traces.items():
+                last_stage_with_trace = None
+                for stage in reversed(stage_order):
+                    if candidate["stage_traces"][stage] is not None:
+                        last_stage_with_trace = candidate["stage_traces"][stage]
+                        break
+                if last_stage_with_trace:
+                    candidate["final_selected"] = last_stage_with_trace["selected"]
+                    if last_stage_with_trace["selected"]:
+                        candidate["final_filter_reason"] = None
+                    else:
+                        candidate["final_filter_reason"] = last_stage_with_trace["filter_reason"]
+            retrieval_trace["candidates"] = list(candidate_traces.values())
 
         if only_need_search_results:
             yield {

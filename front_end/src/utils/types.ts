@@ -16,6 +16,7 @@ export interface IKnowledgeItem {
 }
 
 export interface ITraceDoc {
+  trace_id?: string;
   doc_id: string;
   file_id: string;
   file_name: string;
@@ -34,10 +35,31 @@ export interface ITraceStage {
   docs: ITraceDoc[];
 }
 
+export type TraceStageKey =
+  | 'retrieval'
+  | 'web_search'
+  | 'rerank'
+  | 'topk_filter'
+  | 'faq_match'
+  | 'prompt_assembly';
+
+export interface IBackendCandidateTrace {
+  trace_id: string;
+  doc_id: string;
+  file_id: string;
+  file_name: string;
+  content: string;
+  final_selected: boolean;
+  final_filter_reason: string | null;
+  prompt_position: number | null;
+  stage_traces: Record<TraceStageKey, ITraceDoc | null>;
+}
+
 export interface IRetrievalTrace {
   original_query: string;
   retrieval_query: string;
   stages: ITraceStage[];
+  candidates?: IBackendCandidateTrace[];
 }
 
 export interface ICandidateTraceInfo {
@@ -47,6 +69,7 @@ export interface ICandidateTraceInfo {
   content: string;
   final_selected: boolean; // 最终是否入选进入 source_documents
   final_filter_reason?: string | null; // 最终未入选的原因
+  prompt_position?: number | null; // 在 prompt 中的位置，null 表示未进入 prompt
   stage_traces: Array<{
     stage: string;
     stage_name: string;

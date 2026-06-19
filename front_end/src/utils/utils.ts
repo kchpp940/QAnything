@@ -17,6 +17,7 @@ import {
   ITraceDisplayData,
   ICandidateTraceInfo,
   IDataSourceItem,
+  TraceStageKey,
 } from './types';
 import { getLanguage } from '@/language';
 
@@ -312,10 +313,57 @@ const getStageDescription = (stage: string): string => {
   return descMap[stage] || stage;
 };
 
+const STAGE_ORDER: TraceStageKey[] = [
+  'retrieval',
+  'web_search',
+  'rerank',
+  'topk_filter',
+  'faq_match',
+  'prompt_assembly',
+];
+
 export function processRetrievalTrace(
   trace: IRetrievalTrace,
   sourceDocs: IDataSourceItem[]
 ): ITraceDisplayData {
+  if (trace.candidates && trace.candidates.length > 0) {
+    const candidates: ICandidateTraceInfo[] = trace.candidates.map(cand => ({
+      doc_id: cand.doc_id,
+      file_id: cand.file_id,
+      file_name: cand.file_name,
+      content: cand.content,
+      final_selected: cand.final_selected,
+      final_filter_reason: cand.final_filter_reason,
+      prompt_position: cand.prompt_position,
+      stage_traces: STAGE_ORDER.map(stageKey => ({
+        stage: stageKey,
+        stage_name: getStageName(stageKey),
+        stage_description: getStageDescription(stageKey),
+        trace: cand.stage_traces[stageKey] || null,
+      })),
+    }));
+
+    const selectedCandidates = candidates
+      .filter(c => c.final_selected)
+      .sort((a, b) => {
+        const aPos = a.prompt_position;
+        const bPos = b.prompt_position;
+        if (aPos !== null && aPos !== undefined && bPos !== null && bPos !== undefined) {
+          return (aPos ?? 999) - (bPos ?? 999);
+        }
+        return 0;
+      });
+
+    const filteredCandidates = candidates.filter(c => !c.final_selected);
+
+    return {
+      selected_candidates: selectedCandidates,
+      filtered_candidates: filteredCandidates,
+      original_query: trace.original_query,
+      retrieval_query: trace.retrieval_query,
+    };
+  }
+
   const allStages = trace.stages.map(s => s.stage);
   const candidateMap = new Map<string, ICandidateTraceInfo>();
   const selectedDocIds = new Set(sourceDocs.map(d => d.doc_id || d.file_id));
