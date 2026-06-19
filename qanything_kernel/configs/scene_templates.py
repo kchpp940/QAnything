@@ -1,3 +1,5 @@
+import copy
+
 SCENE_TEMPLATE_SCHEMA_VERSION = '1.0.0'
 
 ANSWER_STYLES = {'concise', 'detailed', 'technical', 'strict_citation'}
@@ -122,13 +124,16 @@ def get_template_meta(template_id, is_zh=True):
     }
 
 
-def list_templates(is_zh=True):
-    return [
-        {
+def list_templates(is_zh=True, include_defaults=False):
+    result = []
+    for tid in SCENE_TEMPLATES:
+        entry = {
             'id': tid,
             'name': SCENE_TEMPLATES[tid]['name'] if is_zh else SCENE_TEMPLATES[tid]['name_en'],
             'description': SCENE_TEMPLATES[tid]['description'] if is_zh else SCENE_TEMPLATES[tid]['description_en'],
             'icon': SCENE_TEMPLATES[tid]['icon'],
         }
-        for tid in SCENE_TEMPLATES
-    ]
+        if include_defaults:
+            entry['defaults'] = copy.deepcopy(SCENE_TEMPLATES[tid]['defaults'])
+        result.append(entry)
+    return result

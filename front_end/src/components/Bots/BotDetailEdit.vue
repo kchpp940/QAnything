@@ -136,7 +136,6 @@ import { getLanguage } from '@/language/index';
 import ChatSettingForm from '@/components/ChatSettingForm.vue';
 import { useChatSetting } from '@/store/useChatSetting';
 import { useBotsChat } from '@/store/useBotsChat';
-import { getTemplateById } from '@/config/sceneTemplates';
 
 const { curBot, knowledgeList, selectedTemplateId, userOverrides, sceneTemplates } = storeToRefs(
   useBots()
@@ -152,6 +151,7 @@ const {
   loadBotTemplateState,
   setUserOverrides,
   fetchTemplates,
+  getTemplateDefaults,
 } = useBots();
 const { setChatSettingConfigured } = useChatSetting();
 const { chatSettingFormActive } = storeToRefs(useChatSetting());
@@ -164,7 +164,14 @@ const roleSetting = ref('');
 const welcomeMessage = ref('');
 const answerStyle = ref('');
 const activeTemplateId = ref('');
-const currentTemplate = computed(() => getTemplateById(activeTemplateId.value));
+const currentTemplate = computed(() => {
+  const tid = activeTemplateId.value;
+  if (!tid) return null;
+  const fromList = sceneTemplates.value.find(t => t.id === tid);
+  if (!fromList) return null;
+  const defaults = getTemplateDefaults(tid);
+  return { ...fromList, defaults: defaults || {} };
+});
 const matches: any = computed(() => roleSetting.value.match(/[^a-zA-Z\s]|\p{P}|\w+/g));
 
 onMounted(async () => {
@@ -192,11 +199,11 @@ const onTemplateChange = (templateId: string) => {
   activeTemplateId.value = templateId;
   applyTemplate(templateId);
   if (templateId) {
-    const tpl = getTemplateById(templateId);
-    if (tpl) {
-      roleSetting.value = tpl.defaults.prompt_setting;
-      welcomeMessage.value = tpl.defaults.welcome_message;
-      answerStyle.value = tpl.defaults.answer_style;
+    const defaults = getTemplateDefaults(templateId);
+    if (defaults) {
+      roleSetting.value = defaults.prompt_setting || '';
+      welcomeMessage.value = defaults.welcome_message || '';
+      answerStyle.value = defaults.answer_style || '';
       message.success(bots.templateApplied);
     }
   }
@@ -231,11 +238,10 @@ const getCurrentVal = (field: string) => {
 
 const onFieldChange = (field: string) => {
   if (!activeTemplateId.value) return;
-  const tpl = getTemplateById(activeTemplateId.value);
-  if (!tpl) return;
+  const defaults = getTemplateDefaults(activeTemplateId.value);
+  if (!defaults) return;
   const curVal = getCurrentVal(field);
-  const defaults = tpl.defaults;
-  const defVal = defaults[field as keyof typeof defaults];
+  const defVal = defaults[field];
   if (curVal !== undefined && curVal !== defVal) {
     markFieldOverridden(field);
     const newOverrides = { ...userOverrides.value };
@@ -245,9 +251,9 @@ const onFieldChange = (field: string) => {
 };
 
 const resetField = (field: string) => {
-  const tpl = getTemplateById(activeTemplateId.value);
-  if (!tpl) return;
-  const defaultVal = tpl.defaults[field as keyof typeof tpl.defaults];
+  const defaults = getTemplateDefaults(activeTemplateId.value);
+  if (!defaults) return;
+  const defaultVal = defaults[field];
   if (field === 'prompt_setting') roleSetting.value = defaultVal;
   else if (field === 'welcome_message') welcomeMessage.value = defaultVal;
   else if (field === 'answer_style') answerStyle.value = defaultVal;

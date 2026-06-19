@@ -98,7 +98,7 @@ const {
   setTabIndex,
   applyTemplate,
   fetchTemplates,
-  getTemplateById,
+  getTemplateDefaults,
 } = useBots();
 const { setQaList } = useBotsChat();
 const bots = getLanguage().bots;
@@ -112,7 +112,14 @@ interface FormState {
 
 const loading = ref(false);
 const selectedTemplateId = ref('');
-const currentTemplate = computed(() => getTemplateById(selectedTemplateId.value));
+const currentTemplate = computed(() => {
+  const tid = selectedTemplateId.value;
+  if (!tid) return null;
+  const fromList = sceneTemplates.value.find(t => t.id === tid);
+  if (!fromList) return null;
+  const defaults = getTemplateDefaults(tid);
+  return { ...fromList, defaults: defaults || {} };
+});
 
 const formState = reactive<FormState>({
   name: '',

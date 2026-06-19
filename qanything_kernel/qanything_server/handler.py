@@ -14,9 +14,10 @@ from qanything_kernel.configs.bot_template_resolver import (
     parse_user_overrides,
     build_llm_setting_with_answer_style,
     get_schema_version,
+    get_template_defaults,
     is_valid_template_id,
 )
-from qanything_kernel.configs.scene_templates import TEMPLATE_OVERRIDABLE_FIELDS, list_templates, get_template_meta
+from qanything_kernel.configs.scene_templates import TEMPLATE_OVERRIDABLE_FIELDS, NO_TEMPLATE_DEFAULTS, list_templates, get_template_meta
 from qanything_kernel.utils.general_utils import *
 from langchain.schema import Document
 from sanic.response import ResponseStream
@@ -1299,6 +1300,7 @@ async def get_bot_info(req: request):
         merged = resolve_bot_values(template_id, user_overrides_raw, bot_template_version)
         overridden_fields = compute_overridden_fields(template_id, user_overrides_raw, bot_template_version)
         parsed_overrides = parse_user_overrides(user_overrides_raw)
+        template_defaults = get_template_defaults(template_id, bot_template_version)
         existing_llm = bot_info[9]
         if isinstance(existing_llm, str):
             try:
@@ -1323,7 +1325,8 @@ async def get_bot_info(req: request):
                 "schema_version": current_schema_version,
                 "user_overrides": parsed_overrides,
                 "merged_config": merged,
-                "overridden_fields": overridden_fields}
+                "overridden_fields": overridden_fields,
+                "template_defaults": template_defaults}
         data.append(info)
     return sanic_json({"code": 200, "msg": "success", "data": data})
 
@@ -1331,18 +1334,19 @@ async def get_bot_info(req: request):
 @get_time_async
 async def list_bot_templates(req: request):
     """
-    List all available bot scene templates with metadata.
+    List all available bot scene templates with metadata and full defaults.
     Returns:
-    - templates: list of template objects with id, name, description, icon
+    - templates: list of template objects with id, name, description, icon, defaults
     - schema_version: current template schema version
     - overridable_fields: list of field names that can be overridden by users
+    - no_template_defaults: defaults used when no template is selected
     """
     user_id, is_valid, error_msg, user_info = check_state(req)
     if not is_valid:
         return sanic_json({"code": 2001, "msg": error_msg})
     user_id = user_id + '__' + user_info
     is_zh = req.headers.get('accept-language', 'zh').lower().startswith('zh')
-    templates = list_templates(is_zh=is_zh)
+    templates = list_templates(is_zh=is_zh, include_defaults=True)
     schema_version = get_schema_version()
     return sanic_json({
         "code": 200,
@@ -1351,6 +1355,7 @@ async def list_bot_templates(req: request):
             "templates": templates,
             "schema_version": schema_version,
             "overridable_fields": TEMPLATE_OVERRIDABLE_FIELDS,
+            "no_template_defaults": NO_TEMPLATE_DEFAULTS,
         }
     })
 

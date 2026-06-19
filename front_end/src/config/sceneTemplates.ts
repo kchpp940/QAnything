@@ -1,3 +1,16 @@
+/**
+ * READ-ONLY FALLBACK
+ *
+ * This file is a local fallback for template definitions when the backend
+ * list_bot_templates API is unavailable. It MUST NOT be used for:
+ * - Computing user overrides
+ * - Determining "reset to default" values
+ * - Any save/persist logic
+ *
+ * All override/reset/default logic MUST use defaults returned by the backend
+ * (via list_bot_templates.defaults / get_bot_info.template_defaults),
+ * accessed through useBots.getTemplateDefaults().
+ */
 export interface SceneTemplateDefaults {
   prompt_setting: string;
   welcome_message: string;

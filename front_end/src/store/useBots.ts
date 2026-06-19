@@ -62,6 +62,8 @@ export const useBots = defineStore('useBots', () => {
   const templateSchemaVersion = ref('');
   const overridableFields = ref<string[]>([]);
   const templatesLoaded = ref(false);
+  const templateDefaultsMap = ref<Record<string, Record<string, any>>>({});
+  const noTemplateDefaults = ref<Record<string, any>>({});
 
   const fetchTemplates = async () => {
     if (templatesLoaded.value && sceneTemplates.value.length > 0) {
@@ -80,6 +82,14 @@ export const useBots = defineStore('useBots', () => {
         sceneTemplates.value = res.data.templates || [];
         templateSchemaVersion.value = res.data.schema_version || '';
         overridableFields.value = res.data.overridable_fields || [];
+        noTemplateDefaults.value = res.data.no_template_defaults || {};
+        const map: Record<string, Record<string, any>> = {};
+        for (const tpl of res.data.templates || []) {
+          if (tpl.id && tpl.defaults) {
+            map[tpl.id] = tpl.defaults;
+          }
+        }
+        templateDefaultsMap.value = map;
         templatesLoaded.value = true;
         return res.data;
       }
@@ -125,15 +135,24 @@ export const useBots = defineStore('useBots', () => {
     };
   };
 
+  const getTemplateDefaults = (templateId: string): Record<string, any> | null => {
+    if (!templateId) return null;
+    if (curBot.value && curBot.value.template_defaults && curBot.value.template_id === templateId) {
+      return curBot.value.template_defaults;
+    }
+    if (templateDefaultsMap.value[templateId]) {
+      return templateDefaultsMap.value[templateId];
+    }
+    const local = getLocalTemplateById(templateId);
+    return local?.defaults || null;
+  };
+
   const getTemplateById = (templateId: string) => {
     if (!templateId) return null;
     const fromBackend = sceneTemplates.value.find(t => t.id === templateId);
     if (fromBackend) {
-      const local = getLocalTemplateById(templateId);
-      return {
-        ...fromBackend,
-        defaults: local?.defaults || {},
-      };
+      const defaults = getTemplateDefaults(templateId);
+      return { ...fromBackend, defaults: defaults || {} };
     }
     return getLocalTemplateById(templateId);
   };
@@ -163,16 +182,15 @@ export const useBots = defineStore('useBots', () => {
   };
 
   const resetFieldToDefault = (field: string) => {
-    const tpl = getTemplateById(selectedTemplateId.value);
-    if (tpl) {
-      const newVal = tpl.defaults[field];
-      if (newVal !== undefined) {
-        unmarkFieldOverridden(field);
-        const newOverrides = { ...userOverrides.value };
-        delete newOverrides[field];
-        userOverrides.value = newOverrides;
-      }
+    const defaults = getTemplateDefaults(selectedTemplateId.value);
+    if (defaults && defaults[field] !== undefined) {
+      unmarkFieldOverridden(field);
+      const newOverrides = { ...userOverrides.value };
+      delete newOverrides[field];
+      userOverrides.value = newOverrides;
+      return defaults[field];
     }
+    return undefined;
   };
 
   const applyTemplate = (templateId: string) => {
@@ -186,8 +204,8 @@ export const useBots = defineStore('useBots', () => {
       const val = curBot.value.merged_config[field];
       if (val !== undefined) return val;
     }
-    const tpl = getTemplateById(selectedTemplateId.value);
-    if (tpl && tpl.defaults[field] !== undefined) return tpl.defaults[field];
+    const defaults = getTemplateDefaults(selectedTemplateId.value);
+    if (defaults && defaults[field] !== undefined) return defaults[field];
     return fallback;
   };
 
@@ -240,7 +258,10 @@ export const useBots = defineStore('useBots', () => {
     templateSchemaVersion,
     overridableFields,
     templatesLoaded,
+    templateDefaultsMap,
+    noTemplateDefaults,
     fetchTemplates,
+    getTemplateDefaults,
     getTemplateById,
   };
 });
