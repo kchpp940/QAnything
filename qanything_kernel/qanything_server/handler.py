@@ -659,15 +659,15 @@ async def local_doc_chat(req: request):
         if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id, user_id):
             return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
         bot_info = local_doc_qa.milvus_summary.get_bot(user_id, bot_id)[0]
-        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, bot_user_id, llm_setting = bot_info
+        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, bot_user_id, llm_setting_str = bot_info
         kb_ids = kb_ids_str.split(',')
         if not kb_ids:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} unbound knowledge base.".format(bot_id)})
         custom_prompt = prompt
-        if not llm_setting:
+        if not llm_setting_str:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} llm_setting is empty.".format(bot_id)})
-        llm_setting = json.loads(llm_setting)
-        llm_setting = normalize_llm_setting(llm_setting)
+        llm_setting = json.loads(llm_setting_str)
+        llm_setting = local_doc_qa.milvus_summary.normalize_llm_setting(llm_setting)
         rerank = llm_setting.get('rerank', True)
         only_need_search_results = llm_setting.get('only_need_search_results', False)
         need_web_search = llm_setting.get('networking', False)
@@ -685,54 +685,23 @@ async def local_doc_chat(req: request):
         kb_ids = safe_get(req, 'kb_ids')
         custom_prompt = safe_get(req, 'custom_prompt', None)
         rerank = safe_get(req, 'rerank', default=True)
-        rerank = str2bool(rerank)
         only_need_search_results = safe_get(req, 'only_need_search_results', False)
-        only_need_search_results = str2bool(only_need_search_results)
         need_web_search = safe_get(req, 'networking', False)
-        need_web_search = str2bool(need_web_search)
         api_base = safe_get(req, 'api_base', '')
         # 如果api_base中包含0.0.0.0或127.0.0.1或localhost，替换为GATEWAY_IP
         api_base = api_base.replace('0.0.0.0', GATEWAY_IP).replace('127.0.0.1', GATEWAY_IP).replace('localhost',
                                                                                                     GATEWAY_IP)
         api_key = safe_get(req, 'api_key', 'ollama')
         api_context_length = safe_get(req, 'api_context_length', 4096)
-        try:
-            api_context_length = int(api_context_length)
-        except (ValueError, TypeError):
-            pass
         top_p = safe_get(req, 'top_p', 0.99)
-        try:
-            top_p = float(top_p)
-            if top_p == 1.0:
-                top_p = 0.99
-        except (ValueError, TypeError):
-            pass
         temperature = safe_get(req, 'temperature', 0.5)
-        try:
-            temperature = float(temperature)
-        except (ValueError, TypeError):
-            pass
         top_k = safe_get(req, 'top_k', VECTOR_SEARCH_TOP_K)
-        try:
-            top_k = int(top_k)
-        except (ValueError, TypeError):
-            pass
 
         model = safe_get(req, 'model', 'gpt-4o-mini')
         max_token = safe_get(req, 'max_token')
-        if max_token is not None and max_token != "":
-            try:
-                max_token = int(max_token)
-            except (ValueError, TypeError):
-                pass
 
         hybrid_search = safe_get(req, 'hybrid_search', False)
-        hybrid_search = str2bool(hybrid_search)
         chunk_size = safe_get(req, 'chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
-        try:
-            chunk_size = int(chunk_size)
-        except (ValueError, TypeError):
-            pass
 
     debug_logger.info('rerank %s', rerank)
 
@@ -1304,10 +1273,12 @@ async def get_bot_info(req: request):
         else:
             kb_ids = []
             kb_names = []
-        llm_setting = bot_info[9]
-        if llm_setting:
-            llm_setting = json.loads(llm_setting)
-            llm_setting = normalize_llm_setting(llm_setting)
+        llm_setting_str = bot_info[9]
+        try:
+            llm_setting = json.loads(llm_setting_str) if llm_setting_str else {}
+            llm_setting = local_doc_qa.milvus_summary.normalize_llm_setting(llm_setting)
+        except (json.JSONDecodeError, TypeError):
+            llm_setting = {}
         info = {"bot_id": bot_info[0], "user_id": user_id, "bot_name": bot_info[1], "description": bot_info[2],
                 "head_image": bot_info[3], "prompt_setting": bot_info[4], "welcome_message": bot_info[5],
                 "kb_ids": kb_ids, "kb_names": kb_names,
@@ -1339,23 +1310,43 @@ async def new_bot(req: request):
         return sanic_json({"code": 2001, "msg": msg, "data": [{}]})
     debug_logger.info("new_bot %s", user_id)
     bot_id = 'BOT' + uuid.uuid4().hex
-    default_llm_setting = {
-        "api_key": "ollama",
-        "api_base": "",
-        "model": "gpt-4o-mini",
-        "api_context_length": 4096,
-        "max_token": None,
-        "chunk_size": DEFAULT_PARENT_CHUNK_SIZE,
-        "temperature": 0.5,
-        "top_k": VECTOR_SEARCH_TOP_K,
-        "top_p": 0.99,
-        "rerank": True,
-        "hybrid_search": False,
-        "networking": False,
-        "only_need_search_results": False,
-    }
+
+    llm_setting = {}
+    if api_base := safe_get(req, "api_base"):
+        llm_setting["api_base"] = api_base
+    if api_key := safe_get(req, "api_key"):
+        llm_setting["api_key"] = api_key
+    if api_context_length := safe_get(req, "api_context_length"):
+        llm_setting["api_context_length"] = api_context_length
+    if top_p := safe_get(req, "top_p"):
+        llm_setting["top_p"] = top_p
+    if top_k := safe_get(req, "top_k"):
+        llm_setting["top_k"] = top_k
+    if chunk_size := safe_get(req, "chunk_size"):
+        llm_setting["chunk_size"] = chunk_size
+    if temperature := safe_get(req, "temperature"):
+        llm_setting["temperature"] = temperature
+    if model := safe_get(req, "model"):
+        llm_setting["model"] = model
+    if max_token := safe_get(req, "max_token"):
+        llm_setting["max_token"] = max_token
+    rerank = safe_get(req, "rerank")
+    if rerank is not None:
+        llm_setting["rerank"] = rerank
+    hybrid_search = safe_get(req, "hybrid_search")
+    if hybrid_search is not None:
+        llm_setting["hybrid_search"] = hybrid_search
+    networking = safe_get(req, "networking")
+    if networking is not None:
+        llm_setting["networking"] = networking
+    only_need_search_results = safe_get(req, "only_need_search_results")
+    if only_need_search_results is not None:
+        llm_setting["only_need_search_results"] = only_need_search_results
+
+    llm_setting = local_doc_qa.milvus_summary.normalize_llm_setting(llm_setting)
+
     local_doc_qa.milvus_summary.new_qanything_bot(bot_id, user_id, bot_name, desc, head_image, prompt_setting,
-                                                  welcome_message, kb_ids_str, default_llm_setting)
+                                                  welcome_message, kb_ids_str, llm_setting)
     create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return sanic_json({"code": 200, "msg": "success create qanything bot {}".format(bot_id),
                        "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time}})
@@ -1407,49 +1398,44 @@ async def update_bot(req: request):
     else:
         kb_ids_str = bot_info[6]
 
-    llm_setting = json.loads(bot_info[9])
-    llm_setting = normalize_llm_setting(llm_setting)
-
+    llm_setting_str = bot_info[9]
+    try:
+        llm_setting = json.loads(llm_setting_str) if llm_setting_str else {}
+    except (json.JSONDecodeError, TypeError):
+        llm_setting = {}
     if api_base := safe_get(req, "api_base"):
         llm_setting["api_base"] = api_base
     if api_key := safe_get(req, "api_key"):
         llm_setting["api_key"] = api_key
-
-    api_context_length = safe_get(req, "api_context_length")
-    if api_context_length is not None and api_context_length != "":
+    if api_context_length := safe_get(req, "api_context_length"):
         llm_setting["api_context_length"] = api_context_length
-    top_p = safe_get(req, "top_p")
-    if top_p is not None and top_p != "":
+    if top_p := safe_get(req, "top_p"):
         llm_setting["top_p"] = top_p
-    top_k = safe_get(req, "top_k")
-    if top_k is not None and top_k != "":
+    if top_k := safe_get(req, "top_k"):
         llm_setting["top_k"] = top_k
-    chunk_size = safe_get(req, "chunk_size")
-    if chunk_size is not None and chunk_size != "":
+    if chunk_size := safe_get(req, "chunk_size"):
         llm_setting["chunk_size"] = chunk_size
-    temperature = safe_get(req, "temperature")
-    if temperature is not None and temperature != "":
+    if temperature := safe_get(req, "temperature"):
         llm_setting["temperature"] = temperature
     if model := safe_get(req, "model"):
         llm_setting["model"] = model
-    max_token = safe_get(req, "max_token")
-    if max_token is not None and max_token != "":
+    if max_token := safe_get(req, "max_token"):
         llm_setting["max_token"] = max_token
-
     rerank = safe_get(req, "rerank")
-    if rerank is not None and rerank != "":
+    if rerank is not None:
         llm_setting["rerank"] = rerank
     hybrid_search = safe_get(req, "hybrid_search")
-    if hybrid_search is not None and hybrid_search != "":
+    if hybrid_search is not None:
         llm_setting["hybrid_search"] = hybrid_search
     networking = safe_get(req, "networking")
-    if networking is not None and networking != "":
+    if networking is not None:
         llm_setting["networking"] = networking
     only_need_search_results = safe_get(req, "only_need_search_results")
-    if only_need_search_results is not None and only_need_search_results != "":
+    if only_need_search_results is not None:
         llm_setting["only_need_search_results"] = only_need_search_results
 
-    llm_setting = normalize_llm_setting(llm_setting)
+    llm_setting = local_doc_qa.milvus_summary.normalize_llm_setting(llm_setting)
+
     debug_logger.info(f"update llm_setting: {llm_setting}")
 
     # 判断哪些项修改了

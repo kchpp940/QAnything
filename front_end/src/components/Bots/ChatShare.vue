@@ -281,7 +281,7 @@ const question = ref('');
 type ShareSettingType = MakePartial<IChatSetting, 'modelType'>;
 // eslint-disable-next-line vue/no-setup-props-destructure
 const { llm_setting } = props.botInfo;
-const chatSetting = JSON.parse(llm_setting);
+const chatSetting = typeof llm_setting === 'string' ? JSON.parse(llm_setting) : (llm_setting || {});
 const chatSettingFormActive = ref<ShareSettingType>();
 // 初始化 chatSetting 为自己的格式
 onMounted(() => {
@@ -289,18 +289,18 @@ onMounted(() => {
     apiKey: chatSetting.api_key,
     apiBase: chatSetting.api_base,
     apiModelName: chatSetting.model,
-    apiContextLength: chatSetting.api_context_length,
-    maxToken: chatSetting.max_token,
-    chunkSize: chatSetting.chunk_size,
-    temperature: chatSetting.temperature,
+    apiContextLength: Number(chatSetting.api_context_length),
+    maxToken: chatSetting.max_token != null ? Number(chatSetting.max_token) : undefined,
+    chunkSize: Number(chatSetting.chunk_size),
+    temperature: Number(chatSetting.temperature),
     context: 0,
-    top_K: chatSetting.top_k,
-    top_P: chatSetting.top_p,
+    top_K: Number(chatSetting.top_k),
+    top_P: Number(chatSetting.top_p),
     capabilities: {
-      onlySearch: chatSetting.only_need_search_results,
-      mixedSearch: chatSetting.hybrid_search,
-      networkSearch: chatSetting.networking,
-      rerank: chatSetting.rerank,
+      onlySearch: Boolean(chatSetting.only_need_search_results),
+      mixedSearch: Boolean(chatSetting.hybrid_search),
+      networkSearch: Boolean(chatSetting.networking),
+      rerank: Boolean(chatSetting.rerank),
     },
     active: true,
   };
