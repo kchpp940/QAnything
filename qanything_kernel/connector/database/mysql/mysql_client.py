@@ -208,6 +208,7 @@ class KnowledgeBaseManager:
                 result TEXT NOT NULL,
                 retrieval_documents MEDIUMTEXT NOT NULL,
                 source_documents MEDIUMTEXT NOT NULL,
+                retrieval_trace MEDIUMTEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
@@ -292,6 +293,7 @@ class KnowledgeBaseManager:
             "ALTER TABLE QanythingBot ADD COLUMN llm_setting VARCHAR(512) DEFAULT '{}'",
             "ALTER TABLE QanythingBot DROP COLUMN model",
             "ALTER TABLE RetrievalDiagnosis ADD COLUMN retrieval_trace MEDIUMTEXT",
+            "ALTER TABLE QaLogs ADD COLUMN retrieval_trace MEDIUMTEXT",
         ]
 
         for query in index_queries:
@@ -701,21 +703,22 @@ class KnowledgeBaseManager:
         debug_logger.info(f"delete_faqs count: {total_deleted}")
 
     def add_qalog(self, user_id, bot_id, kb_ids, query, model, product_source, time_record, history, condense_question,
-                  prompt, result, retrieval_documents, source_documents):
+                  prompt, result, retrieval_documents, source_documents, retrieval_trace=None):
         debug_logger.info("add_qalog: {}".format(query))
         qa_id = uuid.uuid4().hex
         kb_ids = json.dumps(kb_ids, ensure_ascii=False)
         retrieval_documents = json.dumps(retrieval_documents, ensure_ascii=False)
         source_documents = json.dumps(source_documents, ensure_ascii=False)
+        retrieval_trace = json.dumps(retrieval_trace, ensure_ascii=False) if retrieval_trace is not None else None
         history = json.dumps(history, ensure_ascii=False)
         time_record = json.dumps(time_record, ensure_ascii=False)
         insert_query = (
             "INSERT INTO QaLogs (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record, "
-            "history, condense_question, prompt, result, retrieval_documents, source_documents) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            "history, condense_question, prompt, result, retrieval_documents, source_documents, retrieval_trace) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
         self.execute_query_(insert_query, (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record,
                                            history, condense_question, prompt, result, retrieval_documents,
-                                           source_documents), commit=True)
+                                           source_documents, retrieval_trace), commit=True)
 
     def get_qalog_by_filter(self, need_info, user_id=None, query=None, bot_id=None, time_range=None, any_kb_id=None, qa_ids=None):
         # 判断哪些条件不是None，构建搜索query
@@ -925,14 +928,13 @@ class KnowledgeBaseManager:
         def _get_phase(phase_name):
             return [c for c in candidates if c.get('phase') == phase_name]
 
-        raw_candidates = _get_phase('raw')
+        raw_candidates = _get_phase('retrieval')
         milvus_hit_count = sum(1 for c in raw_candidates if c.get('source') == 'milvus')
         es_hit_count = sum(1 for c in raw_candidates if c.get('source') == 'es')
 
         before_rerank = _get_phase('before_rerank')
-        after_rerank_full = _get_phase('after_rerank_full')
-        after_rerank_filtered = _get_phase('after_rerank_filtered')
-        final_citations = _get_phase('final_citations')
+        after_rerank_full = _get_phase('after_rerank')
+        final_citations = _get_phase('final_citation')
 
         rerank_before_order = [
             {k: c[k] for k in ('doc_id', 'file_id', 'score') if k in c}
@@ -948,12 +950,10 @@ class KnowledgeBaseManager:
         empty_recall_reason = metadata.get('empty_recall_reason', '')
         retrieval_time_ms = retrieval_trace.get('retrieval_time_ms', 0)
 
-        candidate_count = len(after_rerank_filtered)
+        candidate_count = len(final_citations)
         final_citation_count = len(final_citations)
         if final_citations:
             top_score = float(max((c.get('score', 0) for c in final_citations), default=0))
-        elif after_rerank_filtered:
-            top_score = float(max((c.get('score', 0) for c in after_rerank_filtered), default=0))
         else:
             top_score = 0.0
 

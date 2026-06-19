@@ -389,7 +389,7 @@ class LocalDocQA:
         return relevant_docs
 
     @staticmethod
-    async def generate_response(query, res, condense_question, source_documents, time_record, chat_history, streaming, prompt):
+    async def generate_response(query, res, condense_question, source_documents, time_record, chat_history, streaming, prompt, retrieval_trace=None):
         """
         生成response并使用yield返回。
 
@@ -401,6 +401,7 @@ class LocalDocQA:
         :param chat_history: 聊天历史
         :param streaming: 是否启用流式输出
         :param prompt: 生成response时的prompt类型
+        :param retrieval_trace: 统一的检索链路追踪快照
         """
         history = chat_history + [[query, res]]
 
@@ -413,7 +414,8 @@ class LocalDocQA:
             "result": res,
             "condense_question": condense_question,
             "retrieval_documents": source_documents,
-            "source_documents": source_documents
+            "source_documents": source_documents,
+            "retrieval_trace": retrieval_trace,
         }
 
         if 'llm_completed' not in time_record:
@@ -545,11 +547,10 @@ class LocalDocQA:
         raw_candidates_list = retrieval_source_info.get('raw_candidates', [])
         for c in raw_candidates_list:
             rc = dict(c)
-            rc['phase'] = 'raw'
+            rc['phase'] = 'retrieval'
             retrieval_candidates.append(rc)
 
-        before_rerank_docs = source_documents[:]
-        for doc in before_rerank_docs:
+        for doc in source_documents:
             retrieval_candidates.append({
                 'phase': 'before_rerank',
                 'doc_id': doc.metadata.get('doc_id', ''),
@@ -570,7 +571,7 @@ class LocalDocQA:
                 rerank_actually_used = True
                 for doc in source_documents:
                     retrieval_candidates.append({
-                        'phase': 'after_rerank_full',
+                        'phase': 'after_rerank',
                         'doc_id': doc.metadata.get('doc_id', ''),
                         'file_id': doc.metadata.get('file_id', ''),
                         'score': float(doc.metadata.get('score', 0)),
@@ -599,7 +600,7 @@ class LocalDocQA:
         if not rerank_actually_used:
             for doc in source_docs_before_rerank:
                 retrieval_candidates.append({
-                    'phase': 'after_rerank_full',
+                    'phase': 'after_rerank',
                     'doc_id': doc.metadata.get('doc_id', ''),
                     'file_id': doc.metadata.get('file_id', ''),
                     'score': float(doc.metadata.get('score', 0)),
@@ -607,15 +608,6 @@ class LocalDocQA:
                 })
 
         source_documents = source_documents[:top_k]
-
-        for doc in source_documents:
-            retrieval_candidates.append({
-                'phase': 'after_rerank_filtered',
-                'doc_id': doc.metadata.get('doc_id', ''),
-                'file_id': doc.metadata.get('file_id', ''),
-                'score': float(doc.metadata.get('score', 0)),
-                'source': doc.metadata.get('retrieval_source', 'unknown'),
-            })
 
         empty_recall_reason = ''
         if not source_documents:
@@ -628,10 +620,9 @@ class LocalDocQA:
             else:
                 empty_recall_reason = 'unknown_empty_recall'
 
-        source_docs_for_final_ref = source_documents[:]
-        for doc in source_docs_for_final_ref:
+        for doc in source_documents:
             retrieval_candidates.append({
-                'phase': 'final_citations',
+                'phase': 'final_citation',
                 'doc_id': doc.metadata.get('doc_id', ''),
                 'file_id': doc.metadata.get('file_id', ''),
                 'score': float(doc.metadata.get('score', 0)),
@@ -678,7 +669,8 @@ class LocalDocQA:
                     return
                 res = doc.metadata['faq_dict']['answer']
                 async for response, history in self.generate_response(query, res, condense_question, source_documents,
-                                                                      time_record, chat_history, streaming, 'MATCH_FAQ'):
+                                                                      time_record, chat_history, streaming, 'MATCH_FAQ',
+                                                                      retrieval_trace=retrieval_trace):
                     yield response, history
                 return
 
@@ -719,7 +711,8 @@ class LocalDocQA:
                         f"\n计算方式：{tokens_msg}")
                     async for response, history in self.generate_response(query, res, condense_question, source_documents,
                                                                           time_record, chat_history, streaming,
-                                                                          'TOKENS_NOT_ENOUGH'):
+                                                                          'TOKENS_NOT_ENOUGH',
+                                                                          retrieval_trace=retrieval_trace):
                         yield response, history
                     return
 
@@ -786,7 +779,8 @@ class LocalDocQA:
                         "result": resp,
                         "condense_question": condense_question,
                         "retrieval_documents": retrieval_documents,
-                        "source_documents": source_documents}
+                        "source_documents": source_documents,
+                        "retrieval_trace": retrieval_trace}
             time_record['prompt_tokens'] = prompt_tokens if prompt_tokens != 0 else est_prompt_tokens
             time_record['completion_tokens'] = completion_tokens if completion_tokens != 0 else num_tokens(acc_resp)
             time_record['total_tokens'] = total_tokens if total_tokens != 0 else time_record['prompt_tokens'] + \

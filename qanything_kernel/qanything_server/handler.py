@@ -819,6 +819,7 @@ async def local_doc_chat(req: request):
                 if chunk_str.startswith("[DONE]"):
                     retrieval_documents = format_source_documents(resp["retrieval_documents"])
                     source_documents = format_source_documents(resp["source_documents"])
+                    retrieval_trace = resp.get("retrieval_trace")
                     result = next_history[-1][1]
                     # result = resp['result']
                     time_record['chat_completed'] = round(time.perf_counter() - preprocess_start, 2)
@@ -831,7 +832,8 @@ async def local_doc_chat(req: request):
                                  'history': history,
                                  'condense_question': resp['condense_question'], 'prompt': resp['prompt'],
                                  'result': result, 'retrieval_documents': retrieval_documents,
-                                 'source_documents': source_documents, 'bot_id': bot_id}
+                                 'source_documents': source_documents, 'retrieval_trace': retrieval_trace,
+                                 'bot_id': bot_id}
                     local_doc_qa.milvus_summary.add_qalog(**chat_data)
                     qa_logger.info("chat_data: %s", chat_data)
                     debug_logger.info("response: %s", chat_data['result'])
@@ -845,6 +847,7 @@ async def local_doc_chat(req: request):
                         "condense_question": resp['condense_question'],
                         "source_documents": source_documents,
                         "retrieval_documents": retrieval_documents,
+                        "retrieval_trace": retrieval_trace,
                         "time_record": formatted_time_record,
                         "show_images": resp.get('show_images', [])
                     }
@@ -901,12 +904,13 @@ async def local_doc_chat(req: request):
                 {"code": 200, "question": question, "source_documents": format_source_documents(resp)})
         retrieval_documents = format_source_documents(resp["retrieval_documents"])
         source_documents = format_source_documents(resp["source_documents"])
+        retrieval_trace = resp.get("retrieval_trace")
         formatted_time_record = format_time_record(time_record)
         chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, 'time_record': formatted_time_record,
                      'history': history, "condense_question": resp['condense_question'], "model": model,
                      "product_source": request_source,
                      'retrieval_documents': retrieval_documents, 'prompt': resp['prompt'], 'result': resp['result'],
-                     'source_documents': source_documents, 'bot_id': bot_id}
+                     'source_documents': source_documents, 'retrieval_trace': retrieval_trace, 'bot_id': bot_id}
         local_doc_qa.milvus_summary.add_qalog(**chat_data)
         qa_logger.info("chat_data: %s", chat_data)
         debug_logger.info("response: %s", chat_data['result'])
@@ -914,6 +918,7 @@ async def local_doc_chat(req: request):
                            "response": resp["result"], "model": model,
                            "history": history, "condense_question": resp['condense_question'],
                            "source_documents": source_documents, "retrieval_documents": retrieval_documents,
+                           "retrieval_trace": retrieval_trace,
                            "time_record": formatted_time_record})
 
 
