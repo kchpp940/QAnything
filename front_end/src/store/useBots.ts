@@ -1,5 +1,7 @@
 import { useRouter } from 'vue-router';
-import { getTemplateById } from '@/config/sceneTemplates';
+import urlConfig from '@/services/urlConfig';
+import urlResquest from '@/services/index';
+import { getTemplateById as getLocalTemplateById } from '@/config/sceneTemplates';
 
 export const useBots = defineStore('useBots', () => {
   const route = useRouter();
@@ -54,6 +56,86 @@ export const useBots = defineStore('useBots', () => {
   const webUrl = ref('');
   const setWebUrl = value => {
     webUrl.value = value;
+  };
+
+  const sceneTemplates = ref<any[]>([]);
+  const templateSchemaVersion = ref('');
+  const overridableFields = ref<string[]>([]);
+  const templatesLoaded = ref(false);
+
+  const fetchTemplates = async () => {
+    if (templatesLoaded.value && sceneTemplates.value.length > 0) {
+      return {
+        templates: sceneTemplates.value,
+        schema_version: templateSchemaVersion.value,
+        overridable_fields: overridableFields.value,
+      };
+    }
+    try {
+      const res = await urlResquest.post(
+        urlConfig.url.listBotTemplates.url,
+        urlConfig.url.listBotTemplates.param
+      );
+      if (res && res.code === 200 && res.data) {
+        sceneTemplates.value = res.data.templates || [];
+        templateSchemaVersion.value = res.data.schema_version || '';
+        overridableFields.value = res.data.overridable_fields || [];
+        templatesLoaded.value = true;
+        return res.data;
+      }
+    } catch (e) {
+      console.warn('Failed to fetch templates from backend, using fallback local templates', e);
+    }
+    const localFallback = [
+      {
+        id: 'customer_service',
+        name: '客服问答',
+        nameEn: 'Customer Service',
+        icon: '🧑‍💼',
+        description: '简洁、礼貌的客服问答',
+      },
+      {
+        id: 'enterprise_knowledge',
+        name: '企业知识助手',
+        nameEn: 'Enterprise Knowledge Assistant',
+        icon: '🏢',
+        description: '详尽的企业知识查询',
+      },
+      {
+        id: 'code_doc_assistant',
+        name: '代码文档助手',
+        nameEn: 'Code Documentation Assistant',
+        icon: '💻',
+        description: '精确的代码和API说明',
+      },
+      {
+        id: 'strict_citation',
+        name: '严谨引用模式',
+        nameEn: 'Strict Citation Mode',
+        icon: '📋',
+        description: '严格引用来源',
+      },
+    ];
+    sceneTemplates.value = localFallback;
+    templatesLoaded.value = true;
+    return {
+      templates: localFallback,
+      schema_version: '',
+      overridable_fields: [],
+    };
+  };
+
+  const getTemplateById = (templateId: string) => {
+    if (!templateId) return null;
+    const fromBackend = sceneTemplates.value.find(t => t.id === templateId);
+    if (fromBackend) {
+      const local = getLocalTemplateById(templateId);
+      return {
+        ...fromBackend,
+        defaults: local?.defaults || {},
+      };
+    }
+    return getLocalTemplateById(templateId);
   };
 
   const selectedTemplateId = ref('');
@@ -154,5 +236,11 @@ export const useBots = defineStore('useBots', () => {
     applyTemplate,
     getMergedConfigValue,
     loadBotTemplateState,
+    sceneTemplates,
+    templateSchemaVersion,
+    overridableFields,
+    templatesLoaded,
+    fetchTemplates,
+    getTemplateById,
   };
 });

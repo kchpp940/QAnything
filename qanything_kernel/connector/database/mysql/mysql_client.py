@@ -264,6 +264,7 @@ class KnowledgeBaseManager:
             "ALTER TABLE QanythingBot DROP COLUMN model",
             "ALTER TABLE QanythingBot ADD COLUMN template_id VARCHAR(64) DEFAULT ''",
             "ALTER TABLE QanythingBot ADD COLUMN user_overrides MEDIUMTEXT",
+            "ALTER TABLE QanythingBot ADD COLUMN template_version VARCHAR(32) DEFAULT ''",
         ]
 
         for query in index_queries:
@@ -844,10 +845,10 @@ class KnowledgeBaseManager:
         return result is not None and len(result) > 0
 
     def new_qanything_bot(self, bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message,
-                          kb_ids_str, template_id='', user_overrides='{}'):
-        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, template_id, user_overrides) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                          kb_ids_str, template_id='', user_overrides='{}', template_version=''):
+        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, template_id, user_overrides, template_version) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         self.execute_query_(query, (
-        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, template_id, user_overrides),
+        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, template_id, user_overrides, template_version),
                             commit=True)
         return bot_id, "success"
 
@@ -858,21 +859,21 @@ class KnowledgeBaseManager:
 
     def get_bot(self, user_id, bot_id):
         if not bot_id:
-            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting, template_id, user_overrides FROM QanythingBot WHERE user_id = %s AND deleted = 0"
+            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting, template_id, user_overrides, template_version FROM QanythingBot WHERE user_id = %s AND deleted = 0"
             return self.execute_query_(query, (user_id,), fetch=True)
         elif not user_id:
-            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting, template_id, user_overrides FROM QanythingBot WHERE bot_id = %s AND deleted = 0"
+            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting, template_id, user_overrides, template_version FROM QanythingBot WHERE bot_id = %s AND deleted = 0"
             return self.execute_query_(query, (bot_id,), fetch=True)
         else:
-            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting, template_id, user_overrides FROM QanythingBot WHERE user_id = %s AND bot_id = %s AND deleted = 0"
+            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting, template_id, user_overrides, template_version FROM QanythingBot WHERE user_id = %s AND bot_id = %s AND deleted = 0"
             return self.execute_query_(query, (user_id, bot_id), fetch=True)
 
     def update_bot(self, user_id, bot_id, bot_name, description, head_image, prompt_setting, welcome_message,
-                   kb_ids_str, update_time, llm_setting, template_id='', user_overrides='{}'):
+                   kb_ids_str, update_time, llm_setting, template_id='', user_overrides='{}', template_version=''):
         llm_setting = json.dumps(llm_setting, ensure_ascii=False)
-        query = "UPDATE QanythingBot SET bot_name = %s, description = %s, head_image = %s, prompt_setting = %s, welcome_message = %s, kb_ids_str = %s, update_time = %s, llm_setting = %s, template_id = %s, user_overrides = %s WHERE user_id = %s AND bot_id = %s AND deleted = 0"
+        query = "UPDATE QanythingBot SET bot_name = %s, description = %s, head_image = %s, prompt_setting = %s, welcome_message = %s, kb_ids_str = %s, update_time = %s, llm_setting = %s, template_id = %s, user_overrides = %s, template_version = %s WHERE user_id = %s AND bot_id = %s AND deleted = 0"
         self.execute_query_(query, (
-        bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, llm_setting, template_id, user_overrides, user_id,
+        bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, llm_setting, template_id, user_overrides, template_version, user_id,
         bot_id), commit=True)
 
     def get_files_by_status(self, status):

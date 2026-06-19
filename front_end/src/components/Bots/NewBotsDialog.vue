@@ -51,7 +51,7 @@
                 <div class="template-name">{{ bots.noTemplate }}</div>
               </div>
               <div
-                v-for="tpl in SCENE_TEMPLATES"
+                v-for="tpl in sceneTemplates"
                 :key="tpl.id"
                 :class="['template-item', selectedTemplateId === tpl.id ? 'template-active' : '']"
                 @click="onSelectTemplate(tpl.id)"
@@ -89,11 +89,17 @@ import { resultControl } from '@/utils/utils';
 import { message } from 'ant-design-vue';
 import routeController from '@/controller/router';
 import { getLanguage } from '@/language/index';
-import { SCENE_TEMPLATES, getTemplateById } from '@/config/sceneTemplates';
 
 const { changePage } = routeController();
-const { newBotsVisible } = storeToRefs(useBots());
-const { setNewBotsVisible, setCurBot, setTabIndex, applyTemplate } = useBots();
+const { newBotsVisible, sceneTemplates } = storeToRefs(useBots());
+const {
+  setNewBotsVisible,
+  setCurBot,
+  setTabIndex,
+  applyTemplate,
+  fetchTemplates,
+  getTemplateById,
+} = useBots();
 const { setQaList } = useBotsChat();
 const bots = getLanguage().bots;
 const common = getLanguage().common;
@@ -111,6 +117,13 @@ const currentTemplate = computed(() => getTemplateById(selectedTemplateId.value)
 const formState = reactive<FormState>({
   name: '',
   introduction: '',
+});
+
+watch(newBotsVisible, async visible => {
+  if (visible) {
+    await fetchTemplates();
+    selectedTemplateId.value = '';
+  }
 });
 
 const onSelectTemplate = (templateId: string) => {

@@ -13,7 +13,7 @@
         @change="onTemplateChange"
       >
         <a-select-option value="">{{ bots.noTemplate }}</a-select-option>
-        <a-select-option v-for="tpl in SCENE_TEMPLATES" :key="tpl.id" :value="tpl.id">
+        <a-select-option v-for="tpl in sceneTemplates" :key="tpl.id" :value="tpl.id">
           {{ tpl.icon }} {{ isZh ? tpl.name : tpl.nameEn }}
         </a-select-option>
       </a-select>
@@ -136,9 +136,11 @@ import { getLanguage } from '@/language/index';
 import ChatSettingForm from '@/components/ChatSettingForm.vue';
 import { useChatSetting } from '@/store/useChatSetting';
 import { useBotsChat } from '@/store/useBotsChat';
-import { SCENE_TEMPLATES, getTemplateById } from '@/config/sceneTemplates';
+import { getTemplateById } from '@/config/sceneTemplates';
 
-const { curBot, knowledgeList, selectedTemplateId, userOverrides } = storeToRefs(useBots());
+const { curBot, knowledgeList, selectedTemplateId, userOverrides, sceneTemplates } = storeToRefs(
+  useBots()
+);
 const { QA_List } = storeToRefs(useBotsChat());
 const {
   setSelectKnowledgeVisible,
@@ -149,6 +151,7 @@ const {
   resetFieldToDefault,
   loadBotTemplateState,
   setUserOverrides,
+  fetchTemplates,
 } = useBots();
 const { setChatSettingConfigured } = useChatSetting();
 const { chatSettingFormActive } = storeToRefs(useChatSetting());
@@ -164,8 +167,9 @@ const activeTemplateId = ref('');
 const currentTemplate = computed(() => getTemplateById(activeTemplateId.value));
 const matches: any = computed(() => roleSetting.value.match(/[^a-zA-Z\s]|\p{P}|\w+/g));
 
-onMounted(() => {
+onMounted(async () => {
   console.log('curBot', curBot.value);
+  await fetchTemplates();
   name.value = curBot.value.bot_name;
   loadBotTemplateState(curBot.value);
   activeTemplateId.value = selectedTemplateId.value;

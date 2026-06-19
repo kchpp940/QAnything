@@ -2,6 +2,7 @@ import json
 import copy
 from typing import Any, Dict, Optional, Tuple
 
+from qanything_kernel.utils.custom_log import debug_logger
 from qanything_kernel.configs.scene_templates import (
     SCENE_TEMPLATES,
     NO_TEMPLATE_DEFAULTS,
@@ -11,25 +12,29 @@ from qanything_kernel.configs.scene_templates import (
     SCENE_TEMPLATE_SCHEMA_VERSION,
 )
 
-
-def parse_user_overrides(user_overrides_raw: Any) -> Dict[str, Any]:
-    if user_overrides_raw is None or user_overrides_raw == '':
-        return {}
-    if isinstance(user_overrides_raw, dict):
-        return user_overrides_raw
-    if isinstance(user_overrides_raw, str):
-        try:
-            parsed = json.loads(user_overrides_raw)
-            if isinstance(parsed, dict):
-                return parsed
-        except (json.JSONDecodeError, ValueError):
-            pass
-    return {}
+VERSIONED_TEMPLATES: Dict[str, Dict[str, Any]] = {
+    SCENE_TEMPLATE_SCHEMA_VERSION: SCENE_TEMPLATES,
+}
 
 
-def get_template_defaults(template_id: Optional[str]) -> Dict[str, Any]:
-    if template_id and template_id in SCENE_TEMPLATES:
-        return copy.deepcopy(SCENE_TEMPLATES[template_id]['defaults'])
+def _get_templates_for_version(template_version: Optional[str]) -> Dict[str, Any]:
+    if template_version and template_version in VERSIONED_TEMPLATES:
+        return VERSIONED_TEMPLATES[template_version]
+    if template_version and template_version != SCENE_TEMPLATE_SCHEMA_VERSION:
+        debug_logger.warning(
+            f'Template version {template_version} not found, '
+            f'fallback to latest version {SCENE_TEMPLATE_SCHEMA_VERSION}'
+        )
+    return VERSIONED_TEMPLATES[SCENE_TEMPLATE_SCHEMA_VERSION]
+
+
+def get_template_defaults(
+    template_id: Optional[str],
+    template_version: Optional[str] = None,
+) -> Dict[str, Any]:
+    templates = _get_templates_for_version(template_version)
+    if template_id and template_id in templates:
+        return copy.deepcopy(templates[template_id]['defaults'])
     return copy.deepcopy(NO_TEMPLATE_DEFAULTS)
 
 
@@ -78,12 +83,13 @@ def validate_user_overrides(
 def compute_user_overrides(
     template_id: Optional[str],
     current_values: Dict[str, Any],
+    template_version: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Compute diff between current_values and template defaults.
     Only fields that differ are kept as overrides.
     """
-    defaults = get_template_defaults(template_id)
+    defaults = get_template_defaults(template_id, template_version)
     overrides: Dict[str, Any] = {}
     for field in TEMPLATE_OVERRIDABLE_FIELDS:
         if field not in current_values:
@@ -98,12 +104,13 @@ def compute_user_overrides(
 def resolve_bot_values(
     template_id: Optional[str],
     user_overrides_raw: Any,
+    template_version: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Core resolver: merge template_defaults + validated user_overrides.
+    Core resolver: merge template_defaults (versioned) + validated user_overrides.
     Always returns ALL overridable fields with concrete values.
     """
-    defaults = get_template_defaults(template_id)
+    defaults = get_template_defaults(template_id, template_version)
     parsed_overrides = parse_user_overrides(user_overrides_raw)
     cleaned_overrides, _ = validate_user_overrides(parsed_overrides)
     merged = copy.deepcopy(defaults)
@@ -115,13 +122,14 @@ def resolve_bot_values(
 def compute_overridden_fields(
     template_id: Optional[str],
     user_overrides_raw: Any,
+    template_version: Optional[str] = None,
 ) -> list:
     """
     Compute which fields are explicitly overridden by the user (not equal to template defaults).
     """
     parsed_overrides = parse_user_overrides(user_overrides_raw)
     cleaned_overrides, _ = validate_user_overrides(parsed_overrides)
-    defaults = get_template_defaults(template_id)
+    defaults = get_template_defaults(template_id, template_version)
     overridden: list = []
     for field in TEMPLATE_OVERRIDABLE_FIELDS:
         if field in cleaned_overrides:
@@ -139,6 +147,7 @@ def new_bot_build_persist_values(
     user_provided_overrides: Dict[str, Any],
     existing_raw_prompt: Optional[str] = None,
     existing_raw_welcome: Optional[str] = None,
+    template_version: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """
     For new_bot: Given template_id + user-provided overrides, compute:
@@ -149,7 +158,7 @@ def new_bot_build_persist_values(
     if template_id and not is_valid_template_id(template_id):
         raise ValueError(f'invalid template_id: {template_id}')
 
-    defaults = get_template_defaults(template_id)
+    defaults = get_template_defaults(template_id, template_version)
     parsed_override = {}
     if isinstance(user_provided_overrides, str):
         parsed_override = parse_user_overrides(user_provided_overrides)
@@ -164,7 +173,7 @@ def new_bot_build_persist_values(
             parsed_override['welcome_message'] = existing_raw_welcome
 
     cleaned_overrides, _errors = validate_user_overrides(parsed_override)
-    overrides_to_persist = compute_user_overrides(template_id, cleaned_overrides)
+    overrides_to_persist = compute_user_overrides(template_id, cleaned_overrides, template_version)
 
     merged = copy.deepcopy(defaults)
     for field, value in cleaned_overrides.items():
@@ -184,6 +193,8 @@ def update_bot_build_persist_values(
     user_provided_overrides: Any,
     old_merged_values: Optional[Dict[str, Any]] = None,
     raw_field_updates: Optional[Dict[str, Any]] = None,
+    old_template_version: Optional[str] = None,
+    new_template_version: Optional[str] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any], Dict[str, Any]]:
     """
     For update_bot: rebuilds overrides when template changes (migrate custom overrides),
@@ -192,7 +203,7 @@ def update_bot_build_persist_values(
     if new_template_id and not is_valid_template_id(new_template_id):
         raise ValueError(f'invalid template_id: {new_template_id}')
 
-    new_defaults = get_template_defaults(new_template_id)
+    new_defaults = get_template_defaults(new_template_id, new_template_version)
     parsed = parse_user_overrides(user_provided_overrides)
 
     explicit_overrides: Dict[str, Any] = {}
@@ -205,18 +216,20 @@ def update_bot_build_persist_values(
             if field in parsed:
                 explicit_overrides[field] = parsed[field]
 
-    if old_merged_values and old_template_id != new_template_id:
-        old_defaults = get_template_defaults(old_template_id)
+    if old_merged_values and (old_template_id != new_template_id or old_template_version != new_template_version):
+        old_defaults = get_template_defaults(old_template_id, old_template_version)
         for field in TEMPLATE_OVERRIDABLE_FIELDS:
             if field in explicit_overrides:
                 continue
             old_val = old_merged_values.get(field)
             old_def = old_defaults.get(field)
             if old_val is not None and old_val != old_def:
-                explicit_overrides[field] = old_val
+                new_def = new_defaults.get(field)
+                if old_val != new_def:
+                    explicit_overrides[field] = old_val
 
     cleaned, _ = validate_user_overrides(explicit_overrides)
-    overrides_to_persist = compute_user_overrides(new_template_id, cleaned)
+    overrides_to_persist = compute_user_overrides(new_template_id, cleaned, new_template_version)
 
     merged = copy.deepcopy(new_defaults)
     for field, value in cleaned.items():

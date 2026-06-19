@@ -670,11 +670,11 @@ async def local_doc_chat(req: request):
         if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id):
             return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
         bot_info = local_doc_qa.milvus_summary.get_bot(None, bot_id)[0]
-        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting_raw, template_id, user_overrides = bot_info
+        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting_raw, template_id, user_overrides, template_version = bot_info
         kb_ids = kb_ids_str.split(',')
         if not kb_ids:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} unbound knowledge base.".format(bot_id)})
-        merged = resolve_bot_values(template_id, user_overrides)
+        merged = resolve_bot_values(template_id, user_overrides, template_version)
         custom_prompt = merged.get('prompt_setting', prompt)
         if not llm_setting_raw:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} llm_setting is empty.".format(bot_id)})
@@ -1294,8 +1294,10 @@ async def get_bot_info(req: request):
             kb_names = []
         template_id = bot_info[10] if len(bot_info) > 10 else ''
         user_overrides_raw = bot_info[11] if len(bot_info) > 11 else '{}'
-        merged = resolve_bot_values(template_id, user_overrides_raw)
-        overridden_fields = compute_overridden_fields(template_id, user_overrides_raw)
+        bot_template_version = bot_info[12] if len(bot_info) > 12 else ''
+        current_schema_version = get_schema_version()
+        merged = resolve_bot_values(template_id, user_overrides_raw, bot_template_version)
+        overridden_fields = compute_overridden_fields(template_id, user_overrides_raw, bot_template_version)
         parsed_overrides = parse_user_overrides(user_overrides_raw)
         existing_llm = bot_info[9]
         if isinstance(existing_llm, str):
@@ -1317,12 +1319,40 @@ async def get_bot_info(req: request):
                 "update_time": bot_info[7].strftime("%Y-%m-%d %H:%M:%S"),
                 "llm_setting": updated_llm,
                 "template_id": template_id,
-                "template_version": get_schema_version(),
+                "template_version": bot_template_version,
+                "schema_version": current_schema_version,
                 "user_overrides": parsed_overrides,
                 "merged_config": merged,
                 "overridden_fields": overridden_fields}
         data.append(info)
     return sanic_json({"code": 200, "msg": "success", "data": data})
+
+
+@get_time_async
+async def list_bot_templates(req: request):
+    """
+    List all available bot scene templates with metadata.
+    Returns:
+    - templates: list of template objects with id, name, description, icon
+    - schema_version: current template schema version
+    - overridable_fields: list of field names that can be overridden by users
+    """
+    user_id, is_valid, error_msg, user_info = check_state(req)
+    if not is_valid:
+        return sanic_json({"code": 2001, "msg": error_msg})
+    user_id = user_id + '__' + user_info
+    is_zh = req.headers.get('accept-language', 'zh').lower().startswith('zh')
+    templates = list_templates(is_zh=is_zh)
+    schema_version = get_schema_version()
+    return sanic_json({
+        "code": 200,
+        "msg": "success",
+        "data": {
+            "templates": templates,
+            "schema_version": schema_version,
+            "overridable_fields": TEMPLATE_OVERRIDABLE_FIELDS,
+        }
+    })
 
 
 @get_time_async
@@ -1353,6 +1383,7 @@ async def new_bot(req: request):
             user_overrides,
             existing_raw_prompt=prompt_setting if prompt_setting != BOT_PROMPT else None,
             existing_raw_welcome=welcome_message if welcome_message != BOT_WELCOME else None,
+            template_version=current_schema_version if template_id else None,
         )
     except ValueError as ve:
         return sanic_json({"code": 2001, "msg": "fail, {}".format(ve)})
@@ -1363,18 +1394,20 @@ async def new_bot(req: request):
         return sanic_json({"code": 2001, "msg": msg, "data": [{}]})
     debug_logger.info("new_bot %s", user_id)
     bot_id = 'BOT' + uuid.uuid4().hex
+    current_schema_version = get_schema_version()
     local_doc_qa.milvus_summary.new_qanything_bot(
         bot_id, user_id, bot_name, desc, head_image,
         prompt_welcome['prompt_setting'],
         prompt_welcome['welcome_message'],
         kb_ids_str,
         template_id=template_id,
-        user_overrides=json.dumps(overrides_to_persist, ensure_ascii=False)
+        user_overrides=json.dumps(overrides_to_persist, ensure_ascii=False),
+        template_version=current_schema_version if template_id else ''
     )
     create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return sanic_json({"code": 200, "msg": "success create qanything bot {}".format(bot_id),
                        "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time,
-                                "template_id": template_id, "template_version": get_schema_version(),
+                                "template_id": template_id, "template_version": current_schema_version,
                                 "merged_config": merged, "user_overrides": overrides_to_persist}})
 
 
@@ -1440,13 +1473,20 @@ async def update_bot(req: request):
 
     old_template_id = bot_info[10] if len(bot_info) > 10 else ''
     old_user_overrides_raw = bot_info[11] if len(bot_info) > 11 else '{}'
-    old_merged = resolve_bot_values(old_template_id, old_user_overrides_raw)
+    old_template_version = bot_info[12] if len(bot_info) > 12 else ''
+    current_schema_version = get_schema_version()
+    old_merged = resolve_bot_values(old_template_id, old_user_overrides_raw, old_template_version)
 
     new_template_id = safe_get(req, "template_id")
     if new_template_id is None:
         new_template_id = old_template_id
     if new_template_id and not is_valid_template_id(new_template_id):
         return sanic_json({"code": 2001, "msg": "fail, invalid template_id: {}".format(new_template_id)})
+
+    if new_template_id and (new_template_id != old_template_id or not old_template_version):
+        new_template_version = current_schema_version
+    else:
+        new_template_version = old_template_version
 
     req_override = safe_get(req, "user_overrides")
     if req_override is None:
@@ -1504,6 +1544,8 @@ async def update_bot(req: request):
             req_override,
             old_merged_values=old_merged,
             raw_field_updates=raw_field_updates,
+            old_template_version=old_template_version,
+            new_template_version=new_template_version,
         )
     except ValueError as ve:
         return sanic_json({"code": 2001, "msg": "fail, {}".format(ve)})
@@ -1541,12 +1583,14 @@ async def update_bot(req: request):
     debug_logger.info(f"update_time: {update_time}")
     local_doc_qa.milvus_summary.update_bot(user_id, bot_id, bot_name, description, head_image, prompt_setting_final,
                                            welcome_message_final, kb_ids_str, update_time, llm_setting,
-                                           template_id=new_template_id, user_overrides=user_overrides_str)
+                                           template_id=new_template_id, user_overrides=user_overrides_str,
+                                           template_version=new_template_version)
     return sanic_json({"code": 200, "msg": "Bot {} update success".format(bot_id),
                        "data": {
                            "bot_id": bot_id,
                            "template_id": new_template_id,
-                           "template_version": get_schema_version(),
+                           "template_version": new_template_version,
+                           "schema_version": current_schema_version,
                            "merged_config": new_merged,
                            "user_overrides": overrides_to_persist,
                        }})

@@ -27,6 +27,7 @@ enum EUrlKey {
   fileList = 'fileList',
   createBot = 'createBot',
   updateBot = 'updateBot',
+  listBotTemplates = 'listBotTemplates',
   queryBotInfo = 'queryBotInfo',
   deleteBot = 'deleteBot',
   uploadFaqs = 'uploadFaqs',
@@ -164,6 +165,15 @@ const urlConfig: IUrlConfig = {
   updateBot: {
     type: EUrlType.POST,
     url: '/local_doc_qa/update_bot',
+    param: {
+      user_id: userId,
+      user_info: userPhone,
+    },
+  },
+  // 获取Bot场景模板列表
+  listBotTemplates: {
+    type: EUrlType.POST,
+    url: '/local_doc_qa/list_bot_templates',
     param: {
       user_id: userId,
       user_info: userPhone,
