@@ -214,11 +214,12 @@ class ParentRetriever:
                                       hybrid_search: bool, top_k: int):
         milvus_start_time = time.perf_counter()
         expr = f'kb_id in {partition_keys}'
-        # self.retriever.set_search_kwargs("mmr", k=VECTOR_SEARCH_TOP_K, expr=expr)
         self.retriever.set_search_kwargs("similarity", k=top_k, expr=expr)
         query_docs = await self.retriever.aget_relevant_documents(query)
         for doc in query_docs:
             doc.metadata['retrieval_source'] = 'milvus'
+            if 'doc_id' not in doc.metadata and self.retriever.id_key in doc.metadata:
+                doc.metadata['doc_id'] = doc.metadata[self.retriever.id_key]
         milvus_end_time = time.perf_counter()
         time_record['retriever_search_by_milvus'] = round(milvus_end_time - milvus_start_time, 2)
 
@@ -226,22 +227,50 @@ class ParentRetriever:
             return query_docs
 
         try:
-            # filter = []
-            # for partition_key in partition_keys:
             filter = [{"terms": {"metadata.kb_id.keyword": partition_keys}}]
             es_sub_docs = await self.es_store.asimilarity_search(query, k=top_k, filter=filter)
+
+            es_id_to_score = {}
+            for idx, d in enumerate(es_sub_docs):
+                if self.retriever.id_key in d.metadata:
+                    doc_id = d.metadata[self.retriever.id_key]
+                    es_score = d.metadata.get('_score', 1.0 - (idx / max(len(es_sub_docs), 1)))
+                    if doc_id not in es_id_to_score or es_score > es_id_to_score[doc_id]:
+                        es_id_to_score[doc_id] = es_score
+
+            milvus_keys = set()
+            for d in query_docs:
+                doc_id = d.metadata.get('doc_id', d.metadata.get(self.retriever.id_key, ''))
+                file_id = d.metadata.get('file_id', '')
+                if doc_id:
+                    milvus_keys.add((doc_id, file_id))
+                    milvus_keys.add(doc_id)
+
             es_ids = []
-            milvus_doc_ids = [d.metadata[self.retriever.id_key] for d in query_docs]
             for d in es_sub_docs:
-                if self.retriever.id_key in d.metadata and d.metadata[self.retriever.id_key] not in es_ids and d.metadata[self.retriever.id_key] not in milvus_doc_ids:
-                    es_ids.append(d.metadata[self.retriever.id_key])
+                if self.retriever.id_key not in d.metadata:
+                    continue
+                doc_id = d.metadata[self.retriever.id_key]
+                file_id = d.metadata.get('file_id', '')
+                key_pair = (doc_id, file_id)
+                if doc_id in es_ids:
+                    continue
+                if doc_id in milvus_keys or key_pair in milvus_keys:
+                    continue
+                es_ids.append(doc_id)
+
             es_docs = await self.retriever.docstore.amget(es_ids)
             es_docs = [d for d in es_docs if d is not None]
             for doc in es_docs:
                 doc.metadata['retrieval_source'] = 'es'
+                if 'doc_id' not in doc.metadata and self.retriever.id_key in doc.metadata:
+                    doc.metadata['doc_id'] = doc.metadata[self.retriever.id_key]
+                doc_id = doc.metadata.get('doc_id', '')
+                if 'score' not in doc.metadata and doc_id in es_id_to_score:
+                    doc.metadata['score'] = float(es_id_to_score[doc_id])
             time_record['retriever_search_by_es'] = round(time.perf_counter() - milvus_end_time, 2)
             debug_logger.info(f"Got {len(query_docs)} documents from vectorstore and {len(es_sub_docs)} documents from es, total {len(query_docs) + len(es_docs)} merged documents.")
             query_docs.extend(es_docs)
         except Exception as e:
-            debug_logger.error(f"Error in get_retrieved_documents on es_search: {e}")
+            debug_logger.error(f"Error in get_retrieved_documents on es_search: {traceback.format_exc()}")
         return query_docs

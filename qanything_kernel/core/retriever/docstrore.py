@@ -13,10 +13,42 @@ from typing import (
 )
 import os
 import json
+import asyncio
 from tqdm import tqdm
 
 
 V = TypeVar("V")
+
+
+def _build_doc_from_json(doc_id: str, doc_json: dict, mysql_client: KnowledgeBaseManager) -> Optional[Document]:
+    if doc_json is None:
+        return None
+    user_id = doc_json['kwargs']['metadata'].get('user_id', '')
+    file_id = doc_json['kwargs']['metadata'].get('file_id', '')
+    file_name = doc_json['kwargs']['metadata'].get('file_name', '')
+    kb_id = doc_json['kwargs']['metadata'].get('kb_id', '')
+    doc_idx = doc_id.split('_')[-1] if '_' in doc_id else '0'
+    upload_path = os.path.join(UPLOAD_ROOT_PATH, user_id)
+    if file_id and file_name and kb_id:
+        local_path = os.path.join(upload_path, kb_id, file_id, file_name.rsplit('.', 1)[0] + '_' + doc_idx + '.json')
+        if not os.path.exists(local_path):
+            os.makedirs(os.path.dirname(local_path), exist_ok=True)
+            with open(local_path, 'w') as f:
+                f.write(json.dumps(doc_json, ensure_ascii=False))
+    doc = Document(page_content=doc_json['kwargs']['page_content'], metadata=doc_json['kwargs']['metadata'])
+    doc.metadata['doc_id'] = doc_id
+    doc.metadata.setdefault('file_id', file_id)
+    doc.metadata.setdefault('file_name', file_name)
+    doc.metadata.setdefault('kb_id', kb_id)
+    doc.metadata.setdefault('user_id', user_id)
+    if file_name.endswith('.faq'):
+        faq_dict = doc.metadata.get('faq_dict', {})
+        if faq_dict:
+            page_content = f"{faq_dict.get('question', '')}：{faq_dict.get('answer', '')}"
+            nos_keys = faq_dict.get('nos_keys')
+            doc.page_content = page_content
+            doc.metadata['nos_keys'] = nos_keys
+    return doc
 
 
 class MysqlStore(InMemoryStore):
@@ -24,16 +56,7 @@ class MysqlStore(InMemoryStore):
         self.mysql_client = mysql_client
         super().__init__()
 
-
     def mset(self, key_value_pairs: Sequence[Tuple[str, V]]) -> None:
-        """Set the values for the given keys.
-
-        Args:
-            key_value_pairs (Sequence[Tuple[str, V]]): A sequence of key-value pairs.
-
-        Returns:
-            None
-        """
         doc_ids = [doc_id for doc_id, _ in key_value_pairs]
         insert_logger.info(f"add documents: {len(doc_ids)}")
         for doc_id, doc in tqdm(key_value_pairs):
@@ -42,41 +65,18 @@ class MysqlStore(InMemoryStore):
                 doc_json['kwargs']['metadata'] = doc.metadata
             self.mysql_client.add_document(doc_id, doc_json)
 
+    async def amset(self, key_value_pairs: Sequence[Tuple[str, V]]) -> None:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self.mset, key_value_pairs)
+
     def mget(self, keys: Sequence[str]) -> List[Optional[V]]:
-        """Get the values associated with the given keys.
-
-        Args:
-            keys (Sequence[str]): A sequence of keys.
-
-        Returns:
-            A sequence of optional values associated with the keys.
-            If a key is not found, the corresponding value will be None.
-        """
-       
         docs = []
         for doc_id in keys:
             doc_json = self.mysql_client.get_document_by_doc_id(doc_id)
-            if doc_json is None:
-                docs.append(None)
-                continue
-            # debug_logger.info(f'doc_id: {doc_id} get doc_json: {doc_json}')
-            user_id, file_id, file_name, kb_id = doc_json['kwargs']['metadata']['user_id'], doc_json['kwargs']['metadata']['file_id'], doc_json['kwargs']['metadata']['file_name'], doc_json['kwargs']['metadata']['kb_id'] 
-            doc_idx = doc_id.split('_')[-1]
-            upload_path = os.path.join(UPLOAD_ROOT_PATH, user_id)
-            local_path = os.path.join(upload_path, kb_id, file_id, file_name.rsplit('.', 1)[0] + '_' + doc_idx + '.json')
-            doc = Document(page_content=doc_json['kwargs']['page_content'], metadata=doc_json['kwargs']['metadata'])
-            doc.metadata['doc_id'] = doc_id
-            if file_name.endswith('.faq'):
-                faq_dict = doc.metadata['faq_dict']
-                page_content = f"{faq_dict['question']}：{faq_dict['answer']}"
-                nos_keys = faq_dict.get('nos_keys')
-                doc.page_content = page_content
-                doc.metadata['nos_keys'] = nos_keys
+            doc = _build_doc_from_json(doc_id, doc_json, self.mysql_client)
             docs.append(doc)
-            if not os.path.exists(local_path):
-                #  json字符串写入本地文件
-                os.makedirs(os.path.dirname(local_path), exist_ok=True)
-                # debug_logger.info(f'write local_path: {local_path}')
-                with open(local_path, 'w') as f:
-                    f.write(json.dumps(doc_json, ensure_ascii=False))
         return docs
+
+    async def amget(self, keys: Sequence[str]) -> List[Optional[V]]:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, self.mget, keys)

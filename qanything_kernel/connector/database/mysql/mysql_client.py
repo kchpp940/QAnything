@@ -834,55 +834,44 @@ class KnowledgeBaseManager:
             break
         return qa_log, recent_logs, older_logs
 
-    def check_bot_is_exist(self, bot_id, user_id):
-        query = "SELECT bot_id FROM QanythingBot WHERE bot_id = %s AND user_id = %s AND deleted = 0"
-        result = self.execute_query_(query, (bot_id, user_id), fetch=True)
+    def check_bot_is_exist(self, bot_id):
+        # 使用参数化查询
+        query = "SELECT bot_id FROM QanythingBot WHERE bot_id = %s AND deleted = 0"
+        result = self.execute_query_(query, (bot_id,), fetch=True)
         debug_logger.info("check_bot_exist {}".format(result))
         return result is not None and len(result) > 0
 
     def new_qanything_bot(self, bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message,
-                          kb_ids_str, llm_setting=None):
-        if llm_setting is None:
-            llm_setting = {}
-        from qanything_kernel.utils.llm_param_validator import process_bot_llm_setting
-        llm_setting, errors = process_bot_llm_setting(llm_setting)
-        if errors:
-            raise ValueError("Invalid llm_setting: {}".format("; ".join(errors)))
-        llm_setting_str = json.dumps(llm_setting, ensure_ascii=False)
-        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, llm_setting) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                          kb_ids_str):
+        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
         self.execute_query_(query, (
-        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, llm_setting_str),
+        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str),
                             commit=True)
         return bot_id, "success"
 
     def delete_bot(self, user_id, bot_id):
-        query = "UPDATE QanythingBot SET deleted = 1 WHERE user_id = %s AND bot_id = %s AND deleted = 0"
-        result = self.execute_query_(query, (user_id, bot_id), commit=True, check=True)
-        debug_logger.info("delete_bot affected rows: {}".format(result))
-        return result
+        # 使用参数化查询
+        query = "UPDATE QanythingBot SET deleted = 1 WHERE user_id = %s AND bot_id = %s"
+        self.execute_query_(query, (user_id, bot_id), commit=True)
 
     def get_bot(self, user_id, bot_id):
-        if not user_id:
-            raise ValueError("user_id is required for get_bot")
         if not bot_id:
             query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting FROM QanythingBot WHERE user_id = %s AND deleted = 0"
             return self.execute_query_(query, (user_id,), fetch=True)
-        query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting FROM QanythingBot WHERE user_id = %s AND bot_id = %s AND deleted = 0"
-        return self.execute_query_(query, (user_id, bot_id), fetch=True)
+        elif not user_id:
+            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting FROM QanythingBot WHERE bot_id = %s AND deleted = 0"
+            return self.execute_query_(query, (bot_id,), fetch=True)
+        else:
+            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting FROM QanythingBot WHERE user_id = %s AND bot_id = %s AND deleted = 0"
+            return self.execute_query_(query, (user_id, bot_id), fetch=True)
 
     def update_bot(self, user_id, bot_id, bot_name, description, head_image, prompt_setting, welcome_message,
                    kb_ids_str, update_time, llm_setting):
-        from qanything_kernel.utils.llm_param_validator import process_bot_llm_setting
-        llm_setting, errors = process_bot_llm_setting(llm_setting)
-        if errors:
-            raise ValueError("Invalid llm_setting: {}".format("; ".join(errors)))
-        llm_setting_str = json.dumps(llm_setting, ensure_ascii=False)
+        llm_setting = json.dumps(llm_setting, ensure_ascii=False)
         query = "UPDATE QanythingBot SET bot_name = %s, description = %s, head_image = %s, prompt_setting = %s, welcome_message = %s, kb_ids_str = %s, update_time = %s, llm_setting = %s WHERE user_id = %s AND bot_id = %s AND deleted = 0"
-        result = self.execute_query_(query, (
-        bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, llm_setting_str, user_id,
-        bot_id), commit=True, check=True)
-        debug_logger.info("update_bot affected rows: {}".format(result))
-        return result
+        self.execute_query_(query, (
+        bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, llm_setting, user_id,
+        bot_id), commit=True)
 
     def get_files_by_status(self, status):
         query = "SELECT file_id, file_name FROM File WHERE status = %s AND deleted = 0"

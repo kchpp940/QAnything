@@ -82,19 +82,23 @@ class LocalDocQA:
         for idx, doc in enumerate(web_documents):
             if 'title' not in doc.metadata:
                 continue
-            doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
+            doc.metadata['retrieval_query'] = query
+            doc.metadata['retrieval_source'] = 'web_search'
             debug_logger.info(f"web search doc: {doc.metadata}")
             file_name = re.sub(r'[\uFF01-\uFF5E\u3000-\u303F]', '', doc.metadata['title'])
             doc.metadata['file_name'] = file_name + '.web'
             doc.metadata['file_url'] = doc.metadata['source']
             doc.metadata['embed_version'] = self.embeddings.embed_version
-            doc.metadata['score'] = 1 - (idx / len(web_documents))
+            doc.metadata['score'] = 1 - (idx / max(len(web_documents), 1))
             doc.metadata['file_id'] = 'websearch' + str(idx)
+            doc.metadata['kb_id'] = 'web_search_kb'
+            doc.metadata['doc_id'] = doc.metadata['file_id'] + '_0'
             doc.metadata['headers'] = {"新闻标题": file_name}
+            doc.metadata['deleted'] = 0
             if 'description' in doc.metadata:
-                desc_doc = Document(page_content=doc.metadata['description'], metadata=doc.metadata)
+                desc_doc = Document(page_content=doc.metadata['description'], metadata=copy.deepcopy(doc.metadata))
                 source_documents.append(desc_doc)
-            source_documents.append(doc)  # 先插入description，再插入原文
+            source_documents.append(doc)
         return web_content, source_documents
 
     def web_page_search(self, query, top_k=None):
@@ -122,20 +126,36 @@ class LocalDocQA:
         end_time = time.perf_counter()
         time_record['retriever_search'] = round(end_time - start_time, 2)
         debug_logger.info(f"retriever_search time: {time_record['retriever_search']}s")
-        # debug_logger.info(f"query_docs num: {len(query_docs)}, query_docs: {query_docs}")
+        total_docs = len(query_docs)
         for idx, doc in enumerate(query_docs):
-            if retriever.mysql_client.is_deleted_file(doc.metadata['file_id']):
-                debug_logger.warning(f"file_id: {doc.metadata['file_id']} is deleted")
+            file_id = doc.metadata.get('file_id', '')
+            doc_id = doc.metadata.get('doc_id', '')
+            if not file_id:
+                debug_logger.warning(f"doc at idx {idx} missing file_id, doc_id: {doc_id}, skip")
                 continue
-            doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
+            is_deleted = 0
+            try:
+                if retriever.mysql_client.is_deleted_file(file_id):
+                    debug_logger.warning(f"file_id: {file_id} is deleted, skip doc_id: {doc_id}")
+                    is_deleted = 1
+                    continue
+            except Exception as e:
+                debug_logger.warning(f"check is_deleted_file error for file_id {file_id}: {e}")
+            doc.metadata['retrieval_query'] = query
             doc.metadata['embed_version'] = self.embeddings.embed_version
-            if 'score' not in doc.metadata:
-                doc.metadata['score'] = 1 - (idx / len(query_docs))  # TODO 这个score怎么获取呢
+            doc.metadata.setdefault('file_id', file_id)
+            doc.metadata.setdefault('doc_id', doc_id if doc_id else file_id + '_' + str(idx))
+            if kb_ids:
+                doc.metadata.setdefault('kb_id', kb_ids[0] if len(kb_ids) == 1 else doc.metadata.get('kb_id', kb_ids[0]))
+            doc.metadata.setdefault('retrieval_source', doc.metadata.get('retrieval_source', 'unknown'))
+            doc.metadata['deleted'] = is_deleted
+            if 'score' not in doc.metadata or doc.metadata['score'] is None:
+                doc.metadata['score'] = float(1 - (idx / max(total_docs, 1)))
+            else:
+                doc.metadata['score'] = float(doc.metadata['score'])
             source_documents.append(doc)
         debug_logger.info(f"embed scores: {[doc.metadata['score'] for doc in source_documents]}")
-        # if cosine_thresh:
-        #     source_documents = [item for item in source_documents if float(item.metadata['score']) > cosine_thresh]
-
+        debug_logger.info(f"retrieval_sources: {[doc.metadata.get('retrieval_source', '') for doc in source_documents]}")
         return source_documents
 
     def reprocess_source_documents(self, custom_llm: OpenAILLM, query: str,
@@ -484,29 +504,41 @@ class LocalDocQA:
         if need_web_search:
             t1 = time.perf_counter()
             web_search_results = self.web_page_search(query, top_k=3)
-            web_splitter = RecursiveCharacterTextSplitter(
-                separators=SEPARATORS,
-                chunk_size=web_chunk_size,
-                chunk_overlap=int(web_chunk_size / 4),
-                length_function=num_tokens_embed,
-            )
-            web_search_results = web_splitter.split_documents(web_search_results)
+            if web_search_results:
+                web_splitter = RecursiveCharacterTextSplitter(
+                    separators=SEPARATORS,
+                    chunk_size=web_chunk_size,
+                    chunk_overlap=int(web_chunk_size / 4),
+                    length_function=num_tokens_embed,
+                )
+                web_search_results = web_splitter.split_documents(web_search_results)
 
-            current_doc_id = 0
-            current_file_id = web_search_results[0].metadata['file_id']
-            for doc in web_search_results:
-                if doc.metadata['file_id'] == current_file_id:
-                    doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
-                    current_doc_id += 1
-                else:
-                    current_file_id = doc.metadata['file_id']
-                    current_doc_id = 0
-                    doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
-                    current_doc_id += 1
-                doc_json = doc.to_json()
-                if doc_json['kwargs'].get('metadata') is None:
-                    doc_json['kwargs']['metadata'] = doc.metadata
-                self.milvus_summary.add_document(doc_id=doc.metadata['doc_id'], json_data=doc_json)
+                current_doc_id = 0
+                current_file_id = web_search_results[0].metadata.get('file_id', 'websearch0')
+                for idx, doc in enumerate(web_search_results):
+                    doc_file_id = doc.metadata.get('file_id', current_file_id)
+                    if doc_file_id == current_file_id:
+                        doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
+                        current_doc_id += 1
+                    else:
+                        current_file_id = doc_file_id
+                        current_doc_id = 0
+                        doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
+                        current_doc_id += 1
+                    doc.metadata.setdefault('retrieval_source', 'web_search')
+                    doc.metadata.setdefault('kb_id', 'web_search_kb')
+                    doc.metadata.setdefault('file_id', current_file_id)
+                    doc.metadata.setdefault('deleted', 0)
+                    doc.metadata.setdefault('embed_version', self.embeddings.embed_version)
+                    doc.metadata.setdefault('retrieval_query', query)
+                    if 'score' not in doc.metadata or doc.metadata['score'] is None:
+                        doc.metadata['score'] = float(1 - (idx / max(len(web_search_results), 1)))
+                    else:
+                        doc.metadata['score'] = float(doc.metadata['score'])
+                    doc_json = doc.to_json()
+                    if doc_json['kwargs'].get('metadata') is None:
+                        doc_json['kwargs']['metadata'] = doc.metadata
+                    self.milvus_summary.add_document(doc_id=doc.metadata['doc_id'], json_data=doc_json)
 
             t2 = time.perf_counter()
             time_record['web_search'] = round(t2 - t1, 2)
@@ -548,26 +580,33 @@ class LocalDocQA:
                 time_record['rerank'] = 0.0
                 debug_logger.error(f"query {query}: kb_ids: {kb_ids}, rerank error: {traceback.format_exc()}")
 
-        # es检索+milvus检索结果最多可能是2k
         source_documents = source_documents[:top_k]
 
-        # rerank之后删除headers，只保留文本内容，用于后续处理
         for doc in source_documents:
             doc.page_content = re.sub(r'^\[headers]\(.*?\)\n', '', doc.page_content)
+            doc.metadata.setdefault('doc_id', doc.metadata.get('file_id', '') + '_0')
+            doc.metadata.setdefault('file_id', '')
+            doc.metadata.setdefault('kb_id', '')
+            doc.metadata.setdefault('retrieval_source', 'unknown')
+            if 'score' not in doc.metadata or doc.metadata['score'] is None:
+                doc.metadata['score'] = 0.0
+            else:
+                doc.metadata['score'] = float(doc.metadata['score'])
+            doc.metadata.setdefault('deleted', 0)
 
         high_score_faq_documents = [doc for doc in source_documents if
-                                    doc.metadata['file_name'].endswith('.faq') and doc.metadata['score'] >= 0.9]
+                                    doc.metadata.get('file_name', '').endswith('.faq') and doc.metadata.get('score', 0.0) >= 0.9]
         if high_score_faq_documents:
             source_documents = high_score_faq_documents
-        # FAQ完全匹配处理逻辑
         for doc in source_documents:
-            if doc.metadata['file_name'].endswith('.faq') and clear_string_is_equal(
-                    doc.metadata['faq_dict']['question'], query):
+            faq_dict = doc.metadata.get('faq_dict', {})
+            if doc.metadata.get('file_name', '').endswith('.faq') and faq_dict and clear_string_is_equal(
+                    faq_dict.get('question', ''), query):
                 debug_logger.info(f"match faq question: {query}")
                 if only_need_search_results:
                     yield source_documents, None
                     return
-                res = doc.metadata['faq_dict']['answer']
+                res = faq_dict.get('answer', '')
                 async for response, history in self.generate_response(query, res, condense_question, source_documents,
                                                                       time_record, chat_history, streaming, 'MATCH_FAQ'):
                     yield response, history

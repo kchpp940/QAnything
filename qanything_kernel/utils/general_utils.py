@@ -53,19 +53,23 @@ def isURL(string):
 def format_source_documents(ori_source_documents):
     source_documents = []
     for inum, doc in enumerate(ori_source_documents):
+        score = doc.metadata.get('score', 0.0)
+        if score is None:
+            score = 0.0
         source_info = {'file_id': doc.metadata.get('file_id', ''),
                        'file_name': doc.metadata.get('file_name', ''),
                        'content': doc.page_content,
                        'retrieval_query': doc.metadata.get('retrieval_query', ''),
-                       # 'kernel': doc.metadata['kernel'],
                        'file_url': doc.metadata.get('file_url', ''),
-                       'score': str(doc.metadata['score']),
+                       'score': str(float(score)),
                        'embed_version': doc.metadata.get('embed_version', ''),
                        'nos_keys': doc.metadata.get('nos_keys', ''),
-                       'doc_id': doc.metadata.get('doc_id', ''),
-                       'retrieval_source': doc.metadata.get('retrieval_source', ''),
+                       'doc_id': doc.metadata.get('doc_id', doc.metadata.get('file_id', '') + '_' + str(inum)),
+                       'retrieval_source': doc.metadata.get('retrieval_source', 'unknown'),
                        'headers': doc.metadata.get('headers', {}),
                        'page_id': doc.metadata.get('page_id', 0),
+                       'kb_id': doc.metadata.get('kb_id', ''),
+                       'deleted': doc.metadata.get('deleted', 0),
                        }
         source_documents.append(source_info)
     return source_documents
@@ -447,11 +451,21 @@ def get_time_range(time_start=None, time_end=None, default_days=30):
 
 
 def deduplicate_documents(source_docs):
-    unique_docs = set()
+    unique_keys = set()
     deduplicated_docs = []
     for doc in source_docs:
-        if doc.page_content not in unique_docs:
-            unique_docs.add(doc.page_content)
+        doc_id = doc.metadata.get('doc_id', '')
+        file_id = doc.metadata.get('file_id', '')
+        if doc_id and file_id:
+            key = (doc_id, file_id)
+        elif doc_id:
+            key = ('', doc_id)
+        elif file_id:
+            key = (file_id, '')
+        else:
+            key = ('__content__', doc.page_content)
+        if key not in unique_keys:
+            unique_keys.add(key)
             deduplicated_docs.append(doc)
     return deduplicated_docs
 
