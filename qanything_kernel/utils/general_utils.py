@@ -40,7 +40,8 @@ __all__ = ['isURL', 'get_time', 'get_time_async', 'format_source_documents', 'sa
            'check_user_id_and_user_info', 'get_table_infos', 'format_time_record', 'get_time_range',
            'html_to_markdown', "num_tokens_embed", "num_tokens_rerank", "get_all_subpages", "replace_image_references",
            'check_and_transform_excel', 'normalize_document_metadata', 'RETRIEVAL_SOURCE_PRIORITY',
-           'REQUIRED_DOC_METADATA_FIELDS', 'merge_retrieval_sources', 'compute_rank_score']
+           'REQUIRED_DOC_METADATA_FIELDS', 'merge_retrieval_sources', 'compute_rank_score',
+           'set_source_rank', 'set_rerank_score']
 
 
 REQUIRED_DOC_METADATA_FIELDS = [
@@ -48,6 +49,7 @@ REQUIRED_DOC_METADATA_FIELDS = [
     'score', 'retrieval_source', 'embed_version', 'deleted',
     'retrieval_query', 'headers', 'page_id', 'nos_keys', 'file_url',
     'rank_score', 'retrieval_sources', 'scores_by_source',
+    'rank_by_source', 'rerank_score',
 ]
 
 RETRIEVAL_SOURCE_PRIORITY = {
@@ -67,19 +69,68 @@ RETRIEVAL_SOURCE_WEIGHTS = {
 }
 
 
-def compute_rank_score(doc, idx_in_source, total_in_source, source_name=None):
+def set_source_rank(doc, source_name, rank_in_source, total_in_source):
+    if doc is None:
+        return doc
+    md = doc.metadata
+    rbs = md.get('rank_by_source')
+    if not isinstance(rbs, dict):
+        rbs = {}
+    try:
+        rbs[source_name] = {
+            'rank': int(rank_in_source),
+            'total': int(total_in_source),
+        }
+    except (TypeError, ValueError):
+        rbs[source_name] = {
+            'rank': 0,
+            'total': max(1, int(total_in_source)),
+        }
+    md['rank_by_source'] = rbs
+    return doc
+
+
+def compute_rank_score(doc, source_name=None):
     md = doc.metadata
     src = source_name or md.get('retrieval_source', 'unknown')
-    raw_score = md.get('score', 0.0)
-    try:
-        raw_score = float(raw_score)
-    except (TypeError, ValueError):
-        raw_score = 0.0
-    pos_score = 1.0 - (idx_in_source / max(total_in_source, 1))
+    rbs = md.get('rank_by_source')
+    if isinstance(rbs, dict) and src in rbs:
+        rank_info = rbs[src]
+        if isinstance(rank_info, dict):
+            r = rank_info.get('rank', 0)
+            t = rank_info.get('total', 1)
+            try:
+                r = int(r)
+                t = max(1, int(t))
+            except (TypeError, ValueError):
+                r = 0
+                t = 1
+        else:
+            try:
+                r = int(rank_info)
+                t = max(1, int(rank_info))
+            except (TypeError, ValueError):
+                r = 0
+                t = 1
+    else:
+        r = 0
+        t = 1
+
+    pos_score = 1.0 - (r / t)
     weight = RETRIEVAL_SOURCE_WEIGHTS.get(src, 0.1)
     prio = RETRIEVAL_SOURCE_PRIORITY.get(src, 0)
-    rank_score = (raw_score * 0.4 + pos_score * 0.6) * weight + prio * 0.01
+    rank_score = pos_score * weight + prio * 0.01
     return rank_score
+
+
+def set_rerank_score(doc, rerank_score_value):
+    if doc is None:
+        return doc
+    try:
+        doc.metadata['rerank_score'] = float(rerank_score_value)
+    except (TypeError, ValueError):
+        doc.metadata['rerank_score'] = 0.0
+    return doc
 
 
 def _safe_float(x, default=0.0):
@@ -89,7 +140,15 @@ def _safe_float(x, default=0.0):
         return default
 
 
-def merge_retrieval_sources(primary_doc, secondary_doc, idx_primary, total_primary, idx_secondary, total_secondary):
+def _safe_int(x, default=0):
+    try:
+        return int(x)
+    except (TypeError, ValueError):
+        return default
+
+
+def merge_retrieval_sources(primary_doc, secondary_doc, idx_primary=None, total_primary=None,
+                            idx_secondary=None, total_secondary=None):
     pri_src = primary_doc.metadata.get('retrieval_source', 'unknown')
     sec_src = secondary_doc.metadata.get('retrieval_source', 'unknown')
 
@@ -111,6 +170,26 @@ def merge_retrieval_sources(primary_doc, secondary_doc, idx_primary, total_prima
         retrieval_sources.append(sec_src)
     primary_doc.metadata['retrieval_sources'] = retrieval_sources
 
+    rank_by_source = primary_doc.metadata.get('rank_by_source') or {}
+    if not isinstance(rank_by_source, dict):
+        rank_by_source = {}
+    sec_rbs = secondary_doc.metadata.get('rank_by_source') or {}
+    if isinstance(sec_rbs, dict):
+        for k, v in sec_rbs.items():
+            if k not in rank_by_source:
+                rank_by_source[k] = v
+    if idx_primary is not None and total_primary is not None and pri_src not in rank_by_source:
+        rank_by_source[pri_src] = {
+            'rank': _safe_int(idx_primary),
+            'total': max(1, _safe_int(total_primary)),
+        }
+    if idx_secondary is not None and total_secondary is not None and sec_src not in rank_by_source:
+        rank_by_source[sec_src] = {
+            'rank': _safe_int(idx_secondary),
+            'total': max(1, _safe_int(total_secondary)),
+        }
+    primary_doc.metadata['rank_by_source'] = rank_by_source
+
     pri_prio = RETRIEVAL_SOURCE_PRIORITY.get(pri_src, 0)
     sec_prio = RETRIEVAL_SOURCE_PRIORITY.get(sec_src, 0)
     if sec_prio > pri_prio:
@@ -119,14 +198,13 @@ def merge_retrieval_sources(primary_doc, secondary_doc, idx_primary, total_prima
         if sec_score > 0:
             primary_doc.metadata['score'] = sec_score
 
-    rank_pri = compute_rank_score(primary_doc, idx_primary, total_primary, pri_src)
-    rank_sec = compute_rank_score(secondary_doc, idx_secondary, total_secondary, sec_src)
-    final_rank = max(
-        primary_doc.metadata.get('rank_score', 0.0),
-        rank_pri,
-        rank_sec,
-    )
-    primary_doc.metadata['rank_score'] = _safe_float(final_rank)
+    all_sources = primary_doc.metadata.get('retrieval_sources') or [pri_src, sec_src]
+    best_rank = 0.0
+    for s in all_sources:
+        r = compute_rank_score(primary_doc, s)
+        if r > best_rank:
+            best_rank = r
+    primary_doc.metadata['rank_score'] = _safe_float(best_rank)
     return primary_doc
 
 
@@ -210,12 +288,27 @@ def normalize_document_metadata(doc, embed_version=None, retrieval_query=None,
         rs.append(src)
     md['retrieval_sources'] = rs
 
+    rbs = md.get('rank_by_source')
+    if not isinstance(rbs, dict):
+        rbs = {}
+    if src and src not in rbs:
+        rbs[src] = {
+            'rank': _safe_int(idx_for_fallback),
+            'total': max(1, _safe_int(total_docs)),
+        }
+    md['rank_by_source'] = rbs
+
+    if 'rerank_score' not in md:
+        md['rerank_score'] = 0.0
+    else:
+        md['rerank_score'] = _safe_float(md['rerank_score'])
+
     existing_rank = md.get('rank_score')
     if existing_rank is None or existing_rank == '':
         rs_list = md.get('retrieval_sources') or [src]
         best_rank = 0.0
         for s in rs_list:
-            r = compute_rank_score(doc, idx_for_fallback, total_docs, s)
+            r = compute_rank_score(doc, s)
             if r > best_rank:
                 best_rank = r
         md['rank_score'] = _safe_float(best_rank)
@@ -252,7 +345,11 @@ def _merge_docs(existing_doc, new_doc, existing_idx=None, new_idx=None, total_gl
     e_idx = 0 if existing_idx is None else existing_idx
     n_idx = 0 if new_idx is None else new_idx
     tot = max(1, total_global if total_global else 1)
-    return merge_retrieval_sources(existing_doc, new_doc, e_idx, tot, n_idx, tot)
+    return merge_retrieval_sources(
+        existing_doc, new_doc,
+        idx_primary=e_idx, total_primary=tot,
+        idx_secondary=n_idx, total_secondary=tot,
+    )
 
 
 def deduplicate_documents(source_docs, merge_multi_source=True):
@@ -297,6 +394,10 @@ def format_source_documents(ori_source_documents):
         retrieval_sources = doc.metadata.get('retrieval_sources', [])
         if not isinstance(retrieval_sources, list):
             retrieval_sources = [doc.metadata.get('retrieval_source', 'unknown')]
+        rank_by_source = doc.metadata.get('rank_by_source', {})
+        if not isinstance(rank_by_source, dict):
+            rank_by_source = {}
+        rerank_score = doc.metadata.get('rerank_score', 0.0)
         source_info = {
             'file_id': doc.metadata['file_id'],
             'file_name': doc.metadata['file_name'],
@@ -315,6 +416,8 @@ def format_source_documents(ori_source_documents):
             'rank_score': str(doc.metadata.get('rank_score', 0.0)),
             'retrieval_sources': retrieval_sources,
             'scores_by_source': {k: str(v) for k, v in scores_by_source.items()},
+            'rank_by_source': {k: {str(k2): str(v2) for k2, v2 in v.items()} if isinstance(v, dict) else str(v) for k, v in rank_by_source.items()},
+            'rerank_score': str(rerank_score),
         }
         source_documents.append(source_info)
     return source_documents

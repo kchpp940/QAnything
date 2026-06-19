@@ -557,17 +557,37 @@ class LocalDocQA:
                 source_documents = await self.rerank.arerank_documents(condense_question, source_documents)
                 t2 = time.perf_counter()
                 time_record['rerank'] = round(t2 - t1, 2)
-                # 过滤掉低分的文档
+                for doc in source_documents:
+                    sbs = doc.metadata.get('scores_by_source')
+                    if isinstance(sbs, dict) and sbs:
+                        main_src = doc.metadata.get('retrieval_source', '')
+                        if main_src and main_src in sbs:
+                            raw_score = sbs[main_src]
+                        else:
+                            best_score = 0.0
+                            for v in sbs.values():
+                                try:
+                                    vv = float(v)
+                                except (TypeError, ValueError):
+                                    vv = 0.0
+                                if vv > best_score:
+                                    best_score = vv
+                            raw_score = best_score
+                        doc.metadata['rerank_score'] = doc.metadata.get('score', 0.0)
+                        doc.metadata['score'] = raw_score
+                    else:
+                        doc.metadata['rerank_score'] = doc.metadata.get('score', 0.0)
                 debug_logger.info(f"rerank step1 num: {len(source_documents)}")
-                debug_logger.info(f"rerank step1 scores: {[doc.metadata['score'] for doc in source_documents]}")
+                debug_logger.info(f"rerank step1 rerank_scores: {[doc.metadata['rerank_score'] for doc in source_documents]}")
+                debug_logger.info(f"rerank step1 original_scores: {[doc.metadata['score'] for doc in source_documents]}")
                 if len(source_documents) > 1:
-                    if filtered_documents := [doc for doc in source_documents if doc.metadata['score'] >= 0.28]:
+                    if filtered_documents := [doc for doc in source_documents if doc.metadata['rerank_score'] >= 0.28]:
                         source_documents = filtered_documents
                     debug_logger.info(f"rerank step2 num: {len(source_documents)}")
                     saved_docs = [source_documents[0]]
                     for doc in source_documents[1:]:
-                        debug_logger.info(f"rerank doc score: {doc.metadata['score']}")
-                        relative_difference = (saved_docs[0].metadata['score'] - doc.metadata['score']) / saved_docs[0].metadata['score']
+                        debug_logger.info(f"rerank doc rerank_score: {doc.metadata['rerank_score']}, original_score: {doc.metadata['score']}")
+                        relative_difference = (saved_docs[0].metadata['rerank_score'] - doc.metadata['rerank_score']) / saved_docs[0].metadata['rerank_score']
                         if relative_difference > 0.5:
                             break
                         else:

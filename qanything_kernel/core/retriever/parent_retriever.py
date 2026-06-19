@@ -6,7 +6,8 @@ from qanything_kernel.core.retriever.docstrore import MysqlStore
 from qanything_kernel.configs.model_config import DEFAULT_CHILD_CHUNK_SIZE, DEFAULT_PARENT_CHUNK_SIZE, SEPARATORS
 from qanything_kernel.utils.custom_log import debug_logger, insert_logger
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from qanything_kernel.utils.general_utils import num_tokens_embed, get_time_async, normalize_document_metadata
+from qanything_kernel.utils.general_utils import (num_tokens_embed, get_time_async,
+                                                 normalize_document_metadata, set_source_rank)
 import copy
 from typing import List, Optional, Tuple, Dict
 from langchain_core.documents import Document
@@ -238,6 +239,7 @@ class ParentRetriever:
                 doc.metadata['doc_id'] = doc.metadata[self.retriever.id_key]
             default_kb = partition_keys[0] if len(partition_keys) == 1 else ''
             raw_score = doc.metadata.get('score')
+            set_source_rank(doc, 'milvus', idx, milvus_total)
             normalize_document_metadata(doc, retrieval_query=query, default_retrieval_source='milvus',
                                         default_kb_id=default_kb, idx_for_fallback=idx, total_docs=milvus_total,
                                         force_retrieval_query=True)
@@ -309,6 +311,7 @@ class ParentRetriever:
                 if doc_id in es_id_to_score:
                     doc.metadata['score'] = es_id_to_score[doc_id]
                 doc.metadata['retrieval_source'] = 'es'
+                set_source_rank(doc, 'es', idx, es_total)
                 default_kb = partition_keys[0] if len(partition_keys) == 1 else ''
                 normalize_document_metadata(doc, retrieval_query=query, default_retrieval_source='es',
                                             default_kb_id=default_kb, idx_for_fallback=idx, total_docs=es_total,
