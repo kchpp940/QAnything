@@ -96,12 +96,74 @@
                         </p>
                         <Transition name="sourceitem">
                           <div v-show="sourceItem.showDetailDataSource" class="source-content">
-                            <!--                            <p v-html="sourceItem.content?.replaceAll('\n', '<br/>')"></p>-->
                             <HighLightMarkDown :content="sourceItem.content" />
                             <p class="score">
                               <span class="tips">{{ common.correlation }}</span>
                               {{ sourceItem.score }}
                             </p>
+                            <div
+                              v-if="sourceItem.trace_info && sourceItem.trace_info.length"
+                              class="trace-detail-section"
+                            >
+                              <div class="trace-title" @click="toggleTraceDetail(sourceItem)">
+                                <span class="tips">{{ common.traceDetail }}</span>
+                                <SvgIcon
+                                  :name="sourceItem.showTraceDetail ? 'iconup' : 'icondown'"
+                                />
+                              </div>
+                              <Transition name="sourceitem">
+                                <div v-show="sourceItem.showTraceDetail" class="trace-stages">
+                                  <div
+                                    v-for="(traceItem, traceIndex) in sourceItem.trace_info"
+                                    :key="traceIndex"
+                                    :class="[
+                                      'trace-stage-item',
+                                      traceItem.selected ? 'trace-selected' : 'trace-filtered',
+                                    ]"
+                                  >
+                                    <div class="trace-stage-header">
+                                      <span class="trace-stage-name">
+                                        {{ getStageDisplayName(traceItem.stage_name) }}
+                                      </span>
+                                      <span
+                                        :class="[
+                                          'trace-status-badge',
+                                          traceItem.selected
+                                            ? 'status-selected'
+                                            : 'status-filtered',
+                                        ]"
+                                      >
+                                        {{
+                                          traceItem.selected
+                                            ? common.traceSelected
+                                            : common.traceFiltered
+                                        }}
+                                      </span>
+                                    </div>
+                                    <div class="trace-stage-scores">
+                                      <span
+                                        v-if="traceItem.retrieval_score !== null"
+                                        class="trace-score"
+                                      >
+                                        {{ common.traceRetrievalScore }}:
+                                        {{ Number(traceItem.retrieval_score).toFixed(4) }}
+                                      </span>
+                                      <span
+                                        v-if="traceItem.rerank_score !== null"
+                                        class="trace-score"
+                                      >
+                                        {{ common.traceRerankScore }}:
+                                        {{ Number(traceItem.rerank_score).toFixed(4) }}
+                                      </span>
+                                    </div>
+                                    <div v-if="traceItem.filter_reason" class="trace-filter-reason">
+                                      <span class="tips">{{ common.traceFilterReason }}:</span>
+                                      {{ traceItem.filter_reason }}
+                                    </div>
+                                  </div>
+                                </div>
+                              </Transition>
+                            </div>
                           </div>
                         </Transition>
                       </div>
@@ -558,11 +620,36 @@ const send = async () => {
         QA_List.value[QA_List.value.length - 1].answer = res?.source_documents.length
           ? common.searchCompleted
           : common.searchNotFound;
-        QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+        QA_List.value[QA_List.value.length - 1].source = res?.source_documents.map((doc: any) => ({
+          ...doc,
+          showTraceDetail: false,
+          trace_info: [],
+        }));
+
+        if (res?.retrieval_trace) {
+          QA_List.value[QA_List.value.length - 1].retrieval_trace = res.retrieval_trace;
+          const sources = QA_List.value[QA_List.value.length - 1].source;
+          if (sources && res.retrieval_trace.stages) {
+            sources.forEach((source: any) => {
+              source.trace_info = [];
+              res.retrieval_trace.stages.forEach((stage: any) => {
+                const traceDoc = stage.docs.find(
+                  (d: any) => d.doc_id === source.doc_id || d.file_id === source.file_id
+                );
+                if (traceDoc) {
+                  source.trace_info.push({
+                    ...traceDoc,
+                    stage_name: stage.stage,
+                    stage_description: stage.description,
+                  });
+                }
+              });
+            });
+          }
+        }
       }
     } catch (e) {
       console.log('出错', e);
-      // message.error(e.msg || '出错了');
       QA_List.value[QA_List.value.length - 1].answer = e.msg || 'error';
     }
     // 无论成不成功,结束后的操作
@@ -617,7 +704,35 @@ const send = async () => {
         }
 
         if (res?.source_documents?.length) {
-          QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+          QA_List.value[QA_List.value.length - 1].source = res?.source_documents.map(
+            (doc: any) => ({
+              ...doc,
+              showTraceDetail: false,
+              trace_info: [],
+            })
+          );
+        }
+
+        if (res?.retrieval_trace) {
+          QA_List.value[QA_List.value.length - 1].retrieval_trace = res.retrieval_trace;
+          const sources = QA_List.value[QA_List.value.length - 1].source;
+          if (sources && res.retrieval_trace.stages) {
+            sources.forEach((source: any) => {
+              source.trace_info = [];
+              res.retrieval_trace.stages.forEach((stage: any) => {
+                const traceDoc = stage.docs.find(
+                  (d: any) => d.doc_id === source.doc_id || d.file_id === source.file_id
+                );
+                if (traceDoc) {
+                  source.trace_info.push({
+                    ...traceDoc,
+                    stage_name: stage.stage,
+                    stage_description: stage.description,
+                  });
+                }
+              });
+            });
+          }
         }
 
         if (res?.show_images?.length) {
@@ -672,6 +787,22 @@ const showDetail = (item: IChatItem, index) => {
 
 const hideDetail = (item: IChatItem, index) => {
   item.source[index].showDetailDataSource = false;
+};
+
+const toggleTraceDetail = (sourceItem: any) => {
+  sourceItem.showTraceDetail = !sourceItem.showTraceDetail;
+};
+
+const getStageDisplayName = (stageName: string) => {
+  const stageMap: Record<string, string> = {
+    retrieval: common.traceStageRetrieval,
+    web_search: common.traceStageWebSearch,
+    rerank: common.traceStageRerank,
+    topk_filter: common.traceStageTopk,
+    faq_match: common.traceStageFaq,
+    prompt_assembly: common.traceStagePrompt,
+  };
+  return stageMap[stageName] || stageName;
 };
 
 const showSourceList = index => {
@@ -1082,6 +1213,105 @@ $avatar-width: 96px;
         color: #5a47e5;
         text-decoration: underline;
         cursor: pointer;
+      }
+
+      .trace-detail-section {
+        margin-top: 20px;
+        padding-top: 16px;
+        border-top: 1px solid #e8e8e8;
+
+        .trace-title {
+          display: flex;
+          align-items: center;
+          cursor: pointer;
+          margin-bottom: 12px;
+
+          .tips {
+            font-weight: 500;
+            color: #5a47e5;
+          }
+
+          svg {
+            margin-left: 4px;
+          }
+        }
+
+        .trace-stages {
+          display: flex;
+          flex-direction: column;
+          gap: 12px;
+        }
+
+        .trace-stage-item {
+          padding: 12px 16px;
+          border-radius: 8px;
+          border: 1px solid #e8e8e8;
+
+          &.trace-selected {
+            background: #f0f9eb;
+            border-color: #c2e7b0;
+          }
+
+          &.trace-filtered {
+            background: #fef0f0;
+            border-color: #fbc4c4;
+            opacity: 0.85;
+          }
+
+          .trace-stage-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+
+            .trace-stage-name {
+              font-weight: 500;
+              color: #333;
+            }
+
+            .trace-status-badge {
+              padding: 2px 8px;
+              border-radius: 4px;
+              font-size: 12px;
+
+              &.status-selected {
+                background: #67c23a;
+                color: #fff;
+              }
+
+              &.status-filtered {
+                background: #f56c6c;
+                color: #fff;
+              }
+            }
+          }
+
+          .trace-stage-scores {
+            display: flex;
+            gap: 16px;
+            margin-bottom: 8px;
+            font-size: 13px;
+            color: #666;
+
+            .trace-score {
+              background: #f5f7fa;
+              padding: 2px 8px;
+              border-radius: 4px;
+            }
+          }
+
+          .trace-filter-reason {
+            font-size: 13px;
+            color: #f56c6c;
+            line-height: 1.6;
+
+            .tips {
+              color: #909399;
+              min-width: auto;
+              margin-right: 4px;
+            }
+          }
+        }
       }
     }
 

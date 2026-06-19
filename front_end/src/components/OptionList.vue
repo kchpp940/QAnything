@@ -126,25 +126,6 @@
                   "
                 />
               </template>
-              <template v-else-if="column.key === 'progress'">
-                <div class="progress-column">
-                  <div class="progress-bar-wrapper">
-                    <div class="progress-bar-bg">
-                      <div
-                        class="progress-bar-fill"
-                        :style="{ width: `${record.progress || 0}%`, backgroundColor: getProgressColor(record.status) }"
-                      ></div>
-                    </div>
-                    <span class="progress-text">{{ record.progress || 0 }}%</span>
-                  </div>
-                  <div class="stage-info">
-                    <span v-if="record.stage" class="stage-name">{{ getStageName(record.stage) }}</span>
-                    <span v-if="record.stage_status" class="stage-status">
-                      {{ getStageStatusText(record.stage_status) }}
-                    </span>
-                  </div>
-                </div>
-              </template>
               <template v-else-if="column.key === 'status'">
                 <div class="status-box">
                   <span class="icon-file-status">
@@ -158,35 +139,11 @@
                       :name="record.status === 'green' ? 'success' : 'error'"
                     />
                   </span>
-                  <div class="status-text-wrapper">
-                    <span> {{ parseStatus(record.status) }}</span>
-                    <a-tooltip v-if="record.error_message" :title="record.error_message" placement="topLeft">
-                      <span class="error-info">{{ record.error_code }}</span>
-                    </a-tooltip>
-                  </div>
+                  <span> {{ parseStatus(record.status) }}</span>
                 </div>
               </template>
               <template v-else-if="column.key === 'remark'">
                 <div v-if="typeof record.remark === 'string'">{{ record.remark }}</div>
-                <div v-else-if="record.error_message">
-                  <div class="error-detail">
-                    <p class="error-code">{{ record.error_code }}</p>
-                    <p class="error-msg">{{ record.error_message }}</p>
-                    <p v-if="record.retry_count > 0" class="retry-count">
-                      已重试 {{ record.retry_count }} 次
-                    </p>
-                    <div v-if="record.progress_detail && hasCleanupFailures(record.progress_detail)" class="rollback-cleanup-details">
-                      <div class="details-header">{{ common.cleanupFailuresTitle }}</div>
-                      <ul class="details-list">
-                        <li v-for="(f, idx) in getCleanupFailures(record.progress_detail)" :key="idx" class="detail-item failure">
-                          <span class="store-name">[{{ f.store }}]</span>
-                          <span class="residual-info">{{ common.leftResidual }}: {{ f.residual }}</span>
-                          <span class="reason-text">{{ common.reason }}: {{ f.reason }}</span>
-                        </li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
                 <div v-else>
                   <p v-for="(value, key) in record.remark" :key="key">
                     {{ `${key}: ${value}` }}
@@ -194,38 +151,27 @@
                 </div>
               </template>
               <template v-else-if="column.key === 'options'">
-                <div class="options-buttons">
-                  <a-button
-                    v-if="record.status === 'red' && record.retryable && !record.isRetrying"
-                    type="text"
-                    class="retry-item"
-                    :title="common.retryTip"
-                    @click="retryFile(record)"
-                  >
-                    {{ common.retry }}
+                <a-popconfirm
+                  overlay-class-name="del-pop"
+                  placement="topRight"
+                  :title="common.deleteTitle"
+                  :ok-text="common.confirm"
+                  :cancel-text="common.cancel"
+                  @confirm="confirm"
+                >
+                  <!-- :disabled="record.status == 'gray' || record.status === 'yellow'" -->
+                  <a-button type="text" class="delete-item" @click="deleteItem(record)">
+                    {{ common.delete }}
                   </a-button>
-                  <a-spin v-if="record.isRetrying" size="small" />
-                  <a-popconfirm
-                    overlay-class-name="del-pop"
-                    placement="topRight"
-                    :title="common.deleteTitle"
-                    :ok-text="common.confirm"
-                    :cancel-text="common.cancel"
-                    @confirm="confirm"
-                  >
-                    <a-button type="text" class="delete-item" @click="deleteItem(record)">
-                      {{ common.delete }}
-                    </a-button>
-                  </a-popconfirm>
-                  <a-button
-                    type="text"
-                    class="view-item"
-                    :disabled="!(record.status === 'green')"
-                    @click="viewItem(record)"
-                  >
-                    {{ common.view }}
-                  </a-button>
-                </div>
+                </a-popconfirm>
+                <a-button
+                  type="text"
+                  class="view-item"
+                  :disabled="!(record.status === 'green')"
+                  @click="viewItem(record)"
+                >
+                  {{ common.view }}
+                </a-button>
               </template>
             </template>
           </a-table>
@@ -363,7 +309,7 @@ const columns = [
     title: home.documentId,
     dataIndex: 'fileId',
     key: 'fileId',
-    width: '6%',
+    width: '8%',
   },
   {
     title: home.documentName,
@@ -376,13 +322,7 @@ const columns = [
     title: home.documentTag,
     dataIndex: 'fileTag',
     key: 'fileTag',
-    width: '10%',
-  },
-  {
-    title: common.progress,
-    dataIndex: 'progress',
-    key: 'progress',
-    width: '15%',
+    width: '12%',
   },
   {
     title: home.documentStatus,
@@ -395,30 +335,30 @@ const columns = [
     title: home.fileSize,
     dataIndex: 'bytes',
     key: 'bytes',
-    width: '6%',
+    width: '8%',
   },
   {
     title: home.contentLength,
     dataIndex: 'contentLength',
     key: 'contentLength',
-    width: '8%',
+    width: '10%',
   },
   {
     title: home.creationDate,
     dataIndex: 'createtime',
     key: 'createtime',
-    width: '8%',
+    width: '10%',
   },
   {
     title: home.remark,
     dataIndex: 'remark',
     key: 'remark',
-    width: '13%',
+    width: '15%',
   },
   {
     title: home.operate,
     key: 'options',
-    width: '12%',
+    width: '10%',
   },
 ];
 
@@ -651,82 +591,6 @@ const parseStatus = status => {
       break;
   }
   return str;
-};
-
-const getStageName = (stage: string): string => {
-  const stageMap: Record<string, string> = {
-    upload: common.stageUpload,
-    parse: common.stageParse,
-    chunk: common.stageChunk,
-    milvus_insert: common.stageMilvusInsert,
-    es_index: common.stageEsIndex,
-    rollback: common.stageRollback,
-    cleanup: common.stageCleanup,
-    completed: common.stageCompleted,
-    failed: common.stageFailed,
-  };
-  return stageMap[stage] || stage;
-};
-
-const getStageStatusText = (status: string): string => {
-  const statusMap: Record<string, string> = {
-    pending: common.statusPending,
-    running: common.statusRunning,
-    success: common.statusSuccess,
-    failed: common.statusFailed,
-    partial_success: common.statusPartialSuccess,
-  };
-  return statusMap[status] || status;
-};
-
-const hasCleanupFailures = (progressDetail: any): boolean => {
-  if (!progressDetail) return false;
-  const ri = progressDetail.rollback_info;
-  const ci = progressDetail.cleanup_info;
-  return (ri?.has_failure || ci?.has_failure) && (ri?.failures?.length > 0 || ci?.failures?.length > 0);
-};
-
-const getCleanupFailures = (progressDetail: any): Array<any> => {
-  if (!progressDetail) return [];
-  const out: Array<any> = [];
-  const ri = progressDetail.rollback_info;
-  if (ri?.failures?.length > 0) {
-    ri.failures.forEach((f: any) => out.push({ ...f, phase: 'rollback' }));
-  }
-  const ci = progressDetail.cleanup_info;
-  if (ci?.failures?.length > 0) {
-    ci.failures.forEach((f: any) => out.push({ ...f, phase: 'cleanup' }));
-  }
-  return out;
-};
-
-const getProgressColor = (status: string): string => {
-  const colorMap: Record<string, string> = {
-    gray: '#faad14',
-    yellow: '#1890ff',
-    green: '#52c41a',
-    red: '#ff4d4f',
-  };
-  return colorMap[status] || '#1890ff';
-};
-
-const retryFile = async (record: any) => {
-  try {
-    record.isRetrying = true;
-    const res = await resultControl(
-      await urlResquest.retryFile({
-        file_id: record.fileId,
-        kb_id: currentId.value,
-      })
-    );
-    message.success(common.retrySuccess);
-    setTimeout(() => {
-      getDetails();
-    }, 1000);
-  } catch (e: any) {
-    message.error(e.msg || common.retryFailed);
-    record.isRetrying = false;
-  }
 };
 
 const parseFaqStatus = status => {
@@ -1070,105 +934,6 @@ onBeforeUnmount(() => {
         height: 16px;
       }
     }
-
-    .status-text-wrapper {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-start;
-
-      .error-info {
-        font-size: 12px;
-        color: #ff4d4f;
-        margin-top: 2px;
-      }
-    }
-  }
-
-  .progress-column {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-
-    .progress-bar-wrapper {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-
-      .progress-bar-bg {
-        flex: 1;
-        height: 8px;
-        background-color: #f0f0f0;
-        border-radius: 4px;
-        overflow: hidden;
-
-        .progress-bar-fill {
-          height: 100%;
-          border-radius: 4px;
-          transition: width 0.3s ease;
-        }
-      }
-
-      .progress-text {
-        font-size: 12px;
-        font-weight: 500;
-        color: #666;
-        min-width: 36px;
-        text-align: right;
-      }
-    }
-
-    .stage-info {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 12px;
-
-      .stage-name {
-        color: #5a47e5;
-        font-weight: 500;
-      }
-
-      .stage-status {
-        color: #999;
-      }
-    }
-  }
-
-  .error-detail {
-    .error-code {
-      font-size: 12px;
-      font-weight: 500;
-      color: #ff4d4f;
-      margin: 0 0 4px 0;
-    }
-
-    .error-msg {
-      font-size: 12px;
-      color: #666;
-      margin: 0 0 4px 0;
-      line-height: 1.4;
-    }
-
-    .retry-count {
-      font-size: 11px;
-      color: #faad14;
-      margin: 0;
-    }
-  }
-
-  .options-buttons {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-
-    .retry-item {
-      padding: 2px;
-      font-size: 14px;
-      font-weight: normal;
-      line-height: 22px;
-      margin-right: 2px;
-      color: #52c41a;
-    }
   }
 
   //:deep(.ant-table-cell-ellipsis[colstart='2']) {
@@ -1251,50 +1016,6 @@ onBeforeUnmount(() => {
 
 :deep(.ant-table-empty .ant-table-placeholder .ant-table-cell) {
   color: #999999 !important;
-}
-
-:deep(.error-detail) {
-  .rollback-cleanup-details {
-    margin-top: 8px;
-    padding: 6px 8px;
-    background: #fff2e6;
-    border-left: 3px solid #fa8c16;
-    border-radius: 2px;
-
-    .details-header {
-      font-size: 12px;
-      font-weight: 600;
-      color: #d46b08;
-      margin-bottom: 4px;
-    }
-
-    .details-list {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-
-      .detail-item {
-        font-size: 11px;
-        line-height: 1.5;
-        margin-bottom: 3px;
-        color: #613400;
-
-        &.failure {
-          color: #cf1322;
-        }
-
-        .store-name {
-          font-weight: 600;
-          margin-right: 6px;
-        }
-
-        .residual-info,
-        .reason-text {
-          margin-right: 6px;
-        }
-      }
-    }
-  }
 }
 </style>
 

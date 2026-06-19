@@ -39,9 +39,6 @@ enum EUrlKey {
   getKbInfo = 'getKbInfo',
   getTags = 'getTags',
   updateTags = 'updateTags',
-  getFileProgress = 'getFileProgress',
-  retryFile = 'retryFile',
-  getRetryableFiles = 'getRetryableFiles',
 }
 
 interface IUrlValueConfig {
@@ -278,39 +275,6 @@ const urlConfig: IUrlConfig = {
     param: {
       user_id: userId,
       user_info: userPhone,
-    },
-  },
-  // 获取文件处理进度
-  getFileProgress: {
-    type: EUrlType.POST,
-    url: '/local_doc_qa/get_file_progress',
-    param: {
-      user_id: userId,
-      user_info: userPhone,
-      kb_id: '',
-      file_id: '',
-    },
-  },
-  // 重试文件处理
-  retryFile: {
-    type: EUrlType.POST,
-    url: '/local_doc_qa/retry_file',
-    showLoading: true,
-    param: {
-      user_id: userId,
-      user_info: userPhone,
-      kb_id: '',
-      file_id: '',
-    },
-  },
-  // 获取可重试文件列表
-  getRetryableFiles: {
-    type: EUrlType.POST,
-    url: '/local_doc_qa/get_retryable_files',
-    param: {
-      user_id: userId,
-      user_info: userPhone,
-      kb_ids: [],
     },
   },
 };

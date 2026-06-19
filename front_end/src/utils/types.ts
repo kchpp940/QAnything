@@ -15,6 +15,30 @@ export interface IKnowledgeItem {
   edit?: boolean;
 }
 
+export interface ITraceDoc {
+  doc_id: string;
+  file_id: string;
+  file_name: string;
+  content: string;
+  stage: string;
+  retrieval_score: number | null;
+  rerank_score: number | null;
+  selected: boolean;
+  filter_reason: string | null;
+}
+
+export interface ITraceStage {
+  stage: string;
+  description: string;
+  docs: ITraceDoc[];
+}
+
+export interface IRetrievalTrace {
+  original_query: string;
+  retrieval_query: string;
+  stages: ITraceStage[];
+}
+
 export interface IDataSourceItem {
   dataSource?: string; //数据来源
   detailDataSource?: string; //详细来源信息
@@ -24,6 +48,8 @@ export interface IDataSourceItem {
   file_id: string | null; // 来源文件id（知识库的文件）
   file_url: string | null; // 来源网址（联网检索）
   showDetailDataSource?: boolean; //是否展示详细来源信息
+  showTraceDetail?: boolean; //是否展示溯源详情
+  trace_info?: ITraceDoc[]; //该来源的各阶段溯源信息
 }
 
 export interface IChatItem {
@@ -42,6 +68,7 @@ export interface IChatItem {
   qaId?: any; // 同上
 
   itemInfo?: IChatItemInfo; // 当前对话相关信息 token time chatSetting
+  retrieval_trace?: IRetrievalTrace; // 检索溯源信息
 }
 
 // 历史记录
@@ -92,23 +119,7 @@ export interface IUrlListItem {
   borderRadius?: string;
 }
 
-// 文件处理阶段
-export type FileStage = 'upload' | 'parse' | 'chunk' | 'milvus_insert' | 'es_index' | 'completed' | 'failed' | 'rollback';
-
-// 阶段状态
-export type FileStageStatus = 'pending' | 'running' | 'success' | 'failed';
-
-// 单阶段进度详情
-export interface IStageProgressDetail {
-  status: FileStageStatus;
-  progress: number;
-  error_code?: string;
-  error_message?: string;
-  start_time?: string;
-  end_time?: string;
-}
-
-// 上传文件
+//上传文件
 export interface IFileListItem {
   file?: File; // 这个只有在上传时候加，接收没有这个
   file_name: string;
@@ -119,20 +130,6 @@ export interface IFileListItem {
   text?: string;
   order?: number;
   bytes: number;
-
-  // 新增进度追踪字段
-  stage?: FileStage;
-  stage_status?: FileStageStatus;
-  progress?: number;
-  error_code?: string;
-  error_message?: string;
-  retryable?: boolean;
-  retry_count?: number;
-  progress_detail?: Record<FileStage, IStageProgressDetail>;
-
-  // UI状态
-  showRetry?: boolean;
-  isRetrying?: boolean;
 }
 
 // 模型设置

@@ -27,14 +27,6 @@ interface IDataSource {
   status: Status;
   createtime: string;
   remark: { [key: string]: string } | string;
-  progress?: number;
-  stage?: string;
-  stage_status?: string;
-  error_code?: string;
-  error_message?: string;
-  retryable?: boolean;
-  retry_count?: number;
-  isRetrying?: boolean;
 }
 
 export const useOptiionList = defineStore(
@@ -156,13 +148,6 @@ export const useOptiionList = defineStore(
           contentLength: item?.content_length,
           createtime: formatDate(item?.timestamp),
           remark: item?.status === 'gray' ? '' : computedRemark(item?.msg, item?.status),
-          progress: item?.progress ?? 0,
-          stage: item?.stage,
-          stage_status: item?.stage_status,
-          error_code: item?.error_code,
-          error_message: item?.error_message,
-          retryable: item?.retryable ?? false,
-          retry_count: item?.retry_count ?? 0,
         });
       });
 

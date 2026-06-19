@@ -7,9 +7,6 @@ from qanything_kernel.configs.model_config import (BOT_DESC, BOT_IMAGE, BOT_PROM
                                                    DEFAULT_PARENT_CHUNK_SIZE, MAX_CHARS, VECTOR_SEARCH_TOP_K,
                                                    UPLOAD_ROOT_PATH, IMAGES_ROOT_PATH)
 from qanything_kernel.utils.general_utils import *
-from qanything_kernel.utils.file_progress_tracker import (
-    FileProgressTracker, FileStage, ErrorCode
-)
 from langchain.schema import Document
 from sanic.response import ResponseStream
 from sanic.response import json as sanic_json
@@ -33,8 +30,7 @@ __all__ = ["new_knowledge_base", "upload_files", "list_kbs", "list_docs", "delet
            "rename_knowledge_base", "get_total_status", "clean_files_by_status", "upload_weblink", "local_doc_chat",
            "document", "upload_faqs", "get_doc_completed", "get_qa_info", "get_user_id", "get_doc",
            "get_rerank_results", "get_user_status", "health_check", "update_chunks", "get_file_base64",
-           "get_random_qa", "get_related_qa", "new_bot", "delete_bot", "update_bot", "get_bot_info",
-           "get_file_progress", "retry_file", "get_retryable_files"]
+           "get_random_qa", "get_related_qa", "new_bot", "delete_bot", "update_bot", "get_bot_info"]
 
 INVALID_USER_ID = f"fail, Invalid user_id: . user_id 必须只含有字母，数字和下划线且字母开头"
 
@@ -172,18 +168,8 @@ async def upload_weblink(req: request):
         msg = local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
                                                    chunk_size, timestamp, url)
         debug_logger.info(f"{url}, {file_name}, {file_id}, {msg}")
-
-        progress_tracker = FileProgressTracker(local_doc_qa.milvus_summary)
-        progress_data = progress_tracker.create_initial_progress(file_id, file_name)
-        progress_data = progress_tracker.update_stage_start(progress_data, FileStage.UPLOAD)
-        progress_data = progress_tracker.update_stage_progress(progress_data, FileStage.UPLOAD, 100)
-        progress_data = progress_tracker.update_stage_success(progress_data, FileStage.UPLOAD)
-        progress_tracker.save_progress(file_id, progress_data)
-
         data.append({"file_id": file_id, "file_name": file_name, "file_url": url, "status": "gray", "bytes": 0,
-                     "timestamp": timestamp,
-                     "progress": progress_data["overall_progress"],
-                     "stage": progress_data["current_stage"]})
+                     "timestamp": timestamp})
         # asyncio.create_task(local_doc_qa.insert_files_to_milvus(user_id, kb_id, [local_file]))
     if exist_file_names:
         msg = f'warning，当前的mode是soft，无法上传同名文件{exist_file_names}，如果想强制上传同名文件，请设置mode：strong'
@@ -276,19 +262,9 @@ async def upload_files(req: request):
         msg = local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
                                                    chunk_size, timestamp)
         debug_logger.info(f"{file_name}, {file_id}, {msg}")
-
-        progress_tracker = FileProgressTracker(local_doc_qa.milvus_summary)
-        progress_data = progress_tracker.create_initial_progress(file_id, file_name)
-        progress_data = progress_tracker.update_stage_start(progress_data, FileStage.UPLOAD)
-        progress_data = progress_tracker.update_stage_progress(progress_data, FileStage.UPLOAD, 100)
-        progress_data = progress_tracker.update_stage_success(progress_data, FileStage.UPLOAD)
-        progress_tracker.save_progress(file_id, progress_data)
-
         data.append(
             {"file_id": file_id, "file_name": file_name, "status": "gray", "bytes": len(local_file.file_content),
-             "timestamp": timestamp, "estimated_chars": chars,
-             "progress": progress_data["overall_progress"],
-             "stage": progress_data["current_stage"]})
+             "timestamp": timestamp, "estimated_chars": chars})
 
     # asyncio.create_task(local_doc_qa.insert_files_to_milvus(user_id, kb_id, local_files))
     if exist_file_names:
@@ -425,53 +401,27 @@ async def list_docs(req: request):
     page_limit = safe_get(req, 'page_limit', 10)  # 默认每页显示10条记录
     data = []
     if file_id is None:
-        file_infos = local_doc_qa.milvus_summary.get_files_with_progress(user_id, kb_id)
+        file_infos = local_doc_qa.milvus_summary.get_files(user_id, kb_id)
     else:
-        file_infos = local_doc_qa.milvus_summary.get_files_with_progress(user_id, kb_id, file_id)
+        file_infos = local_doc_qa.milvus_summary.get_files(user_id, kb_id, file_id)
     status_count = {}
+    # msg_map = {'gray': "已上传到服务器，进入上传等待队列",
+    #            'red': "上传出错，请删除后重试或联系工作人员",
+    #            'yellow': "已进入上传队列，请耐心等待", 'green': "上传成功"}
     for file_info in file_infos:
-        status = file_info['status']
+        status = file_info[2]
         if status not in status_count:
             status_count[status] = 1
         else:
             status_count[status] += 1
-
-        file_data = {
-            "file_id": file_info['file_id'],
-            "file_name": file_info['file_name'],
-            "status": file_info['status'],
-            "bytes": file_info['file_size'],
-            "content_length": file_info['content_length'],
-            "timestamp": file_info['timestamp'],
-            "file_location": file_info['file_location'],
-            "file_url": file_info['file_url'],
-            "chunks_number": file_info['chunk_size'],
-            "msg": file_info['msg'],
-            "stage": file_info.get('stage'),
-            "stage_status": file_info.get('stage_status'),
-            "progress": file_info.get('progress', 0),
-            "error_code": file_info.get('error_code'),
-            "error_message": file_info.get('error_message'),
-            "retryable": bool(file_info.get('retryable', 0)),
-            "retry_count": file_info.get('retry_count', 0),
-        }
-
-        if file_info.get('progress_detail'):
-            try:
-                import json
-                progress_detail = json.loads(file_info['progress_detail'])
-                file_data["progress_detail"] = progress_detail
-            except Exception:
-                file_data["progress_detail"] = None
-
-        data.append(file_data)
-
-        if file_info['file_name'].endswith('.faq'):
-            faq_info = local_doc_qa.milvus_summary.get_faq(file_info['file_id'])
-            if faq_info:
-                user_id_faq, kb_id_faq, question, answer, nos_keys = faq_info
-                data[-1]['question'] = question
-                data[-1]['answer'] = answer
+        data.append({"file_id": file_info[0], "file_name": file_info[1], "status": file_info[2], "bytes": file_info[3],
+                     "content_length": file_info[4], "timestamp": file_info[5], "file_location": file_info[6],
+                     "file_url": file_info[7], "chunks_number": file_info[8], "msg": file_info[9]})
+        if file_info[1].endswith('.faq'):
+            faq_info = local_doc_qa.milvus_summary.get_faq(file_info[0])
+            user_id, kb_id, question, answer, nos_keys = faq_info
+            data[-1]['question'] = question
+            data[-1]['answer'] = answer
 
     # data根据timestamp排序，时间越新的越靠前
     data = sorted(data, key=lambda x: int(x['timestamp']), reverse=True)
@@ -893,7 +843,8 @@ async def local_doc_chat(req: request):
                         "source_documents": source_documents,
                         "retrieval_documents": retrieval_documents,
                         "time_record": formatted_time_record,
-                        "show_images": resp.get('show_images', [])
+                        "show_images": resp.get('show_images', []),
+                        "retrieval_trace": resp.get('retrieval_trace', None)
                     }
                 else:
                     time_record['rollback_length'] = resp.get('rollback_length', 0)
@@ -943,7 +894,9 @@ async def local_doc_chat(req: request):
             pass
         if only_need_search_results:
             return sanic_json(
-                {"code": 200, "question": question, "source_documents": format_source_documents(resp)})
+                {"code": 200, "question": question,
+                 "source_documents": format_source_documents(resp["source_documents"]),
+                 "retrieval_trace": resp.get("retrieval_trace", None)})
         retrieval_documents = format_source_documents(resp["retrieval_documents"])
         source_documents = format_source_documents(resp["source_documents"])
         formatted_time_record = format_time_record(time_record)
@@ -959,7 +912,8 @@ async def local_doc_chat(req: request):
                            "response": resp["result"], "model": model,
                            "history": history, "condense_question": resp['condense_question'],
                            "source_documents": source_documents, "retrieval_documents": retrieval_documents,
-                           "time_record": formatted_time_record})
+                           "time_record": formatted_time_record,
+                           "retrieval_trace": resp.get('retrieval_trace', None)})
 
 
 @get_time_async
@@ -1511,114 +1465,3 @@ async def get_file_base64(req: request):
     with open(file_location, "rb") as f:
         file_base64 = base64.b64encode(f.read()).decode()
     return sanic_json({"code": 200, "msg": "success", "file_base64": file_base64})
-
-
-@get_time_async
-async def get_file_progress(req: request):
-    local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
-    user_id = safe_get(req, 'user_id')
-    user_info = safe_get(req, 'user_info', "1234")
-    passed, msg = check_user_id_and_user_info(user_id, user_info)
-    if not passed:
-        return sanic_json({"code": 2001, "msg": msg})
-    user_id = user_id + '__' + user_info
-    file_id = safe_get(req, 'file_id')
-    kb_id = safe_get(req, 'kb_id')
-    kb_id = correct_kb_id(kb_id)
-    debug_logger.info("get_file_progress %s %s %s", user_id, kb_id, file_id)
-
-    if not file_id or not kb_id:
-        return sanic_json({"code": 2005, "msg": "fail, file_id and kb_id are required"})
-
-    progress_info = local_doc_qa.milvus_summary.get_file_progress_info(file_id, user_id=user_id, kb_id=kb_id)
-    if not progress_info:
-        return sanic_json({"code": 2004, "msg": "fail, file not found or access denied"})
-
-    response_data = {
-        "file_id": progress_info.get('file_id'),
-        "file_name": progress_info.get('file_name'),
-        "status": progress_info.get('status'),
-        "stage": progress_info.get('stage'),
-        "stage_status": progress_info.get('stage_status'),
-        "progress": progress_info.get('progress', 0),
-        "error_code": progress_info.get('error_code'),
-        "error_message": progress_info.get('error_message'),
-        "retryable": bool(progress_info.get('retryable', 0)),
-        "retry_count": progress_info.get('retry_count', 0),
-    }
-
-    if progress_info.get('progress_detail'):
-        try:
-            import json
-            progress_detail = json.loads(progress_info['progress_detail'])
-            response_data["progress_detail"] = progress_detail
-        except Exception:
-            response_data["progress_detail"] = None
-
-    return sanic_json({"code": 200, "msg": "success", "data": response_data})
-
-
-@get_time_async
-async def retry_file(req: request):
-    local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
-    user_id = safe_get(req, 'user_id')
-    user_info = safe_get(req, 'user_info', "1234")
-    passed, msg = check_user_id_and_user_info(user_id, user_info)
-    if not passed:
-        return sanic_json({"code": 2001, "msg": msg})
-    user_id = user_id + '__' + user_info
-    file_id = safe_get(req, 'file_id')
-    kb_id = safe_get(req, 'kb_id')
-    kb_id = correct_kb_id(kb_id)
-    debug_logger.info("retry_file %s %s %s", user_id, kb_id, file_id)
-
-    if not file_id or not kb_id:
-        return sanic_json({"code": 2005, "msg": "fail, file_id and kb_id are required"})
-
-    progress_info = local_doc_qa.milvus_summary.get_file_progress_info(file_id, user_id=user_id, kb_id=kb_id)
-    if not progress_info:
-        return sanic_json({"code": 2004, "msg": "fail, file not found or access denied"})
-
-    if progress_info.get('status') != 'red':
-        return sanic_json({"code": 2002, "msg": "fail, only failed files can be retried"})
-
-    if not progress_info.get('retryable', 0):
-        return sanic_json({"code": 2002, "msg": "fail, this file cannot be retried"})
-
-    result = local_doc_qa.milvus_summary.retry_file(file_id, user_id, kb_id)
-    if not result:
-        return sanic_json({"code": 500, "msg": "fail, retry operation failed"})
-
-    debug_logger.info(f"File retry queued: {file_id}, will be picked up by insert_files_service")
-
-    return sanic_json({"code": 200, "msg": "success, file retry queued"})
-
-
-@get_time_async
-async def get_retryable_files(req: request):
-    local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
-    user_id = safe_get(req, 'user_id')
-    user_info = safe_get(req, 'user_info', "1234")
-    passed, msg = check_user_id_and_user_info(user_id, user_info)
-    if not passed:
-        return sanic_json({"code": 2001, "msg": msg})
-    user_id = user_id + '__' + user_info
-    kb_ids = safe_get(req, 'kb_ids', [])
-    debug_logger.info("get_retryable_files %s %s", user_id, kb_ids)
-
-    if isinstance(kb_ids, str):
-        kb_ids = [kb_ids]
-
-    retryable_files = local_doc_qa.milvus_summary.get_retryable_files(user_id, kb_ids)
-    data = []
-    for file_info in retryable_files:
-        data.append({
-            "file_id": file_info['file_id'],
-            "file_name": file_info['file_name'],
-            "kb_id": file_info['kb_id'],
-            "error_code": file_info.get('error_code'),
-            "error_message": file_info.get('error_message'),
-            "retry_count": file_info.get('retry_count', 0),
-        })
-
-    return sanic_json({"code": 200, "msg": "success", "data": data})

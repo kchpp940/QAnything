@@ -42,62 +42,34 @@
               </p>
             </div>
           </div>
-          <div
-            v-show="uploadFileList.length > 0"
-            class="upload-progress-box"
-          >
-            <div class="progress-header">
-              <span class="title">{{ common.progress }}</span>
-              <span class="file-count">{{ uploadFileList.length }} 个文件</span>
-            </div>
-            <ul class="progress-list">
-              <li v-for="(item, index) in uploadFileList" :key="index" class="progress-item">
-                <div class="file-info">
-                  <span class="file-name">{{ item.file_name }}</span>
-                  <span class="file-size">{{ formatFileSize(item.bytes) }}</span>
-                </div>
-                <div class="progress-bar-wrapper">
-                  <div class="progress-bar-bg">
-                    <div
-                      class="progress-bar-fill"
-                      :style="{ width: `${item.progress || 0}%`, backgroundColor: getProgressColor(item.status) }"
-                    ></div>
-                  </div>
-                  <span class="progress-text">{{ item.progress || 0 }}%</span>
-                </div>
-                <div class="status-info">
-                  <span v-if="item.stage" class="stage">{{ getStageName(item.stage) }}</span>
-                  <span v-if="item.stage_status" class="stage-status">{{ getStageStatusText(item.stage_status) }}</span>
-                  <span v-if="item.status === 'loading'" class="loading-text">{{ common.parsing }}</span>
-                  <span v-else-if="item.status === 'success'" class="success-text">{{ common.upSucceeded }}</span>
-                  <span v-else-if="item.status === 'error'" class="error-text">
-                    {{ item.error_message || item.errorText || common.upFailed }}
-                  </span>
-                </div>
-                <div v-if="item.progress_detail && hasCleanupFailures(item.progress_detail)" class="rollback-cleanup-details">
-                  <div class="details-header">{{ common.cleanupFailuresTitle }}</div>
-                  <ul class="details-list">
-                    <li v-for="(f, idx) in getCleanupFailures(item.progress_detail)" :key="idx" class="detail-item failure">
-                      <span class="store-name">[{{ f.store }}]</span>
-                      <span class="residual-info">{{ common.leftResidual }}: {{ f.residual }}</span>
-                      <span class="reason-text">{{ common.reason }}: {{ f.reason }}</span>
-                    </li>
-                  </ul>
-                </div>
-                <div v-if="item.status === 'error' && item.retryable" class="retry-section">
-                  <a-button
-                    type="link"
-                    size="small"
-                    class="retry-btn"
-                    :loading="item.isRetrying"
-                    @click="retryUploadFile(item)"
-                  >
-                    {{ common.retry }}
-                  </a-button>
-                </div>
-              </li>
-            </ul>
-          </div>
+          <!--          <div-->
+          <!--            v-show="showUploadList && props.dialogType !== 1"-->
+          <!--            class="upload-box"-->
+          <!--            :class="showUploadList ? 'upload-list' : ''"-->
+          <!--          >-->
+          <!--            <UploadList>-->
+          <!--              <template #default>-->
+          <!--                <ul class="list">-->
+          <!--                  <li v-for="(item, index) in uploadFileList" :key="index">-->
+          <!--                    <span class="name">{{ item.file_name }}</span>-->
+          <!--                    <div class="status-box">-->
+          <!--                      <SvgIcon v-if="item.status != 'loading'" :name="item.status" />-->
+          <!--                      <img-->
+          <!--                        v-else-->
+          <!--                        class="loading"-->
+          <!--                        src="../assets/home/icon-loading.png"-->
+          <!--                        alt="loading"-->
+          <!--                      />-->
+          <!--                      <span class="status">{{-->
+          <!--                        item.status == 'loading' ? item.text : item.errorText-->
+          <!--                      }}</span>-->
+          <!--                    </div>-->
+          <!--                  </li>-->
+          <!--                </ul>-->
+          <!--              </template>-->
+          <!--            </UploadList>-->
+          <!--            &lt;!&ndash;            <div class="note">{{ common.errorTip }}</div>&ndash;&gt;-->
+          <!--          </div>-->
         </div>
       </div>
       <template #footer>
@@ -130,15 +102,15 @@ import { useKnowledgeModal } from '@/store/useKnowledgeModal';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
 import { useOptiionList } from '@/store/useOptiionList';
 import SvgIcon from './SvgIcon.vue';
+// import UploadList from '@/components/UploadList.vue';
 import { pageStatus } from '@/utils/enum';
-import { IFileListItem, FileStage, FileStageStatus } from '@/utils/types';
+import { IFileListItem } from '@/utils/types';
 import { message, notification } from 'ant-design-vue';
 import { userId, userPhone } from '@/services/urlConfig';
 import { getLanguage } from '@/language/index';
 import { useUploadFiles } from '@/store/useUploadFiles';
 import { useChatSetting } from '@/store/useChatSetting';
-import urlResquest from '@/services/urlConfig';
-import { resultControl } from '@/utils/utils';
+// import { useLanguage } from '@/store/useLanguage';
 
 // const { language } = storeToRefs(useLanguage());
 const common = getLanguage().common;
@@ -317,32 +289,31 @@ const uplolad = async () => {
         if (data.data.length === 0) {
           // 上传相同文件
           message.warn(data.msg || '出错了');
+          // handleCancel();
           notification.close('upload');
-          list.forEach(item => {
-            uploadFileList.value[item.order].status = 'error';
-            uploadFileList.value[item.order].errorText = data?.msg || common.upFailed;
-          });
+          if (props.dialogType === 1) {
+            list.forEach(item => {
+              uploadFileList.value[item.order].status = 'error';
+              uploadFileList.value[item.order].errorText = data?.msg || common.upFailed;
+            });
+          }
           return;
         }
         openNotification(1);
-
-        list.forEach((item, index) => {
-          const fileData = data.data[index];
-          let status = fileData.status;
-          if (status == 'green' || status == 'gray') {
-            status = 'success';
-          } else {
-            status = 'error';
-          }
-          uploadFileList.value[item.order].status = status;
-          uploadFileList.value[item.order].file_id = fileData.file_id;
-          uploadFileList.value[item.order].bytes = fileData.bytes;
-          uploadFileList.value[item.order].progress = fileData.progress || 5;
-          uploadFileList.value[item.order].stage = fileData.stage || 'upload';
-          uploadFileList.value[item.order].errorText = common.upSucceeded;
-        });
-
-        startProgressPolling();
+        if (props.dialogType === 1) {
+          list.forEach((item, index) => {
+            let status = data.data[index].status;
+            if (status == 'green' || status == 'gray') {
+              status = 'success';
+            } else {
+              status = 'error';
+            }
+            uploadFileList.value[item.order].status = status;
+            uploadFileList.value[item.order].file_id = data.data[index].file_id;
+            uploadFileList.value[item.order].bytes = data.data[index].bytes;
+            uploadFileList.value[item.order].errorText = common.upSucceeded;
+          });
+        }
       } else {
         message.error(data.msg || '出错了');
         notification.close('upload');
@@ -381,181 +352,9 @@ const handleCancel = () => {
   setModalVisible(false);
 };
 
-const formatFileSize = (bytes: number): string => {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-};
-
-const getStageName = (stage: string): string => {
-  const stageMap: Record<string, string> = {
-    upload: common.stageUpload,
-    parse: common.stageParse,
-    chunk: common.stageChunk,
-    milvus_insert: common.stageMilvusInsert,
-    es_index: common.stageEsIndex,
-    rollback: common.stageRollback,
-    cleanup: common.stageCleanup,
-    completed: common.stageCompleted,
-    failed: common.stageFailed,
-  };
-  return stageMap[stage] || stage;
-};
-
-const getStageStatusText = (status: string): string => {
-  const statusMap: Record<string, string> = {
-    pending: common.statusPending,
-    running: common.statusRunning,
-    success: common.statusSuccess,
-    failed: common.statusFailed,
-    partial_success: common.statusPartialSuccess,
-  };
-  return statusMap[status] || status;
-};
-
-const hasCleanupFailures = (progressDetail: any): boolean => {
-  if (!progressDetail) return false;
-  const ri = progressDetail.rollback_info;
-  const ci = progressDetail.cleanup_info;
-  return (ri?.has_failure || ci?.has_failure) && (ri?.failures?.length > 0 || ci?.failures?.length > 0);
-};
-
-const getCleanupFailures = (progressDetail: any): Array<any> => {
-  if (!progressDetail) return [];
-  const out: Array<any> = [];
-  const ri = progressDetail.rollback_info;
-  if (ri?.failures?.length > 0) {
-    ri.failures.forEach((f: any) => out.push({ ...f, phase: 'rollback' }));
-  }
-  const ci = progressDetail.cleanup_info;
-  if (ci?.failures?.length > 0) {
-    ci.failures.forEach((f: any) => out.push({ ...f, phase: 'cleanup' }));
-  }
-  return out;
-};
-
-const getProgressColor = (status: string): string => {
-  const colorMap: Record<string, string> = {
-    gray: '#faad14',
-    yellow: '#1890ff',
-    green: '#52c41a',
-    red: '#ff4d4f',
-    loading: '#1890ff',
-    success: '#52c41a',
-    error: '#ff4d4f',
-  };
-  return colorMap[status] || '#1890ff';
-};
-
-const progressPollingTimer = ref<number | null>(null);
-
-const startProgressPolling = () => {
-  if (progressPollingTimer.value) {
-    clearInterval(progressPollingTimer.value);
-  }
-
-  const pollProgress = async () => {
-    const processingFiles = uploadFileList.value.filter(
-      item => 
-        item.file_id && 
-        item.status !== 'error' && 
-        (item.status === 'loading' || 
-         item.progress === undefined || 
-         item.progress < 100)
-    );
-
-    if (processingFiles.length === 0) {
-      if (progressPollingTimer.value) {
-        clearInterval(progressPollingTimer.value);
-        progressPollingTimer.value = null;
-      }
-      return;
-    }
-
-    for (const file of processingFiles) {
-      if (!file.file_id) continue;
-
-      try {
-        const res: any = await resultControl(
-          await urlResquest.getFileProgress({
-            file_id: file.file_id,
-            kb_id: currentId.value,
-          })
-        );
-
-        if (res && res.data) {
-          file.progress = res.data.progress;
-          file.stage = res.data.stage;
-          file.stage_status = res.data.stage_status;
-          file.error_code = res.data.error_code;
-          file.error_message = res.data.error_message;
-          file.retryable = res.data.retryable;
-          file.retry_count = res.data.retry_count;
-          file.progress_detail = res.data.progress_detail || null;
-
-          if (res.data.status === 'green') {
-            file.status = 'success';
-          } else if (res.data.status === 'red') {
-            file.status = 'error';
-          } else {
-            file.status = 'loading';
-          }
-        }
-      } catch (e) {
-        console.error('Progress polling error:', e);
-      }
-    }
-
-    const allCompleted = uploadFileList.value.every(
-      item => item.status === 'success' || item.status === 'error'
-    );
-
-    if (allCompleted) {
-      if (progressPollingTimer.value) {
-        clearInterval(progressPollingTimer.value);
-        progressPollingTimer.value = null;
-      }
-    }
-  };
-
-  pollProgress();
-  progressPollingTimer.value = window.setInterval(pollProgress, 3000);
-};
-
-const retryUploadFile = async (item: IFileListItem) => {
-  try {
-    item.isRetrying = true;
-    const res = await resultControl(
-      await urlResquest.retryFile({
-        file_id: item.file_id,
-        kb_id: currentId.value,
-      })
-    );
-    message.success(common.retrySuccess);
-    item.status = 'loading';
-    item.progress = 0;
-    item.stage = 'upload';
-    item.stage_status = 'pending';
-    item.error_message = undefined;
-    item.error_code = undefined;
-    item.retryable = false;
-    startProgressPolling();
-  } catch (e: any) {
-    message.error(e.msg || common.retryFailed);
-  } finally {
-    item.isRetrying = false;
-  }
-};
-
 onBeforeUnmount(() => {
   if (timer.value) {
     clearTimeout(timer.value);
-  }
-  if (progressPollingTimer.value) {
-    clearInterval(progressPollingTimer.value);
-    progressPollingTimer.value = null;
   }
 });
 </script>
@@ -566,9 +365,7 @@ onBeforeUnmount(() => {
 
   .box {
     flex: 1;
-    min-height: 248px;
-    max-height: 400px;
-    overflow-y: auto;
+    height: 248px;
     border-radius: 6px;
     background: #f9f9fc;
     box-sizing: border-box;
@@ -756,187 +553,6 @@ onBeforeUnmount(() => {
 
 .upload-btn {
   background: #5147e5 !important;
-}
-
-.upload-progress-box {
-  padding: 16px;
-  background: #fff;
-  border-top: 1px solid #ededed;
-
-  .progress-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 12px;
-
-    .title {
-      font-size: 14px;
-      font-weight: 500;
-      color: #333;
-    }
-
-    .file-count {
-      font-size: 12px;
-      color: #999;
-    }
-  }
-
-  .progress-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    max-height: 200px;
-    overflow-y: auto;
-
-    .progress-item {
-      padding: 12px;
-      background: #f9f9fc;
-      border-radius: 6px;
-      margin-bottom: 8px;
-
-      &:last-child {
-        margin-bottom: 0;
-      }
-
-      .file-info {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 8px;
-
-        .file-name {
-          font-size: 13px;
-          color: #333;
-          font-weight: 500;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          max-width: 280px;
-        }
-
-        .file-size {
-          font-size: 12px;
-          color: #999;
-          flex-shrink: 0;
-          margin-left: 8px;
-        }
-      }
-
-      .progress-bar-wrapper {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 6px;
-
-        .progress-bar-bg {
-          flex: 1;
-          height: 6px;
-          background: #e8e8e8;
-          border-radius: 3px;
-          overflow: hidden;
-
-          .progress-bar-fill {
-            height: 100%;
-            border-radius: 3px;
-            transition: width 0.3s ease;
-          }
-        }
-
-        .progress-text {
-          font-size: 12px;
-          font-weight: 500;
-          color: #666;
-          min-width: 32px;
-          text-align: right;
-        }
-      }
-
-      .status-info {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        font-size: 12px;
-
-        .stage {
-          color: #5a47e5;
-          font-weight: 500;
-        }
-
-        .stage-status {
-          color: #999;
-        }
-
-        .loading-text {
-          color: #1890ff;
-        }
-
-        .success-text {
-          color: #52c41a;
-        }
-
-        .error-text {
-          color: #ff4d4f;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-          max-width: 200px;
-        }
-      }
-
-      .retry-section {
-        margin-top: 6px;
-
-        .retry-btn {
-          padding: 0;
-          height: auto;
-          font-size: 12px;
-          color: #52c41a;
-        }
-      }
-
-      .rollback-cleanup-details {
-        margin-top: 6px;
-        padding: 6px 8px;
-        background: #fff2e6;
-        border-left: 3px solid #fa8c16;
-        border-radius: 2px;
-
-        .details-header {
-          font-size: 12px;
-          font-weight: 600;
-          color: #d46b08;
-          margin-bottom: 4px;
-        }
-
-        .details-list {
-          list-style: none;
-          margin: 0;
-          padding: 0;
-
-          .detail-item {
-            font-size: 11px;
-            line-height: 1.5;
-            margin-bottom: 3px;
-            color: #613400;
-
-            &.failure {
-              color: #cf1322;
-            }
-
-            .store-name {
-              font-weight: 600;
-              margin-right: 6px;
-            }
-
-            .residual-info,
-            .reason-text {
-              margin-right: 6px;
-            }
-          }
-        }
-      }
-    }
-  }
 }
 </style>
 <style lang="scss">
