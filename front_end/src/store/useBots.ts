@@ -144,7 +144,28 @@ export const useBots = defineStore('useBots', () => {
       return templateDefaultsMap.value[templateId];
     }
     const local = getLocalTemplateById(templateId);
+    if (local) {
+      console.warn(
+        `[useBots] getTemplateDefaults('${templateId}'): backend defaults missing, falling back to local sceneTemplates.ts. ` +
+          `This may cause drift from server-side resolver.`
+      );
+    }
     return local?.defaults || null;
+  };
+
+  const getTemplateDefaultsStrict = (templateId: string): Record<string, any> | null => {
+    if (!templateId) return null;
+    if (curBot.value && curBot.value.template_defaults && curBot.value.template_id === templateId) {
+      return curBot.value.template_defaults;
+    }
+    if (templateDefaultsMap.value[templateId]) {
+      return templateDefaultsMap.value[templateId];
+    }
+    console.error(
+      `[useBots] getTemplateDefaultsStrict('${templateId}'): backend defaults not available. ` +
+        `Did you call fetchTemplates() before switching template?`
+    );
+    return null;
   };
 
   const getTemplateById = (templateId: string) => {
@@ -262,6 +283,7 @@ export const useBots = defineStore('useBots', () => {
     noTemplateDefaults,
     fetchTemplates,
     getTemplateDefaults,
+    getTemplateDefaultsStrict,
     getTemplateById,
   };
 });

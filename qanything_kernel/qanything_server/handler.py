@@ -1598,6 +1598,8 @@ async def update_bot(req: request):
                            "schema_version": current_schema_version,
                            "merged_config": new_merged,
                            "user_overrides": overrides_to_persist,
+                           "overridden_fields": compute_overridden_fields(new_template_id, user_overrides_str, new_template_version),
+                           "template_defaults": get_template_defaults(new_template_id, new_template_version),
                        }})
 
 

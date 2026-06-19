@@ -152,6 +152,7 @@ const {
   setUserOverrides,
   fetchTemplates,
   getTemplateDefaults,
+  getTemplateDefaultsStrict,
 } = useBots();
 const { setChatSettingConfigured } = useChatSetting();
 const { chatSettingFormActive } = storeToRefs(useChatSetting());
@@ -195,17 +196,18 @@ onMounted(async () => {
   }
 });
 
-const onTemplateChange = (templateId: string) => {
+const onTemplateChange = async (templateId: string) => {
   activeTemplateId.value = templateId;
   applyTemplate(templateId);
-  if (templateId) {
-    const defaults = getTemplateDefaults(templateId);
-    if (defaults) {
-      roleSetting.value = defaults.prompt_setting || '';
-      welcomeMessage.value = defaults.welcome_message || '';
-      answerStyle.value = defaults.answer_style || '';
-      message.success(bots.templateApplied);
-    }
+  if (!templateId) return;
+  const defaults = getTemplateDefaultsStrict(templateId);
+  if (defaults) {
+    roleSetting.value = defaults.prompt_setting || '';
+    welcomeMessage.value = defaults.welcome_message || '';
+    answerStyle.value = defaults.answer_style || '';
+    message.success(bots.templateApplied);
+  } else {
+    message.warning('模板默认值未加载，请刷新页面后重试');
   }
 };
 
@@ -295,7 +297,51 @@ const saveBotInfo = async () => {
       template_id: activeTemplateId.value || '',
       user_overrides: userOverrides.value || {},
     };
-    await resultControl(await urlResquest.updateBot(updateParams));
+    const updateRes: any = await resultControl(await urlResquest.updateBot(updateParams));
+    if (updateRes && updateRes.bot_id && curBot.value) {
+      const mergedCfg = updateRes.merged_config || {};
+      if (mergedCfg.prompt_setting !== undefined) {
+        roleSetting.value = mergedCfg.prompt_setting;
+      }
+      if (mergedCfg.welcome_message !== undefined) {
+        welcomeMessage.value = mergedCfg.welcome_message;
+      }
+      if (mergedCfg.answer_style !== undefined) {
+        answerStyle.value = mergedCfg.answer_style;
+      }
+      if (mergedCfg.top_K !== undefined) {
+        chatSettingFormActive.value.top_K = mergedCfg.top_K;
+      }
+      if (mergedCfg.rerank !== undefined) {
+        chatSettingFormActive.value.capabilities.rerank = mergedCfg.rerank;
+      }
+      if (mergedCfg.networking !== undefined) {
+        chatSettingFormActive.value.capabilities.networkSearch = mergedCfg.networking;
+      }
+      if (mergedCfg.hybrid_search !== undefined) {
+        chatSettingFormActive.value.capabilities.mixedSearch = mergedCfg.hybrid_search;
+      }
+      if (mergedCfg.only_need_search_results !== undefined) {
+        chatSettingFormActive.value.capabilities.onlySearch = mergedCfg.only_need_search_results;
+      }
+      if (mergedCfg.temperature !== undefined) {
+        chatSettingFormActive.value.temperature = mergedCfg.temperature;
+      }
+      if (mergedCfg.top_P !== undefined) {
+        chatSettingFormActive.value.top_P = mergedCfg.top_P;
+      }
+      const refreshedBot = {
+        ...curBot.value,
+        template_id: updateRes.template_id ?? curBot.value.template_id,
+        template_version: updateRes.template_version ?? curBot.value.template_version,
+        merged_config: updateRes.merged_config ?? curBot.value.merged_config,
+        user_overrides: updateRes.user_overrides ?? curBot.value.user_overrides,
+        overridden_fields: updateRes.overridden_fields ?? curBot.value.overridden_fields,
+        template_defaults: updateRes.template_defaults ?? curBot.value.template_defaults,
+      };
+      setCurBot(refreshedBot);
+      loadBotTemplateState(refreshedBot);
+    }
     await getBotInfo(curBot.value.bot_id);
   } catch (e) {
     console.log('error--', e);
