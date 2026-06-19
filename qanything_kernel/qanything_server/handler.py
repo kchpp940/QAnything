@@ -667,7 +667,8 @@ async def local_doc_chat(req: request):
         if not llm_setting_str:
             return sanic_json({"code": 2003, "msg": "fail, Bot {} llm_setting is empty.".format(bot_id)})
         llm_setting = json.loads(llm_setting_str)
-        llm_setting = local_doc_qa.milvus_summary.normalize_llm_setting(llm_setting)
+        from qanything_kernel.utils.llm_param_validator import normalize_llm_setting
+        llm_setting, _ = normalize_llm_setting(llm_setting)
         rerank = llm_setting.get('rerank', True)
         only_need_search_results = llm_setting.get('only_need_search_results', False)
         need_web_search = llm_setting.get('networking', False)
@@ -1276,7 +1277,8 @@ async def get_bot_info(req: request):
         llm_setting_str = bot_info[9]
         try:
             llm_setting = json.loads(llm_setting_str) if llm_setting_str else {}
-            llm_setting = local_doc_qa.milvus_summary.normalize_llm_setting(llm_setting)
+            from qanything_kernel.utils.llm_param_validator import normalize_llm_setting
+            llm_setting, _ = normalize_llm_setting(llm_setting)
         except (json.JSONDecodeError, TypeError):
             llm_setting = {}
         info = {"bot_id": bot_info[0], "user_id": user_id, "bot_name": bot_info[1], "description": bot_info[2],
@@ -1343,10 +1345,11 @@ async def new_bot(req: request):
     if only_need_search_results is not None:
         llm_setting["only_need_search_results"] = only_need_search_results
 
-    llm_setting = local_doc_qa.milvus_summary.normalize_llm_setting(llm_setting)
-
-    local_doc_qa.milvus_summary.new_qanything_bot(bot_id, user_id, bot_name, desc, head_image, prompt_setting,
-                                                  welcome_message, kb_ids_str, llm_setting)
+    try:
+        local_doc_qa.milvus_summary.new_qanything_bot(bot_id, user_id, bot_name, desc, head_image, prompt_setting,
+                                                      welcome_message, kb_ids_str, llm_setting)
+    except ValueError as e:
+        return sanic_json({"code": 2001, "msg": "fail, invalid Bot config: {}".format(str(e))})
     create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return sanic_json({"code": 200, "msg": "success create qanything bot {}".format(bot_id),
                        "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time}})
@@ -1363,9 +1366,9 @@ async def delete_bot(req: request):
     user_id = user_id + '__' + user_info
     debug_logger.info("delete_bot %s", user_id)
     bot_id = safe_get(req, 'bot_id')
-    if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id, user_id):
+    affected = local_doc_qa.milvus_summary.delete_bot(user_id, bot_id)
+    if not affected or affected < 1:
         return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
-    local_doc_qa.milvus_summary.delete_bot(user_id, bot_id)
     return sanic_json({"code": 200, "msg": "Bot {} delete success".format(bot_id)})
 
 
@@ -1380,9 +1383,10 @@ async def update_bot(req: request):
     user_id = user_id + '__' + user_info
     debug_logger.info("update_bot %s", user_id)
     bot_id = safe_get(req, 'bot_id')
-    if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id, user_id):
+    bot_rows = local_doc_qa.milvus_summary.get_bot(user_id, bot_id)
+    if not bot_rows:
         return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
-    bot_info = local_doc_qa.milvus_summary.get_bot(user_id, bot_id)[0]
+    bot_info = bot_rows[0]
     bot_name = safe_get(req, "bot_name", bot_info[1])
     description = safe_get(req, "description", bot_info[2])
     head_image = safe_get(req, "head_image", bot_info[3])
@@ -1434,8 +1438,6 @@ async def update_bot(req: request):
     if only_need_search_results is not None:
         llm_setting["only_need_search_results"] = only_need_search_results
 
-    llm_setting = local_doc_qa.milvus_summary.normalize_llm_setting(llm_setting)
-
     debug_logger.info(f"update llm_setting: {llm_setting}")
 
     # 判断哪些项修改了
@@ -1454,8 +1456,13 @@ async def update_bot(req: request):
     #  update_time     TIMESTAMP DEFAULT CURRENT_TIMESTAMP 根据这个mysql的格式获取现在的时间
     update_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     debug_logger.info(f"update_time: {update_time}")
-    local_doc_qa.milvus_summary.update_bot(user_id, bot_id, bot_name, description, head_image, prompt_setting,
-                                           welcome_message, kb_ids_str, update_time, llm_setting)
+    try:
+        affected = local_doc_qa.milvus_summary.update_bot(user_id, bot_id, bot_name, description, head_image, prompt_setting,
+                                                          welcome_message, kb_ids_str, update_time, llm_setting)
+    except ValueError as e:
+        return sanic_json({"code": 2001, "msg": "fail, invalid Bot config: {}".format(str(e))})
+    if not affected or affected < 1:
+        return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
     return sanic_json({"code": 200, "msg": "Bot {} update success".format(bot_id)})
 
 

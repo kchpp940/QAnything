@@ -834,54 +834,20 @@ class KnowledgeBaseManager:
             break
         return qa_log, recent_logs, older_logs
 
-    def check_bot_is_exist(self, bot_id, user_id=None):
-        # 使用参数化查询
-        if user_id:
-            query = "SELECT bot_id FROM QanythingBot WHERE bot_id = %s AND user_id = %s AND deleted = 0"
-            result = self.execute_query_(query, (bot_id, user_id), fetch=True)
-        else:
-            query = "SELECT bot_id FROM QanythingBot WHERE bot_id = %s AND deleted = 0"
-            result = self.execute_query_(query, (bot_id,), fetch=True)
+    def check_bot_is_exist(self, bot_id, user_id):
+        query = "SELECT bot_id FROM QanythingBot WHERE bot_id = %s AND user_id = %s AND deleted = 0"
+        result = self.execute_query_(query, (bot_id, user_id), fetch=True)
         debug_logger.info("check_bot_exist {}".format(result))
         return result is not None and len(result) > 0
-
-    def normalize_llm_setting(self, llm_setting: dict) -> dict:
-        if not llm_setting:
-            return {}
-        normalized = dict(llm_setting)
-        bool_fields = ['rerank', 'hybrid_search', 'networking', 'only_need_search_results']
-        int_fields = ['top_k', 'max_token', 'chunk_size', 'api_context_length']
-        float_fields = ['top_p', 'temperature']
-        for field in bool_fields:
-            if field in normalized and normalized[field] is not None:
-                if isinstance(normalized[field], bool):
-                    continue
-                if isinstance(normalized[field], str):
-                    normalized[field] = normalized[field].lower() in ('true', '1', 'yes')
-                else:
-                    normalized[field] = bool(normalized[field])
-        for field in int_fields:
-            if field in normalized and normalized[field] is not None:
-                try:
-                    normalized[field] = int(normalized[field])
-                except (ValueError, TypeError):
-                    pass
-        for field in float_fields:
-            if field in normalized and normalized[field] is not None:
-                try:
-                    normalized[field] = float(normalized[field])
-                except (ValueError, TypeError):
-                    pass
-        if 'top_p' in normalized and normalized['top_p'] is not None:
-            if normalized['top_p'] == 1.0:
-                normalized['top_p'] = 0.99
-        return normalized
 
     def new_qanything_bot(self, bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message,
                           kb_ids_str, llm_setting=None):
         if llm_setting is None:
             llm_setting = {}
-        llm_setting = self.normalize_llm_setting(llm_setting)
+        from qanything_kernel.utils.llm_param_validator import process_bot_llm_setting
+        llm_setting, errors = process_bot_llm_setting(llm_setting)
+        if errors:
+            raise ValueError("Invalid llm_setting: {}".format("; ".join(errors)))
         llm_setting_str = json.dumps(llm_setting, ensure_ascii=False)
         query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, llm_setting) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
         self.execute_query_(query, (
@@ -890,29 +856,33 @@ class KnowledgeBaseManager:
         return bot_id, "success"
 
     def delete_bot(self, user_id, bot_id):
-        # 使用参数化查询
-        query = "UPDATE QanythingBot SET deleted = 1 WHERE user_id = %s AND bot_id = %s"
-        self.execute_query_(query, (user_id, bot_id), commit=True)
+        query = "UPDATE QanythingBot SET deleted = 1 WHERE user_id = %s AND bot_id = %s AND deleted = 0"
+        result = self.execute_query_(query, (user_id, bot_id), commit=True, check=True)
+        debug_logger.info("delete_bot affected rows: {}".format(result))
+        return result
 
     def get_bot(self, user_id, bot_id):
+        if not user_id:
+            raise ValueError("user_id is required for get_bot")
         if not bot_id:
             query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting FROM QanythingBot WHERE user_id = %s AND deleted = 0"
             return self.execute_query_(query, (user_id,), fetch=True)
-        elif not user_id:
-            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting FROM QanythingBot WHERE bot_id = %s AND deleted = 0"
-            return self.execute_query_(query, (bot_id,), fetch=True)
-        else:
-            query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting FROM QanythingBot WHERE user_id = %s AND bot_id = %s AND deleted = 0"
-            return self.execute_query_(query, (user_id, bot_id), fetch=True)
+        query = "SELECT bot_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, user_id, llm_setting FROM QanythingBot WHERE user_id = %s AND bot_id = %s AND deleted = 0"
+        return self.execute_query_(query, (user_id, bot_id), fetch=True)
 
     def update_bot(self, user_id, bot_id, bot_name, description, head_image, prompt_setting, welcome_message,
                    kb_ids_str, update_time, llm_setting):
-        llm_setting = self.normalize_llm_setting(llm_setting)
+        from qanything_kernel.utils.llm_param_validator import process_bot_llm_setting
+        llm_setting, errors = process_bot_llm_setting(llm_setting)
+        if errors:
+            raise ValueError("Invalid llm_setting: {}".format("; ".join(errors)))
         llm_setting_str = json.dumps(llm_setting, ensure_ascii=False)
         query = "UPDATE QanythingBot SET bot_name = %s, description = %s, head_image = %s, prompt_setting = %s, welcome_message = %s, kb_ids_str = %s, update_time = %s, llm_setting = %s WHERE user_id = %s AND bot_id = %s AND deleted = 0"
-        self.execute_query_(query, (
+        result = self.execute_query_(query, (
         bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, llm_setting_str, user_id,
-        bot_id), commit=True)
+        bot_id), commit=True, check=True)
+        debug_logger.info("update_bot affected rows: {}".format(result))
+        return result
 
     def get_files_by_status(self, status):
         query = "SELECT file_id, file_name FROM File WHERE status = %s AND deleted = 0"
