@@ -271,6 +271,7 @@ class KnowledgeBaseManager:
                 empty_recall_reason VARCHAR(512),
                 final_citation_count INT DEFAULT 0,
                 top_score FLOAT DEFAULT 0,
+                retrieval_trace MEDIUMTEXT,
                 time_record MEDIUMTEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -290,6 +291,7 @@ class KnowledgeBaseManager:
             # 如果没有的话，给QanythingBot添加一列：llm_setting VARCHAR(512)
             "ALTER TABLE QanythingBot ADD COLUMN llm_setting VARCHAR(512) DEFAULT '{}'",
             "ALTER TABLE QanythingBot DROP COLUMN model",
+            "ALTER TABLE RetrievalDiagnosis ADD COLUMN retrieval_trace MEDIUMTEXT",
         ]
 
         for query in index_queries:
@@ -912,27 +914,65 @@ class KnowledgeBaseManager:
         return file_location
 
     def add_retrieval_diagnosis(self, user_id, bot_id, kb_ids, query, condense_question,
-                                retrieval_time_ms, candidate_count, milvus_hit_count, es_hit_count,
-                                rerank_before_order, rerank_after_order, rerank_used,
-                                empty_recall_reason, final_citation_count, top_score, time_record):
+                                retrieval_trace, time_record):
         diagnosis_id = uuid.uuid4().hex
         kb_ids = json.dumps(kb_ids, ensure_ascii=False)
-        rerank_before_order = json.dumps(rerank_before_order, ensure_ascii=False)
-        rerank_after_order = json.dumps(rerank_after_order, ensure_ascii=False)
-        time_record = json.dumps(time_record, ensure_ascii=False)
+        retrieval_trace_json = json.dumps(retrieval_trace, ensure_ascii=False)
+        time_record_json = json.dumps(time_record, ensure_ascii=False)
+
+        candidates = retrieval_trace.get('candidates', [])
+
+        def _get_phase(phase_name):
+            return [c for c in candidates if c.get('phase') == phase_name]
+
+        raw_candidates = _get_phase('raw')
+        milvus_hit_count = sum(1 for c in raw_candidates if c.get('source') == 'milvus')
+        es_hit_count = sum(1 for c in raw_candidates if c.get('source') == 'es')
+
+        before_rerank = _get_phase('before_rerank')
+        after_rerank_full = _get_phase('after_rerank_full')
+        after_rerank_filtered = _get_phase('after_rerank_filtered')
+        final_citations = _get_phase('final_citations')
+
+        rerank_before_order = [
+            {k: c[k] for k in ('doc_id', 'file_id', 'score') if k in c}
+            for c in before_rerank
+        ]
+        rerank_after_order = [
+            {k: c[k] for k in ('doc_id', 'file_id', 'score') if k in c}
+            for c in after_rerank_full
+        ]
+
+        metadata = retrieval_trace.get('metadata', {})
+        rerank_used = metadata.get('rerank_used', False)
+        empty_recall_reason = metadata.get('empty_recall_reason', '')
+        retrieval_time_ms = retrieval_trace.get('retrieval_time_ms', 0)
+
+        candidate_count = len(after_rerank_filtered)
+        final_citation_count = len(final_citations)
+        if final_citations:
+            top_score = float(max((c.get('score', 0) for c in final_citations), default=0))
+        elif after_rerank_filtered:
+            top_score = float(max((c.get('score', 0) for c in after_rerank_filtered), default=0))
+        else:
+            top_score = 0.0
+
         insert_query = (
             "INSERT INTO RetrievalDiagnosis "
             "(diagnosis_id, user_id, bot_id, kb_ids, query, condense_question, "
             "retrieval_time_ms, candidate_count, milvus_hit_count, es_hit_count, "
             "rerank_before_order, rerank_after_order, rerank_used, "
-            "empty_recall_reason, final_citation_count, top_score, time_record) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "empty_recall_reason, final_citation_count, top_score, retrieval_trace, time_record) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
         )
         self.execute_query_(insert_query, (
             diagnosis_id, user_id, bot_id, kb_ids, query, condense_question,
             retrieval_time_ms, candidate_count, milvus_hit_count, es_hit_count,
-            rerank_before_order, rerank_after_order, rerank_used,
-            empty_recall_reason, final_citation_count, top_score, time_record
+            json.dumps(rerank_before_order, ensure_ascii=False),
+            json.dumps(rerank_after_order, ensure_ascii=False),
+            rerank_used,
+            empty_recall_reason, final_citation_count, top_score,
+            retrieval_trace_json, time_record_json
         ), commit=True)
         return diagnosis_id
 
@@ -997,7 +1037,7 @@ class KnowledgeBaseManager:
             SELECT diagnosis_id, user_id, bot_id, kb_ids, query, condense_question,
                    retrieval_time_ms, candidate_count, milvus_hit_count, es_hit_count,
                    rerank_before_order, rerank_after_order, rerank_used,
-                   empty_recall_reason, final_citation_count, top_score, time_record, timestamp
+                   empty_recall_reason, final_citation_count, top_score, retrieval_trace, time_record, timestamp
             FROM RetrievalDiagnosis
             WHERE kb_ids LIKE %s AND timestamp BETWEEN %s AND %s
             ORDER BY timestamp DESC
@@ -1012,6 +1052,8 @@ class KnowledgeBaseManager:
                 row['kb_ids'] = json.loads(row['kb_ids'])
             if 'time_record' in row:
                 row['time_record'] = json.loads(row['time_record'])
+            if 'retrieval_trace' in row and row['retrieval_trace']:
+                row['retrieval_trace'] = json.loads(row['retrieval_trace'])
             if 'rerank_before_order' in row:
                 row['rerank_before_order'] = json.loads(row['rerank_before_order'])
             if 'rerank_after_order' in row:

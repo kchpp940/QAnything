@@ -123,12 +123,23 @@ class LocalDocQA:
         time_record['retriever_search'] = round(end_time - start_time, 2)
         debug_logger.info(f"retriever_search time: {time_record['retriever_search']}s")
 
-        milvus_hit_count = sum(1 for d in query_docs if d.metadata.get('retrieval_source') == 'milvus')
-        es_hit_count = sum(1 for d in query_docs if d.metadata.get('retrieval_source') == 'es')
+        raw_candidates = []
+        for doc in query_docs:
+            if retriever.mysql_client.is_deleted_file(doc.metadata.get('file_id', '')):
+                debug_logger.warning(f"file_id: {doc.metadata.get('file_id', '')} is deleted")
+                continue
+            raw_candidates.append({
+                'doc_id': doc.metadata.get('doc_id', ''),
+                'file_id': doc.metadata.get('file_id', ''),
+                'score': float(doc.metadata.get('score', 1.0)),
+                'source': doc.metadata.get('retrieval_source', 'unknown'),
+            })
+
+        milvus_hit_count = sum(1 for c in raw_candidates if c['source'] == 'milvus')
+        es_hit_count = sum(1 for c in raw_candidates if c['source'] == 'es')
 
         for idx, doc in enumerate(query_docs):
-            if retriever.mysql_client.is_deleted_file(doc.metadata['file_id']):
-                debug_logger.warning(f"file_id: {doc.metadata['file_id']} is deleted")
+            if retriever.mysql_client.is_deleted_file(doc.metadata.get('file_id', '')):
                 continue
             doc.metadata['retrieval_query'] = query
             doc.metadata['embed_version'] = self.embeddings.embed_version
@@ -141,6 +152,7 @@ class LocalDocQA:
             'milvus_hit_count': milvus_hit_count,
             'es_hit_count': es_hit_count,
             'retrieval_time_ms': int((end_time - start_time) * 1000),
+            'raw_candidates': raw_candidates,
         }
         return source_documents, retrieval_source_info
 
@@ -528,11 +540,26 @@ class LocalDocQA:
 
         source_documents = deduplicate_documents(source_documents)
 
-        rerank_before_order = [{'doc_id': doc.metadata.get('doc_id', ''), 'file_id': doc.metadata.get('file_id', ''),
-                                'score': float(doc.metadata.get('score', 0))} for doc in source_documents]
-        rerank_after_order = []
-        rerank_actually_used = False
+        retrieval_candidates = []
 
+        raw_candidates_list = retrieval_source_info.get('raw_candidates', [])
+        for c in raw_candidates_list:
+            rc = dict(c)
+            rc['phase'] = 'raw'
+            retrieval_candidates.append(rc)
+
+        before_rerank_docs = source_documents[:]
+        for doc in before_rerank_docs:
+            retrieval_candidates.append({
+                'phase': 'before_rerank',
+                'doc_id': doc.metadata.get('doc_id', ''),
+                'file_id': doc.metadata.get('file_id', ''),
+                'score': float(doc.metadata.get('score', 0)),
+                'source': doc.metadata.get('retrieval_source', 'unknown'),
+            })
+
+        rerank_actually_used = False
+        source_docs_before_rerank = source_documents[:]
         if rerank and len(source_documents) > 1 and num_tokens_rerank(query) <= 300:
             try:
                 t1 = time.perf_counter()
@@ -541,8 +568,14 @@ class LocalDocQA:
                 t2 = time.perf_counter()
                 time_record['rerank'] = round(t2 - t1, 2)
                 rerank_actually_used = True
-                rerank_after_order = [{'doc_id': doc.metadata.get('doc_id', ''), 'file_id': doc.metadata.get('file_id', ''),
-                                       'score': float(doc.metadata.get('score', 0))} for doc in source_documents]
+                for doc in source_documents:
+                    retrieval_candidates.append({
+                        'phase': 'after_rerank_full',
+                        'doc_id': doc.metadata.get('doc_id', ''),
+                        'file_id': doc.metadata.get('file_id', ''),
+                        'score': float(doc.metadata.get('score', 0)),
+                        'source': doc.metadata.get('retrieval_source', 'unknown'),
+                    })
                 debug_logger.info(f"rerank step1 num: {len(source_documents)}")
                 debug_logger.info(f"rerank step1 scores: {[doc.metadata['score'] for doc in source_documents]}")
                 if len(source_documents) > 1:
@@ -563,8 +596,26 @@ class LocalDocQA:
                 time_record['rerank'] = 0.0
                 debug_logger.error(f"query {query}: kb_ids: {kb_ids}, rerank error: {traceback.format_exc()}")
 
-        # es检索+milvus检索结果最多可能是2k
+        if not rerank_actually_used:
+            for doc in source_docs_before_rerank:
+                retrieval_candidates.append({
+                    'phase': 'after_rerank_full',
+                    'doc_id': doc.metadata.get('doc_id', ''),
+                    'file_id': doc.metadata.get('file_id', ''),
+                    'score': float(doc.metadata.get('score', 0)),
+                    'source': doc.metadata.get('retrieval_source', 'unknown'),
+                })
+
         source_documents = source_documents[:top_k]
+
+        for doc in source_documents:
+            retrieval_candidates.append({
+                'phase': 'after_rerank_filtered',
+                'doc_id': doc.metadata.get('doc_id', ''),
+                'file_id': doc.metadata.get('file_id', ''),
+                'score': float(doc.metadata.get('score', 0)),
+                'source': doc.metadata.get('retrieval_source', 'unknown'),
+            })
 
         empty_recall_reason = ''
         if not source_documents:
@@ -577,31 +628,35 @@ class LocalDocQA:
             else:
                 empty_recall_reason = 'unknown_empty_recall'
 
-        candidate_count = len(source_documents)
-        final_citation_count = candidate_count
-        top_score = float(source_documents[0].metadata.get('score', 0)) if source_documents else 0
+        source_docs_for_final_ref = source_documents[:]
+        for doc in source_docs_for_final_ref:
+            retrieval_candidates.append({
+                'phase': 'final_citations',
+                'doc_id': doc.metadata.get('doc_id', ''),
+                'file_id': doc.metadata.get('file_id', ''),
+                'score': float(doc.metadata.get('score', 0)),
+                'source': doc.metadata.get('retrieval_source', 'unknown'),
+            })
 
-        diagnosis_data = {
-            'user_id': user_id,
-            'bot_id': bot_id,
-            'kb_ids': kb_ids,
-            'query': query,
-            'condense_question': condense_question,
+        retrieval_trace = {
             'retrieval_time_ms': retrieval_source_info.get('retrieval_time_ms', 0),
-            'candidate_count': candidate_count,
-            'milvus_hit_count': retrieval_source_info.get('milvus_hit_count', 0),
-            'es_hit_count': retrieval_source_info.get('es_hit_count', 0),
-            'rerank_before_order': rerank_before_order,
-            'rerank_after_order': rerank_after_order,
-            'rerank_used': rerank_actually_used,
-            'empty_recall_reason': empty_recall_reason,
-            'final_citation_count': final_citation_count,
-            'top_score': top_score,
-            'time_record': time_record,
+            'candidates': retrieval_candidates,
+            'metadata': {
+                'rerank_used': rerank_actually_used,
+                'empty_recall_reason': empty_recall_reason,
+            }
         }
 
         try:
-            self.milvus_summary.add_retrieval_diagnosis(**diagnosis_data)
+            self.milvus_summary.add_retrieval_diagnosis(
+                user_id=user_id,
+                bot_id=bot_id,
+                kb_ids=kb_ids,
+                query=query,
+                condense_question=condense_question,
+                retrieval_trace=retrieval_trace,
+                time_record=time_record,
+            )
         except Exception as e:
             debug_logger.error(f"Failed to save retrieval diagnosis: {e}")
 
