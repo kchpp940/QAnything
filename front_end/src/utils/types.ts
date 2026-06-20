@@ -26,6 +26,20 @@ export interface IDataSourceItem {
   showDetailDataSource?: boolean; //是否展示详细来源信息
 }
 
+export interface IRetrievalTraceItem {
+  doc_id: string;
+  doc_name: string;
+  score: number;
+  content?: string;
+}
+
+export interface IWebSearchTraceItem {
+  title: string;
+  url: string;
+  snippet?: string;
+  score?: number;
+}
+
 export interface IChatItem {
   type: 'ai' | 'user'; //区别用户提问 和ai回复
   question?: string; //问题
@@ -37,6 +51,9 @@ export interface IChatItem {
 
   showTools?: boolean; //当期问答是否结束 结束展示复制等小工具和取消闪烁
   source?: Array<IDataSourceItem>; // 数据来源
+
+  retrieval_trace?: IRetrievalTraceItem[]; // 检索追踪
+  web_search_trace?: IWebSearchTraceItem[]; // 联网搜索追踪
 
   picList?: any; // 不知道是啥，用到了，不敢删
   qaId?: any; // 同上

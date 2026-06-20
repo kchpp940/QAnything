@@ -52,8 +52,12 @@
                 </div>
               </template>
               <SourcePanel
-                v-if="item.source.length"
-                :sources="item.source"
+                v-if="
+                  item.source?.length ||
+                  item.retrieval_trace?.length ||
+                  item.web_search_trace?.length
+                "
+                :view-model="buildSourceViewModel(item)"
                 variant="bots"
                 content-mode="html"
               />
@@ -169,6 +173,7 @@ import ChatTextarea from '@/components/ChatTextarea.vue';
 import { useChatSession } from '@/composables/useChatSession';
 import { useChatActions } from '@/composables/useChatActions';
 import { useDownloadChat } from '@/composables/useDownloadChat';
+import { useSourcePresenter } from '@/composables/useSourcePresenter';
 import SourcePanel from '@/components/SourcePanel.vue';
 
 const props = defineProps({
@@ -297,6 +302,7 @@ const handleSend = async () => {
 const send = handleSend;
 
 const { clearQAList } = useBotsChat();
+const { buildViewModel: buildSourceViewModel } = useSourcePresenter();
 const { confirmLoading, content, confirm } = useDownloadChat({
   showLoading,
   onClear: () => {

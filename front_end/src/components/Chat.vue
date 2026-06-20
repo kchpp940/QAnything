@@ -37,8 +37,12 @@
                     />
                   </p>
                   <SourcePanel
-                    v-if="item.source.length"
-                    :sources="item.source"
+                    v-if="
+                      item.source?.length ||
+                      item.retrieval_trace?.length ||
+                      item.web_search_trace?.length
+                    "
+                    :view-model="buildSourceViewModel(item)"
                     variant="home"
                     content-mode="markdown"
                   />
@@ -166,6 +170,7 @@ import ChatTextarea from '@/components/ChatTextarea.vue';
 import { useChatSession } from '@/composables/useChatSession';
 import { useChatActions } from '@/composables/useChatActions';
 import { useDownloadChat } from '@/composables/useDownloadChat';
+import { useSourcePresenter } from '@/composables/useSourcePresenter';
 import SourcePanel from '@/components/SourcePanel.vue';
 
 const common = getLanguage().common;
@@ -421,6 +426,7 @@ const { confirmLoading, content, downloadChat, deleteChat, confirm } = useDownlo
 });
 
 const { showSettingModal } = storeToRefs(useChat());
+const { buildViewModel: buildSourceViewModel } = useSourcePresenter();
 const handleModalChange = newVal => {
   showSettingModal.value = newVal;
 };
