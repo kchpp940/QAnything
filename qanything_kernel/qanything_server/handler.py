@@ -834,11 +834,11 @@ async def local_doc_chat(req: request):
                                  'retrieval_trace': retrieval_trace}
                     qa_id = local_doc_qa.milvus_summary.add_qalog(**chat_data)
 
-                    from qanything_kernel.core.retriever.candidate import RetrievalDiagnosis
-                    diagnosis_record = RetrievalDiagnosis.from_retrieval_trace(
-                        retrieval_trace, user_id=user_id, kb_ids=kb_ids, query=question, qa_id=qa_id
-                    )
-                    local_doc_qa.milvus_summary.add_retrieval_diagnosis(diagnosis_record)
+                    diagnosis_record = resp.get("diagnosis_record")
+                    if diagnosis_record is not None:
+                        diagnosis_record['qa_id'] = qa_id
+                        diagnosis_record['user_id'] = user_id
+                        local_doc_qa.milvus_summary.add_retrieval_diagnosis(diagnosis_record)
                     qa_logger.info("chat_data: %s", chat_data)
                     debug_logger.info("response: %s", chat_data['result'])
                     stream_res = {
@@ -917,11 +917,11 @@ async def local_doc_chat(req: request):
                      'retrieval_trace': retrieval_trace}
         qa_id = local_doc_qa.milvus_summary.add_qalog(**chat_data)
 
-        from qanything_kernel.core.retriever.candidate import RetrievalDiagnosis
-        diagnosis_record = RetrievalDiagnosis.from_retrieval_trace(
-            retrieval_trace, user_id=user_id, kb_ids=kb_ids, query=question, qa_id=qa_id
-        )
-        local_doc_qa.milvus_summary.add_retrieval_diagnosis(diagnosis_record)
+        diagnosis_record = resp.get("diagnosis_record")
+        if diagnosis_record is not None:
+            diagnosis_record['qa_id'] = qa_id
+            diagnosis_record['user_id'] = user_id
+            local_doc_qa.milvus_summary.add_retrieval_diagnosis(diagnosis_record)
 
         qa_logger.info("chat_data: %s", chat_data)
         debug_logger.info("response: %s", chat_data['result'])

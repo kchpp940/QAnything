@@ -17,6 +17,7 @@ from qanything_kernel.core.retriever.vectorstore import VectorStoreMilvusClient
 from qanything_kernel.core.retriever.elasticsearchstore import StoreElasticSearchClient
 from qanything_kernel.core.retriever.parent_retriever import ParentRetriever
 from qanything_kernel.core.retriever.candidate import CandidateDocument, RetrievalStageResult, RetrievalSource, CandidateStage, RetrievalTrace
+from qanything_kernel.core.retriever.retrieval_diagnosis import RetrievalDiagnosisSerializer
 from qanything_kernel.utils.general_utils import (get_time, clear_string, get_time_async, num_tokens,
                                                   cosine_similarity, clear_string_is_equal, num_tokens_embed,
                                                   num_tokens_rerank, deduplicate_documents, replace_image_references)
@@ -511,7 +512,8 @@ class LocalDocQA:
     async def generate_response(query, res, condense_question, source_candidates: List[CandidateDocument],
                                 retrieval_candidates: List[CandidateDocument],
                                 time_record, chat_history, streaming, prompt,
-                                retrieval_trace: Optional[RetrievalTrace] = None):
+                                retrieval_trace: Optional[RetrievalTrace] = None,
+                                diagnosis_record: Optional[dict] = None):
         history = chat_history + [[query, res]]
 
         if streaming:
@@ -527,6 +529,8 @@ class LocalDocQA:
         }
         if retrieval_trace is not None:
             response["retrieval_trace"] = retrieval_trace
+        if diagnosis_record is not None:
+            response["diagnosis_record"] = diagnosis_record
 
         if 'llm_completed' not in time_record:
             time_record['llm_completed'] = 0.0
@@ -673,6 +677,11 @@ class LocalDocQA:
         retrieval_trace.set_diagnostics(retrieval_diagnostics)
         debug_logger.info(f"retrieval_diagnostics: {retrieval_diagnostics}")
 
+        # === Build diagnosis record from same trace ===
+        diagnosis_record = RetrievalDiagnosisSerializer.from_retrieval_trace(
+            retrieval_trace, user_id='', kb_ids=kb_ids, query=query
+        )
+
         # Strip headers after rerank
         for candidate in active_candidates:
             candidate.page_content = re.sub(r'^\[headers]\(.*?\)\n', '', candidate.page_content)
@@ -698,7 +707,8 @@ class LocalDocQA:
                 async for response, history in self.generate_response(query, res, condense_question,
                                                                       active_candidates, active_candidates,
                                                                       time_record, chat_history, streaming, 'MATCH_FAQ',
-                                                                      retrieval_trace=retrieval_trace):
+                                                                      retrieval_trace=retrieval_trace,
+                                                                      diagnosis_record=diagnosis_record):
                     yield response, history
                 return
 
@@ -738,7 +748,8 @@ class LocalDocQA:
                                                                           active_candidates, active_candidates,
                                                                           time_record, chat_history, streaming,
                                                                           'TOKENS_NOT_ENOUGH',
-                                                                          retrieval_trace=retrieval_trace):
+                                                                          retrieval_trace=retrieval_trace,
+                                                                          diagnosis_record=diagnosis_record):
                         yield response, history
                     return
 
@@ -805,7 +816,8 @@ class LocalDocQA:
                         "condense_question": condense_question,
                         "retrieval_documents": retrieval_candidates,
                         "source_documents": source_candidates,
-                        "retrieval_trace": retrieval_trace}
+                        "retrieval_trace": retrieval_trace,
+                        "diagnosis_record": diagnosis_record}
             time_record['prompt_tokens'] = prompt_tokens if prompt_tokens != 0 else est_prompt_tokens
             time_record['completion_tokens'] = completion_tokens if completion_tokens != 0 else num_tokens(acc_resp)
             time_record['total_tokens'] = total_tokens if total_tokens != 0 else time_record['prompt_tokens'] + \
@@ -822,7 +834,8 @@ class LocalDocQA:
                                 "condense_question": condense_question,
                                 "retrieval_documents": retrieval_candidates,
                                 "source_documents": source_candidates,
-                                "retrieval_trace": retrieval_trace}
+                                "retrieval_trace": retrieval_trace,
+                                "diagnosis_record": diagnosis_record}
                     yield msg_response, history
                 last_return_time = time.perf_counter()
                 time_record['llm_completed'] = round(last_return_time - t1, 2) - time_record['llm_first_return']

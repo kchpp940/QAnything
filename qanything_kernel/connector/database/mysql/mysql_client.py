@@ -710,7 +710,6 @@ class KnowledgeBaseManager:
         return qa_id
 
     def add_retrieval_diagnosis(self, diagnosis_record: dict):
-        from qanything_kernel.core.retriever.candidate import RetrievalDiagnosis
         debug_logger.info(f"add_retrieval_diagnosis for query: {diagnosis_record.get('query', '')}")
         diagnosis_id = uuid.uuid4().hex
         qa_id = diagnosis_record.get('qa_id', '')
