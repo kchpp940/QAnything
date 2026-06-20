@@ -958,6 +958,39 @@ class KnowledgeBaseManager:
         self.update_file_process_context(file_id, context)
         return context
 
+    def reset_file_for_retry_with_rollback(self, file_id, milvus_client=None, es_client=None):
+        from qanything_kernel.utils.stage_rollback_handler import StageRollbackHandler
+
+        context = self.get_file_process_context(file_id)
+        if context is None:
+            return None, None
+
+        if not context.can_retry():
+            return None, None
+
+        success = context.reset_for_retry()
+        if not success:
+            return None, None
+
+        rollback_handler = StageRollbackHandler(
+            milvus_client=milvus_client,
+            es_client=es_client,
+            mysql_client=self,
+        )
+        file_info = self.get_file(file_id)
+        extra = {}
+        if file_info and len(file_info) > 6:
+            extra["file_location"] = file_info[6]
+
+        rollback_result = rollback_handler.rollback_for_retry(file_id, context, extra)
+        self.update_file_process_context(file_id, context)
+        return context, rollback_result
+
+    def get_file(self, file_id):
+        query = "SELECT * FROM File WHERE file_id = %s"
+        result = self.execute_query_(query, (file_id,), fetch=True)
+        return result[0] if result else None
+
     def get_files_by_process_state(self, states, kb_ids=None, limit=100):
         if isinstance(states, (FileProcessState, str)):
             states = [states]

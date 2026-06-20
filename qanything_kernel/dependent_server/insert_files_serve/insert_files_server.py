@@ -22,6 +22,7 @@ from qanything_kernel.configs.model_config import MYSQL_HOST_LOCAL, MYSQL_PORT_L
     MYSQL_USER_LOCAL, MYSQL_PASSWORD_LOCAL, MYSQL_DATABASE_LOCAL, MAX_CHARS
 from qanything_kernel.utils.file_process_state import (FileProcessState, ProcessStage, ErrorCategory,
                                                       FileProcessContext, RetryPolicy, categorize_error)
+from qanything_kernel.utils.stage_rollback_handler import StageRollbackHandler
 from sanic.worker.manager import WorkerManager
 import asyncio
 import traceback
@@ -68,17 +69,14 @@ async def update_process_context_async(pool, file_id, context):
             await conn.commit()
 
 
-async def clean_milvus_es_for_retry(milvus_kb, es_client, mysql_client, file_id):
-    try:
-        expr = f'file_id == "{file_id}"'
-        milvus_kb.delete_expr(expr)
-    except Exception as e:
-        insert_logger.warning(f"Clean milvus data failed for retry {file_id}: {e}")
-    try:
-        file_chunks = mysql_client.get_chunk_size([file_id])
-        es_client.delete_files([file_id], file_chunks)
-    except Exception as e:
-        insert_logger.warning(f"Clean es data failed for retry {file_id}: {e}")
+async def rollback_stage_data_async(milvus_kb, es_client, mysql_client, file_id, to_stage, context=None, extra=None):
+    rollback_handler = StageRollbackHandler(
+        milvus_client=milvus_kb,
+        es_client=es_client,
+        mysql_client=mysql_client,
+    )
+    result = rollback_handler.rollback_to_stage(file_id, to_stage, context, extra)
+    return result
 
 
 @get_time_async
@@ -95,14 +93,19 @@ async def process_data(retriever, milvus_kb, mysql_client, pool, file_info, time
         id_val, file_id, user_id, file_name, kb_id, file_location, file_size, file_url, chunk_size = file_info
         process_context_json = None
 
+    extra = {"file_location": file_location}
+
     if process_context_json:
         try:
             context = FileProcessContext.from_json(process_context_json)
             insert_logger.info(f"Resuming file {file_id} from state: {context.state.value}, stage: {context.current_stage.value}")
             if context.state == FileProcessState.RETRYING:
-                if context.current_stage in [ProcessStage.EMBED, ProcessStage.INDEX]:
-                    insert_logger.info(f"Retry: cleaning milvus/es data for {file_id} before reprocessing")
-                    await asyncio.to_thread(clean_milvus_es_for_retry, milvus_kb, retriever.es_client, mysql_client, file_id)
+                insert_logger.info(f"Retry: running rollback for {file_id} to stage {context.current_stage.value}")
+                await asyncio.to_thread(
+                    rollback_stage_data_async,
+                    milvus_kb, retriever.es_client, mysql_client,
+                    file_id, context.current_stage, context, extra
+                )
         except Exception as e:
             insert_logger.warning(f"Failed to parse process_context for {file_id}: {e}, starting fresh")
             context = FileProcessContext(file_id=file_id)
@@ -187,15 +190,11 @@ async def process_data(retriever, milvus_kb, mysql_client, pool, file_info, time
         mysql_client.update_chunks_number(local_file.file_id, chunks_number)
     except asyncio.TimeoutError:
         insert_logger.error(f'Timeout: milvus insert took longer than {insert_timeout_seconds} seconds')
-        expr = f'file_id == \"{local_file.file_id}\"'
-        try:
-            milvus_kb.delete_expr(expr)
-        except Exception:
-            pass
-        try:
-            retriever.es_client.delete_file(local_file.file_id) if hasattr(retriever.es_client, 'delete_file') else None
-        except Exception:
-            pass
+        await asyncio.to_thread(
+            rollback_stage_data_async,
+            milvus_kb, retriever.es_client, mysql_client,
+            file_id, ProcessStage.EMBED, context, extra
+        )
         error_msg = f"milvus insert timeout: {insert_timeout_seconds}s"
         time_record['insert_timeout'] = True
         context.record_error(ErrorInfo(
@@ -210,6 +209,11 @@ async def process_data(retriever, milvus_kb, mysql_client, pool, file_info, time
         error_msg = f"milvus insert error: {str(e)}"
         insert_logger.error(f'{error_msg}\n{traceback.format_exc()}')
         time_record['insert_error'] = True
+        await asyncio.to_thread(
+            rollback_stage_data_async,
+            milvus_kb, retriever.es_client, mysql_client,
+            file_id, ProcessStage.EMBED, context, extra
+        )
         context.record_error(ErrorInfo(
             error_category=categorize_error(e, ProcessStage.INDEX),
             error_message=error_msg,

@@ -614,26 +614,24 @@ async def retry_file_process(req: request):
 
     retried_files = []
     failed_files = []
+    rollback_results = {}
     for file_id in valid_file_ids:
-        context = local_doc_qa.milvus_summary.reset_file_for_retry(file_id)
+        context, rollback_result = local_doc_qa.milvus_summary.reset_file_for_retry_with_rollback(
+            file_id,
+            milvus_client=local_doc_qa.milvus_kb,
+            es_client=local_doc_qa.es_client,
+        )
         if context:
             retried_files.append(file_id)
-            expr = f'file_id == "{file_id}"'
-            try:
-                local_doc_qa.milvus_kb.delete_expr(expr)
-            except Exception as e:
-                debug_logger.warning(f"Failed to clean milvus data for retry {file_id}: {e}")
-            try:
-                file_chunks = local_doc_qa.milvus_summary.get_chunk_size([file_id])
-                local_doc_qa.es_client.delete_files([file_id], file_chunks)
-            except Exception as e:
-                debug_logger.warning(f"Failed to clean es data for retry {file_id}: {e}")
+            if rollback_result:
+                rollback_results[file_id] = rollback_result.to_dict()
         else:
             failed_files.append(file_id)
 
     result = {
         "retried_files": retried_files,
         "failed_files": failed_files,
+        "rollback_results": rollback_results,
     }
     return sanic_json({"code": 200, "msg": "success", "data": result})
 

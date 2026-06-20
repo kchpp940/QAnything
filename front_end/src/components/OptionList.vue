@@ -112,7 +112,7 @@
               </template>
               <template v-else-if="column.key === 'fileTag'">
                 <Tags
-                  v-if="record.status === 'green' || record.processState?.is_completed"
+                  v-if="getPresentationForRecord(record).canView"
                   :tags="record.fileTag"
                   @update:tags="
                     newTags => {
@@ -127,33 +127,36 @@
                 />
               </template>
               <template v-else-if="column.key === 'status'">
-                <div class="status-detail-box">
+                <div
+                  class="status-detail-box"
+                  :data-presentation-hint="'use getPresentationForRecord'"
+                >
                   <div class="status-main">
                     <span class="icon-file-status">
                       <LoadingImg
-                        v-if="record.processState?.is_processing || record.processState?.is_pending || record.status === 'gray' || record.status === 'yellow'"
+                        v-if="getPresentationForRecord(record).iconType === 'loading' || getPresentationForRecord(record).iconType === 'pending'"
                         class="file-status"
                       />
                       <SvgIcon
                         v-else
                         class="file-status"
-                        :name="record.processState?.is_completed || record.status === 'green' ? 'success' : 'error'"
+                        :name="getPresentationForRecord(record).iconType === 'success' ? 'success' : 'error'"
                       />
                     </span>
-                    <span class="status-text">{{ parseStatus(record.status, record.processState) }}</span>
+                    <span class="status-text">{{ getPresentationForRecord(record).statusText }}</span>
                   </div>
-                  <div v-if="record.processState && (record.processState.is_processing || record.processState.is_pending)" class="progress-section">
+                  <div v-if="getPresentationForRecord(record).showProgress" class="progress-section">
                     <div class="progress-bar-wrap">
                       <div
                         class="progress-bar-fill"
-                        :style="{ width: record.processState.progress_percent + '%' }"
+                        :style="{ width: getPresentationForRecord(record).progressPercent + '%' }"
                       ></div>
                     </div>
-                    <span class="progress-percent">{{ record.processState.progress_percent }}%</span>
+                    <span class="progress-percent">{{ getPresentationForRecord(record).progressPercent }}%</span>
                   </div>
-                  <div v-if="record.processState?.stage_events?.length" class="stage-timeline">
+                  <div v-if="getPresentationForRecord(record).showEvents" class="stage-timeline">
                     <div
-                      v-for="(event, idx) in record.processState.stage_events.slice(-3)"
+                      v-for="(event, idx) in getPresentationForRecord(record).recentEvents"
                       :key="idx"
                       class="stage-item"
                     >
@@ -162,14 +165,14 @@
                       <span v-if="event.message" class="stage-msg">{{ event.message }}</span>
                     </div>
                   </div>
-                  <div v-if="record.processState?.latest_error && record.processState.is_failed" class="error-info">
+                  <div v-if="getPresentationForRecord(record).hasError" class="error-info">
                     <span class="error-category">
-                      错误类型：{{ getErrorCategoryLabel(record.processState.latest_error.error_category as any) }}
+                      错误类型：{{ getPresentationForRecord(record).errorCategoryText }}
                     </span>
-                    <span class="error-message" :title="record.processState.latest_error.error_message">
-                      {{ record.processState.latest_error.error_message }}
+                    <span class="error-message" :title="getPresentationForRecord(record).errorMessage">
+                      {{ getPresentationForRecord(record).errorMessage }}
                     </span>
-                    <span v-if="record.processState.can_retry" class="retry-hint">可重试</span>
+                    <span v-if="getPresentationForRecord(record).isRetryable" class="retry-hint">可重试</span>
                   </div>
                 </div>
               </template>
@@ -195,18 +198,23 @@
                       {{ common.delete }}
                     </a-button>
                   </a-popconfirm>
-                  <a-button
-                    v-if="record.processState?.can_retry || (record.processState?.is_failed && record.processState?.latest_error?.is_retryable)"
-                    type="text"
-                    class="retry-item"
-                    @click="retryItem(record)"
+                  <a-tooltip
+                    v-if="getRetryForRecord(record).visible"
+                    :title="getRetryForRecord(record).tooltip"
                   >
-                    重试
-                  </a-button>
+                    <a-button
+                      type="text"
+                      class="retry-item"
+                      :disabled="getRetryForRecord(record).disabled"
+                      @click="retryItem(record)"
+                    >
+                      {{ getRetryForRecord(record).btnText }}
+                    </a-button>
+                  </a-tooltip>
                   <a-button
                     type="text"
                     class="view-item"
-                    :disabled="!(record.status === 'green' || record.processState?.is_completed)"
+                    :disabled="!getPresentationForRecord(record).canView"
                     @click="viewItem(record)"
                   >
                     {{ common.view }}
@@ -284,7 +292,13 @@ import { pageStatus } from '@/utils/enum';
 import { resultControl } from '@/utils/utils';
 import { message, Modal } from 'ant-design-vue';
 import { getLanguage } from '@/language';
-import { ProcessStateDisplay, getStateLabel, getStageLabel, getErrorCategoryLabel } from '@/utils/fileProcessState';
+import { ProcessStateDisplay, getStageLabel, getErrorCategoryLabel } from '@/utils/fileProcessState';
+import {
+  createFileProcessPresentation,
+  getRetryPresentation,
+  type FileProcessPresentation,
+  type RetryPresentation,
+} from '@/utils/fileProcessPresenter';
 import LoadingImg from '@/components/LoadingImg.vue';
 import UploadProgress from '@/components/UploadProgress.vue';
 import ChunkViewDialog from '@/components/ChunkViewDialog.vue';
@@ -616,34 +630,17 @@ const clearUpload = () => {
 };
 
 const parseStatus = (status, processState?: ProcessStateDisplay | null) => {
-  if (processState) {
-    if (processState.is_completed) {
-      return common.succeeded;
-    }
-    if (processState.is_failed) {
-      return common.failed;
-    }
-    if (processState.state === 'retrying') {
-      return `重试中(${processState.retry_count})`;
-    }
-    return getStageLabel(processState.current_stage as any) || common.parsing;
-  }
-  let str: string;
-  switch (status) {
-    case 'gray':
-      str = common.inLine;
-      break;
-    case 'yellow':
-      str = common.parsing;
-      break;
-    case 'green':
-      str = common.succeeded;
-      break;
-    default:
-      str = common.failed;
-      break;
-  }
-  return str;
+  const p = createFileProcessPresentation(processState, status);
+  return p.statusText;
+};
+
+const getPresentationForRecord = (record: any): FileProcessPresentation => {
+  return createFileProcessPresentation(record.processState, record.status);
+};
+
+const getRetryForRecord = (record: any): RetryPresentation => {
+  const presentation = getPresentationForRecord(record);
+  return getRetryPresentation(presentation);
 };
 
 const parseFaqStatus = status => {

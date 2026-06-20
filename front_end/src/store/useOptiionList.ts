@@ -11,7 +11,8 @@ import urlResquest from '@/services/urlConfig';
 import { formatDate, formatFileSize, resultControl } from '@/utils/utils';
 import { message } from 'ant-design-vue';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
-import { ProcessStateDisplay, FileProcessState, getStatusFromProcessState } from '@/utils/fileProcessState';
+import { ProcessStateDisplay } from '@/utils/fileProcessState';
+import { createFileProcessPresentation, mergeLegacyAndPresentation, isFileProcessing } from '@/utils/fileProcessPresenter';
 
 const { currentId } = storeToRefs(useKnowledgeBase());
 
@@ -143,8 +144,9 @@ export const useOptiionList = defineStore(
       setKbTotal(res.total);
 
       const computedRemark = (msg: string = '', status: string = 'green', processState?: ProcessStateDisplay | null) => {
-        if (processState && processState.is_failed && processState.latest_error) {
-          return processState.latest_error.error_message;
+        const presentation = createFileProcessPresentation(processState, status);
+        if (presentation.hasError) {
+          return presentation.errorMessage || msg;
         }
         if (status !== 'green') return msg;
         try {
@@ -156,7 +158,7 @@ export const useOptiionList = defineStore(
 
       res?.details.forEach((item: any, index) => {
         const processState = item?.process_state || null;
-        const displayStatus = getStatusFromProcessState(processState) || item?.status;
+        const { legacyStatus: displayStatus } = mergeLegacyAndPresentation(processState, item?.status);
         dataSource.value.push({
           key: item?.file_id,
           id: 10000 + index,
@@ -173,10 +175,8 @@ export const useOptiionList = defineStore(
       });
 
       const hasProcessing = res?.details.some((item: any) => {
-        if (item?.process_state) {
-          return item.process_state.is_processing || item.process_state.is_pending;
-        }
-        return item.status === 'gray' || item.status === 'yellow';
+        const presentation = createFileProcessPresentation(item?.process_state, item?.status);
+        return isFileProcessing(presentation, item?.status);
       });
       if (hasProcessing) {
         timer.value = setTimeout(() => {

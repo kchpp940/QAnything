@@ -111,6 +111,7 @@ import { getLanguage } from '@/language/index';
 import { useUploadFiles } from '@/store/useUploadFiles';
 import { useChatSetting } from '@/store/useChatSetting';
 import { ProcessStateDisplay, getDisplayStatusText, isProcessingState } from '@/utils/fileProcessState';
+import { createFileProcessPresentation, type FileProcessPresentation } from '@/utils/fileProcessPresenter';
 // import { useLanguage } from '@/store/useLanguage';
 
 // const { language } = storeToRefs(useLanguage());
@@ -303,18 +304,15 @@ const uplolad = async () => {
           list.forEach((item, index) => {
             const fileData = data.data[index];
             const processState = fileData.process_state as ProcessStateDisplay | undefined;
-            let status: string;
-            if (processState) {
-              status = processState.is_failed ? 'error' : 'success';
-            } else {
-              const legacyStatus = fileData.status;
-              status = legacyStatus == 'green' || legacyStatus == 'gray' ? 'success' : 'error';
-            }
+            const presentation = createFileProcessPresentation(processState, fileData.status);
+            const status = presentation.isFailed ? 'error' : 'success';
             uploadFileList.value[item.order].status = status;
             uploadFileList.value[item.order].file_id = fileData.file_id;
             uploadFileList.value[item.order].bytes = fileData.bytes;
             uploadFileList.value[item.order].processState = processState || null;
-            uploadFileList.value[item.order].errorText = status === 'success' ? common.upSucceeded : common.upFailed;
+            uploadFileList.value[item.order].errorText = presentation.isFailed
+              ? (presentation.errorMessage || common.upFailed)
+              : common.upSucceeded;
           });
         }
       } else {
