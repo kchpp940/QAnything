@@ -15,13 +15,12 @@
 import BotsHome from '@/components/Bots/BotsHome.vue';
 import BotList from '@/components/Bots/BotList.vue';
 import { useBots } from '@/store/useBots';
-import urlResquest from '@/services/urlConfig';
-import { resultControl } from '@/utils/utils';
 import { message } from 'ant-design-vue';
 import { LoadingOutlined } from '@ant-design/icons-vue';
+import type { IBotApiResponse } from '@/utils/types';
 
 const { botList } = storeToRefs(useBots());
-const { setBotList } = useBots();
+const { setBotList, fetchBotList } = useBots();
 const isLoading = ref(true);
 
 const indicator = h(LoadingOutlined, {
@@ -33,7 +32,7 @@ const indicator = h(LoadingOutlined, {
 
 const getBotList = async () => {
   try {
-    const res: any = await resultControl(await urlResquest.queryBotInfo());
+    const res: IBotApiResponse[] = await fetchBotList();
     renderData(res, res.length, 0, 10);
   } catch (e) {
     message.error(e.msg || '获取Bot列表失败');
@@ -42,26 +41,16 @@ const getBotList = async () => {
 };
 
 // 时间分片优化
-/**
- * 时间分片，分片渲染数据，以提高渲染效率和性能
- * @param data - 待渲染的数据数组
- * @param total - 数据数组的总长度
- * @param pageNum - 当前页码 0开始
- * @param pageSize - 每页显示的数据条数
- */
-const renderData = (data: Array<any>, total: number, pageNum: number, pageSize: number) => {
+const renderData = (data: Array<IBotApiResponse>, total: number, pageNum: number, pageSize: number) => {
   if (total <= 0) return;
 
-  // total 比 pageSize 少的时候只渲染 total 条数据
   const renderCount = Math.min(total, pageSize);
 
   requestAnimationFrame(() => {
     const startIdx = pageNum * pageSize;
     const endIdx = startIdx + renderCount;
     const dataList = data.slice(startIdx, endIdx);
-    // 插入到 页面数据中
     setBotList([...botList.value, ...dataList]);
-    // 递归
     renderData(data, total - renderCount, pageNum + 1, pageSize);
   });
 };

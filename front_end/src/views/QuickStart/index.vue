@@ -288,7 +288,7 @@ const {
   renameHistory,
   addFileToBeSendList,
 } = useQuickStart();
-const { setCopyUrlVisible, setWebUrl } = useBots();
+const { setCopyUrlVisible, setWebUrl, createBot, updateBot } = useBots();
 const { setChatSourceVisible, setSourceType, setSourceUrl, setTextContent } = useChatSource();
 const { chatSettingFormActive } = storeToRefs(useChatSetting());
 const { showDefault } = storeToRefs(useKnowledgeBase());
@@ -678,36 +678,18 @@ const hideSourceList = index => {
 const shareChat = async () => {
   if (chatId.value === null) return;
   try {
-    // 创建机器人
-    const { bot_id } = (await resultControl(
-      await urlResquest.createBot({
-        bot_name: 'bot-' + formatTimestamp(Date.now()),
-        description: '来源: 快速开始创建-' + formatTimestamp(Date.now()),
-      })
-    )) as any;
-    // 将知识库变为现在这个
-    await resultControl(
-      await urlResquest.updateBot({
-        bot_id,
-        kb_ids: [kbId.value],
-        only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-        networking: chatSettingFormActive.value.capabilities.networkSearch,
-        api_base: chatSettingFormActive.value.apiBase,
-        api_key: chatSettingFormActive.value.apiKey,
-        api_context_length: chatSettingFormActive.value.apiContextLength,
-        top_p: chatSettingFormActive.value.top_P,
-        temperature: chatSettingFormActive.value.temperature,
-        top_k: chatSettingFormActive.value.top_K,
-        model: chatSettingFormActive.value.apiModelName,
-        max_token: chatSettingFormActive.value.maxToken,
-        hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-        chunk_size: chatSettingFormActive.value.chunkSize,
-        rerank: chatSettingFormActive.value.capabilities.rerank,
-      })
-    );
+    const botId = await createBot({
+      bot_name: 'bot-' + formatTimestamp(Date.now()),
+      description: '来源: 快速开始创建-' + formatTimestamp(Date.now()),
+    });
+    await updateBot(botId, {
+      kb_ids: [kbId.value],
+      llm_setting: chatSettingFormActive.value,
+      fromChatSetting: true,
+    });
     setCopyUrlVisible(true);
     const { origin, pathname } = window.location;
-    setWebUrl(`${origin + pathname}#/bots/${bot_id}/share`);
+    setWebUrl(`${origin + pathname}#/bots/${botId}/share`);
   } catch (e) {
     message.error(e?.msg || '分享失败');
   }

@@ -39,7 +39,7 @@ import { getLanguage } from '@/language/index';
 
 const { getCurrentRoute, changePage } = routeController();
 const { tabIndex, curBot } = storeToRefs(useBots());
-const { setTabIndex, setCurBot, setKnowledgeList } = useBots();
+const { setTabIndex, setKnowledgeList, fetchBotInfo } = useBots();
 
 const bots = getLanguage().bots;
 
@@ -72,7 +72,6 @@ const getKbList = async kbIds => {
     console.log('kbs', kbs, kbIds);
     if (kbIds && kbIds.length) {
       kbs = kbs.map(kb => {
-        // state: 0 未绑定 1 绑定
         if (kbIds.some(item => item === kb.kb_id)) {
           kb.state = 1;
         } else {
@@ -93,11 +92,10 @@ const getKbList = async kbIds => {
   }
 };
 
-const getBotInfo = async botId => {
+const getBotInfo = async botIdParam => {
   try {
-    const res: any = await resultControl(await urlResquest.queryBotInfo({ bot_id: botId }));
-    setCurBot(res[0]);
-    getKbList(res[0].kb_ids);
+    const bot = await fetchBotInfo(botIdParam);
+    getKbList(bot.kb_ids);
     isLoading.value = false;
   } catch (e) {
     message.error(e.msg || '获取Bot信息失败');

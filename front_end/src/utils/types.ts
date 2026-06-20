@@ -183,3 +183,45 @@ export interface IBotConfig {
   llm_setting: Partial<IBotLLMSetting>;
   kb_ids: string[];
 }
+
+// 后端 get_bot_info 返回的规范化结构（同时包含兼容字段和结构化 bot_config）
+export interface IBotApiResponse {
+  bot_id: string;
+  user_id: string;
+  bot_name: string;
+  description: string;
+  head_image: string;
+  prompt_setting: string;
+  welcome_message: string;
+  kb_ids: string[];
+  kb_names: string[];
+  update_time: string;
+  // 规范化的 llm_setting（兼容性字段）
+  llm_setting: IBotLLMSetting;
+  // 结构化 bot_config（新契约字段）
+  bot_config: IBotConfig;
+}
+
+// 创建 Bot 的请求参数
+export interface ICreateBotRequest {
+  bot_config: Partial<IBotConfig>;
+}
+
+// 更新 Bot 的请求参数
+export interface IUpdateBotRequest {
+  bot_id: string;
+  bot_config: Partial<IBotConfig>;
+}
+
+// 聊天入口请求（local_doc_chat）
+export interface ILocalDocChatRequest {
+  bot_id?: string;
+  question: string;
+  streaming?: boolean;
+  history?: any[];
+  // 可选项：通过 bot_config 覆盖配置
+  bot_config?: Partial<IBotConfig>;
+}
+
+// store 中 curBot 的类型（就是规范化后的 API 响应）
+export type ICurBot = IBotApiResponse;
