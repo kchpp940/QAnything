@@ -24,34 +24,6 @@ export interface IDataSourceItem {
   file_id: string | null; // 来源文件id（知识库的文件）
   file_url: string | null; // 来源网址（联网检索）
   showDetailDataSource?: boolean; //是否展示详细来源信息
-  source_type?: 'local' | 'web'; // 来源类型：本地知识库或联网搜索
-  trust_level?: 'high' | 'medium' | 'low'; // 可信级别
-  web_timestamp?: number; // 联网搜索时间戳
-}
-
-// 联网检索策略
-export type WebSearchPolicy = 'disabled' | 'manual' | 'low_recall' | 'always';
-
-// 联网触发原因
-export type WebTriggerReason =
-  | 'policy_always'
-  | 'policy_low_recall'
-  | 'policy_manual'
-  | 'skipped_disabled'
-  | 'skipped_manual_off'
-  | 'skipped_high_recall';
-
-// 联网搜索追踪记录
-export interface IWebSearchTrace {
-  policy: WebSearchPolicy;          // 执行的策略
-  manual_enabled: boolean;           // 用户是否手动开启单次联网
-  triggered: boolean;                // 是否实际触发了联网搜索
-  trigger_reason: WebTriggerReason;  // 触发/跳过原因
-  local_doc_count: number;           // 本地检索文档数
-  local_recall_score: number;        // 本地最高召回分数
-  web_result_count: number;          // 联网结果数量
-  web_ratio: number;                 // 联网结果占比
-  execution_time_ms: number;         // 执行耗时(ms)
 }
 
 export interface IChatItem {
@@ -65,7 +37,6 @@ export interface IChatItem {
 
   showTools?: boolean; //当期问答是否结束 结束展示复制等小工具和取消闪烁
   source?: Array<IDataSourceItem>; // 数据来源
-  web_search_trace?: IWebSearchTrace; // 联网搜索追踪记录
 
   picList?: any; // 不知道是啥，用到了，不敢删
   qaId?: any; // 同上
@@ -136,7 +107,7 @@ export interface IFileListItem {
 
 // 模型设置
 type ICapabilities = {
-  /* 是否联网搜索（已废弃，使用 webSearchPolicy 替代） */
+  /* 是否联网搜索 */
   networkSearch: boolean;
   /* 是否混合搜索 */
   mixedSearch: boolean;
@@ -175,8 +146,6 @@ export interface IChatSetting {
   top_K: number;
   /* 模型能力 */
   capabilities: ICapabilities;
-  /* 联网检索策略 */
-  webSearchPolicy: WebSearchPolicy;
   /* 是否开启（只有一个） */
   active: boolean;
 }

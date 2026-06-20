@@ -51,26 +51,26 @@ def isURL(string):
 
 
 def format_source_documents(ori_source_documents):
+    from qanything_kernel.core.retriever.candidate import CandidateDocument
     source_documents = []
     for inum, doc in enumerate(ori_source_documents):
-        source_info = {'file_id': doc.metadata.get('file_id', ''),
-                       'file_name': doc.metadata.get('file_name', ''),
-                       'content': doc.page_content,
-                       'retrieval_query': doc.metadata.get('retrieval_query', ''),
-                       # 'kernel': doc.metadata['kernel'],
-                       'file_url': doc.metadata.get('file_url', ''),
-                       'score': str(doc.metadata['score']),
-                       'embed_version': doc.metadata.get('embed_version', ''),
-                       'nos_keys': doc.metadata.get('nos_keys', ''),
-                       'doc_id': doc.metadata.get('doc_id', ''),
-                       'retrieval_source': doc.metadata.get('retrieval_source', ''),
-                       'headers': doc.metadata.get('headers', {}),
-                       'page_id': doc.metadata.get('page_id', 0),
-                       'source_type': doc.metadata.get('source_type', 'local'),
-                       'trust_level': doc.metadata.get('trust_level', 'high'),
-                       'web_timestamp': doc.metadata.get('web_timestamp', 0),
-                       }
-        source_documents.append(source_info)
+        if isinstance(doc, CandidateDocument):
+            source_documents.append(doc.to_source_dict())
+        else:
+            source_info = {'file_id': doc.metadata.get('file_id', ''),
+                           'file_name': doc.metadata.get('file_name', ''),
+                           'content': doc.page_content,
+                           'retrieval_query': doc.metadata.get('retrieval_query', ''),
+                           'file_url': doc.metadata.get('file_url', ''),
+                           'score': str(doc.metadata.get('score', '')),
+                           'embed_version': doc.metadata.get('embed_version', ''),
+                           'nos_keys': doc.metadata.get('nos_keys', ''),
+                           'doc_id': doc.metadata.get('doc_id', ''),
+                           'retrieval_source': doc.metadata.get('retrieval_source', ''),
+                           'headers': doc.metadata.get('headers', {}),
+                           'page_id': doc.metadata.get('page_id', 0),
+                           }
+            source_documents.append(source_info)
     return source_documents
 
 

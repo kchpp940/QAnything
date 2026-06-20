@@ -262,7 +262,6 @@ class KnowledgeBaseManager:
             # 如果没有的话，给QanythingBot添加一列：llm_setting VARCHAR(512)
             "ALTER TABLE QanythingBot ADD COLUMN llm_setting VARCHAR(512) DEFAULT '{}'",
             "ALTER TABLE QanythingBot DROP COLUMN model",
-            "ALTER TABLE QaLogs ADD COLUMN web_search_trace MEDIUMTEXT",
         ]
 
         for query in index_queries:
@@ -672,7 +671,7 @@ class KnowledgeBaseManager:
         debug_logger.info(f"delete_faqs count: {total_deleted}")
 
     def add_qalog(self, user_id, bot_id, kb_ids, query, model, product_source, time_record, history, condense_question,
-                  prompt, result, retrieval_documents, source_documents, web_search_trace=""):
+                  prompt, result, retrieval_documents, source_documents):
         debug_logger.info("add_qalog: {}".format(query))
         qa_id = uuid.uuid4().hex
         kb_ids = json.dumps(kb_ids, ensure_ascii=False)
@@ -680,14 +679,13 @@ class KnowledgeBaseManager:
         source_documents = json.dumps(source_documents, ensure_ascii=False)
         history = json.dumps(history, ensure_ascii=False)
         time_record = json.dumps(time_record, ensure_ascii=False)
-        web_search_trace = json.dumps(web_search_trace, ensure_ascii=False) if isinstance(web_search_trace, dict) else web_search_trace
         insert_query = (
             "INSERT INTO QaLogs (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record, "
-            "history, condense_question, prompt, result, retrieval_documents, source_documents, web_search_trace) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            "history, condense_question, prompt, result, retrieval_documents, source_documents) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
         self.execute_query_(insert_query, (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record,
                                            history, condense_question, prompt, result, retrieval_documents,
-                                           source_documents, web_search_trace), commit=True)
+                                           source_documents), commit=True)
 
     def get_qalog_by_filter(self, need_info, user_id=None, query=None, bot_id=None, time_range=None, any_kb_id=None, qa_ids=None):
         # 判断哪些条件不是None，构建搜索query
@@ -725,14 +723,6 @@ class KnowledgeBaseManager:
                 qa_info['retrieval_documents'] = json.loads(qa_info['retrieval_documents'])
             if 'source_documents' in qa_info:
                 qa_info['source_documents'] = json.loads(qa_info['source_documents'])
-            if 'web_search_trace' in qa_info:
-                if qa_info['web_search_trace']:
-                    try:
-                        qa_info['web_search_trace'] = json.loads(qa_info['web_search_trace'])
-                    except Exception:
-                        qa_info['web_search_trace'] = {}
-                else:
-                    qa_info['web_search_trace'] = {}
             if 'history' in qa_info:
                 qa_info['history'] = json.loads(qa_info['history'])
         if 'timestamp' in need_info:
@@ -791,14 +781,6 @@ class KnowledgeBaseManager:
         query = f"SELECT {need_info} FROM QaLogs WHERE qa_id = %s"
         qa_log = self.execute_query_(query, (qa_id,), fetch=True, user_dict=True)[0]
         qa_log['timestamp'] = qa_log['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
-        if 'web_search_trace' in qa_log:
-            if qa_log['web_search_trace']:
-                try:
-                    qa_log['web_search_trace'] = json.loads(qa_log['web_search_trace'])
-                except Exception:
-                    qa_log['web_search_trace'] = {}
-            else:
-                qa_log['web_search_trace'] = {}
         user_id = qa_log['user_id']
         # 获取当前时间和7天前的时间
         current_time = datetime.utcnow()
@@ -824,14 +806,6 @@ class KnowledgeBaseManager:
                 break
             for log in logs:
                 log['timestamp'] = log['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
-                if 'web_search_trace' in log:
-                    if log['web_search_trace']:
-                        try:
-                            log['web_search_trace'] = json.loads(log['web_search_trace'])
-                        except Exception:
-                            log['web_search_trace'] = {}
-                    else:
-                        log['web_search_trace'] = {}
             recent_logs.extend(logs)
             offset += limit
             # TODO 最多返回50条，后续可以有翻页逻辑
@@ -854,14 +828,6 @@ class KnowledgeBaseManager:
                 break
             for log in logs:
                 log['timestamp'] = log['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
-                if 'web_search_trace' in log:
-                    if log['web_search_trace']:
-                        try:
-                            log['web_search_trace'] = json.loads(log['web_search_trace'])
-                        except Exception:
-                            log['web_search_trace'] = {}
-                    else:
-                        log['web_search_trace'] = {}
             older_logs.extend(logs)
             offset += limit
             # TODO 最多返回50条，后续可以有翻页逻辑
@@ -876,10 +842,10 @@ class KnowledgeBaseManager:
         return result is not None and len(result) > 0
 
     def new_qanything_bot(self, bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message,
-                          kb_ids_str, llm_setting='{}'):
-        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, llm_setting) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
+                          kb_ids_str):
+        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
         self.execute_query_(query, (
-        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, llm_setting),
+        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str),
                             commit=True)
         return bot_id, "success"
 

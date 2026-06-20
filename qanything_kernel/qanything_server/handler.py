@@ -5,9 +5,7 @@ from qanything_kernel.core.local_doc_qa import LocalDocQA
 from qanything_kernel.utils.custom_log import debug_logger, qa_logger
 from qanything_kernel.configs.model_config import (BOT_DESC, BOT_IMAGE, BOT_PROMPT, BOT_WELCOME,
                                                    DEFAULT_PARENT_CHUNK_SIZE, MAX_CHARS, VECTOR_SEARCH_TOP_K,
-                                                   UPLOAD_ROOT_PATH, IMAGES_ROOT_PATH, WEB_SEARCH_POLICY_DISABLED,
-                                                   WEB_SEARCH_POLICY_MANUAL, WEB_SEARCH_POLICY_LOW_RECALL,
-                                                   WEB_SEARCH_POLICY_ALWAYS)
+                                                   UPLOAD_ROOT_PATH, IMAGES_ROOT_PATH)
 from qanything_kernel.utils.general_utils import *
 from langchain.schema import Document
 from sanic.response import ResponseStream
@@ -671,16 +669,7 @@ async def local_doc_chat(req: request):
         llm_setting = json.loads(llm_setting)
         rerank = llm_setting.get('rerank', True)
         only_need_search_results = llm_setting.get('only_need_search_results', False)
-        # Bot 的联网策略由 Bot 自身配置决定，但用户可以通过请求参数覆盖手动开关
-        bot_need_web_search = llm_setting.get('networking', False)
-        web_search_policy = llm_setting.get('web_search_policy', None)
-        if web_search_policy is None:
-            web_search_policy = WEB_SEARCH_POLICY_ALWAYS if bot_need_web_search else WEB_SEARCH_POLICY_DISABLED
-        # 用户请求级别的手动联网开关
-        manual_enabled = safe_get(req, 'manual_enabled', False)
-        # 兼容旧参数 networking
-        if not manual_enabled:
-            manual_enabled = safe_get(req, 'networking', False)
+        need_web_search = llm_setting.get('networking', False)
         api_base = llm_setting.get('api_base', '')
         api_key = llm_setting.get('api_key', 'ollama')
         api_context_length = llm_setting.get('api_context_length', 4096)
@@ -696,15 +685,7 @@ async def local_doc_chat(req: request):
         custom_prompt = safe_get(req, 'custom_prompt', None)
         rerank = safe_get(req, 'rerank', default=True)
         only_need_search_results = safe_get(req, 'only_need_search_results', False)
-        # 用户请求级别的手动联网开关
-        manual_enabled = safe_get(req, 'manual_enabled', False)
-        # 兼容旧参数 networking
-        need_web_search_old = safe_get(req, 'networking', False)
-        if not manual_enabled:
-            manual_enabled = need_web_search_old
-        web_search_policy = safe_get(req, 'web_search_policy', None)
-        if web_search_policy is None:
-            web_search_policy = WEB_SEARCH_POLICY_ALWAYS if need_web_search_old else WEB_SEARCH_POLICY_DISABLED
+        need_web_search = safe_get(req, 'networking', False)
         api_base = safe_get(req, 'api_base', '')
         # 如果api_base中包含0.0.0.0或127.0.0.1或localhost，替换为GATEWAY_IP
         api_base = api_base.replace('0.0.0.0', GATEWAY_IP).replace('127.0.0.1', GATEWAY_IP).replace('localhost',
@@ -768,8 +749,7 @@ async def local_doc_chat(req: request):
     debug_logger.info("request_source: %s", request_source)
     debug_logger.info("only_need_search_results: %s", only_need_search_results)
     debug_logger.info("bot_id: %s", bot_id)
-    debug_logger.info("manual_enabled: %s", manual_enabled)
-    debug_logger.info("web_search_policy: %s", web_search_policy)
+    debug_logger.info("need_web_search: %s", need_web_search)
     debug_logger.info("api_base: %s", api_base)
     debug_logger.info("api_key: %s", api_key)
     debug_logger.info("api_context_length: %s", api_context_length)
@@ -819,8 +799,7 @@ async def local_doc_chat(req: request):
                                                                                     rerank=rerank,
                                                                                     custom_prompt=custom_prompt,
                                                                                     time_record=time_record,
-                                                                                    manual_enabled=manual_enabled,
-                                                                                    web_search_policy=web_search_policy,
+                                                                                    need_web_search=need_web_search,
                                                                                     hybrid_search=hybrid_search,
                                                                                     web_chunk_size=chunk_size,
                                                                                     temperature=temperature,
@@ -843,18 +822,13 @@ async def local_doc_chat(req: request):
                     if time_record.get('llm_completed', 0) > 0:
                         time_record['tokens_per_second'] = round(
                             len(result) / time_record['llm_completed'], 2)
-                    # 从响应中获取 web_search_trace
-                    web_search_trace = resp.get('web_search_trace', {})
-                    # 格式化 trace 中的 retrieval_documents 用于存储
-                    web_trace_for_log = dict(web_search_trace) if web_search_trace else {}
                     formatted_time_record = format_time_record(time_record)
                     chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, "model": model,
                                  "product_source": request_source, 'time_record': formatted_time_record,
                                  'history': history,
                                  'condense_question': resp['condense_question'], 'prompt': resp['prompt'],
                                  'result': result, 'retrieval_documents': retrieval_documents,
-                                 'source_documents': source_documents, 'bot_id': bot_id,
-                                 'web_search_trace': json.dumps(web_trace_for_log, ensure_ascii=False)}
+                                 'source_documents': source_documents, 'bot_id': bot_id}
                     local_doc_qa.milvus_summary.add_qalog(**chat_data)
                     qa_logger.info("chat_data: %s", chat_data)
                     debug_logger.info("response: %s", chat_data['result'])
@@ -869,8 +843,7 @@ async def local_doc_chat(req: request):
                         "source_documents": source_documents,
                         "retrieval_documents": retrieval_documents,
                         "time_record": formatted_time_record,
-                        "show_images": resp.get('show_images', []),
-                        "web_search_trace": web_search_trace
+                        "show_images": resp.get('show_images', [])
                     }
                 else:
                     time_record['rollback_length'] = resp.get('rollback_length', 0)
@@ -907,8 +880,7 @@ async def local_doc_chat(req: request):
                                                                            custom_prompt=custom_prompt,
                                                                            time_record=time_record,
                                                                            only_need_search_results=only_need_search_results,
-                                                                           manual_enabled=manual_enabled,
-                                                                           web_search_policy=web_search_policy,
+                                                                           need_web_search=need_web_search,
                                                                            hybrid_search=hybrid_search,
                                                                            web_chunk_size=chunk_size,
                                                                            temperature=temperature,
@@ -924,16 +896,12 @@ async def local_doc_chat(req: request):
                 {"code": 200, "question": question, "source_documents": format_source_documents(resp)})
         retrieval_documents = format_source_documents(resp["retrieval_documents"])
         source_documents = format_source_documents(resp["source_documents"])
-        # 从响应中获取 web_search_trace
-        web_search_trace = resp.get('web_search_trace', {})
-        web_trace_for_log = dict(web_search_trace) if web_search_trace else {}
         formatted_time_record = format_time_record(time_record)
         chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, 'time_record': formatted_time_record,
                      'history': history, "condense_question": resp['condense_question'], "model": model,
                      "product_source": request_source,
                      'retrieval_documents': retrieval_documents, 'prompt': resp['prompt'], 'result': resp['result'],
-                     'source_documents': source_documents, 'bot_id': bot_id,
-                     'web_search_trace': json.dumps(web_trace_for_log, ensure_ascii=False)}
+                     'source_documents': source_documents, 'bot_id': bot_id}
         local_doc_qa.milvus_summary.add_qalog(**chat_data)
         qa_logger.info("chat_data: %s", chat_data)
         debug_logger.info("response: %s", chat_data['result'])
@@ -941,7 +909,7 @@ async def local_doc_chat(req: request):
                            "response": resp["result"], "model": model,
                            "history": history, "condense_question": resp['condense_question'],
                            "source_documents": source_documents, "retrieval_documents": retrieval_documents,
-                           "time_record": formatted_time_record, "web_search_trace": web_search_trace})
+                           "time_record": formatted_time_record})
 
 
 @get_time_async
@@ -1103,7 +1071,7 @@ async def get_qa_info(req: request):
     page_limit = safe_get(req, 'page_limit', 10)
     default_need_info = ["qa_id", "user_id", "bot_id", "kb_ids", "query", "model", "product_source", "time_record",
                          "history", "condense_question", "prompt", "result", "retrieval_documents", "source_documents",
-                         "web_search_trace", "timestamp"]
+                         "timestamp"]
     need_info = safe_get(req, 'need_info', default_need_info)
     save_to_excel = safe_get(req, 'save_to_excel', False)
     qa_infos = local_doc_qa.milvus_summary.get_qalog_by_filter(need_info=need_info, user_id=user_id, query=query,
@@ -1329,17 +1297,6 @@ async def new_bot(req: request):
     kb_ids = safe_get(req, "kb_ids", [])
     kb_ids_str = ",".join(kb_ids)
 
-    # 从请求中读取 llm_setting，默认包含 web_search_policy
-    llm_setting = safe_get(req, "llm_setting", {})
-    if isinstance(llm_setting, str):
-        try:
-            llm_setting = json.loads(llm_setting)
-        except Exception:
-            llm_setting = {}
-    if "web_search_policy" not in llm_setting:
-        llm_setting["web_search_policy"] = WEB_SEARCH_POLICY_DISABLED
-    llm_setting_str = json.dumps(llm_setting, ensure_ascii=False)
-
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
     if not_exist_kb_ids:
         msg = "invalid kb_id: {}, please check...".format(not_exist_kb_ids)
@@ -1347,7 +1304,7 @@ async def new_bot(req: request):
     debug_logger.info("new_bot %s", user_id)
     bot_id = 'BOT' + uuid.uuid4().hex
     local_doc_qa.milvus_summary.new_qanything_bot(bot_id, user_id, bot_name, desc, head_image, prompt_setting,
-                                                  welcome_message, kb_ids_str, llm_setting_str)
+                                                  welcome_message, kb_ids_str)
     create_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return sanic_json({"code": 200, "msg": "success create qanything bot {}".format(bot_id),
                        "data": {"bot_id": bot_id, "bot_name": bot_name, "create_time": create_time}})
@@ -1428,9 +1385,6 @@ async def update_bot(req: request):
     networking = safe_get(req, "networking")
     if networking is not None:
         llm_setting["networking"] = networking
-    web_search_policy = safe_get(req, "web_search_policy")
-    if web_search_policy is not None:
-        llm_setting["web_search_policy"] = web_search_policy
     only_need_search_results = safe_get(req, "only_need_search_results")
     if only_need_search_results is not None:
         llm_setting["only_need_search_results"] = only_need_search_results

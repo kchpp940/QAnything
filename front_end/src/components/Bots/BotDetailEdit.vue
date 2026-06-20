@@ -79,37 +79,6 @@ onMounted(() => {
   name.value = curBot.value.bot_name;
   welcomeMessage.value = curBot.value.welcome_message;
   roleSetting.value = curBot.value.prompt_setting;
-
-  // 将 Bot 的 llm_setting 同步到 chatSettingFormActive，确保策略回显
-  if (curBot.value.llm_setting) {
-    try {
-      const llm = typeof curBot.value.llm_setting === 'string'
-        ? JSON.parse(curBot.value.llm_setting)
-        : curBot.value.llm_setting;
-      if (chatSettingFormActive.value) {
-        if (llm.web_search_policy) {
-          chatSettingFormActive.value.webSearchPolicy = llm.web_search_policy;
-        } else if (llm.networking !== undefined) {
-          chatSettingFormActive.value.webSearchPolicy = llm.networking ? 'always' : 'disabled';
-        }
-        if (llm.api_base) chatSettingFormActive.value.apiBase = llm.api_base;
-        if (llm.api_key) chatSettingFormActive.value.apiKey = llm.api_key;
-        if (llm.api_context_length) chatSettingFormActive.value.apiContextLength = llm.api_context_length;
-        if (llm.top_p) chatSettingFormActive.value.top_P = llm.top_p;
-        if (llm.top_k) chatSettingFormActive.value.top_K = llm.top_k;
-        if (llm.chunk_size) chatSettingFormActive.value.chunkSize = llm.chunk_size;
-        if (llm.temperature !== undefined) chatSettingFormActive.value.temperature = llm.temperature;
-        if (llm.model) chatSettingFormActive.value.apiModelName = llm.model;
-        if (llm.max_token !== undefined) chatSettingFormActive.value.maxToken = llm.max_token;
-        if (llm.rerank !== undefined) chatSettingFormActive.value.capabilities.rerank = llm.rerank;
-        if (llm.hybrid_search !== undefined) chatSettingFormActive.value.capabilities.mixedSearch = llm.hybrid_search;
-        if (llm.networking !== undefined) chatSettingFormActive.value.capabilities.networkSearch = llm.networking;
-        if (llm.only_need_search_results !== undefined) chatSettingFormActive.value.capabilities.onlySearch = llm.only_need_search_results;
-      }
-    } catch (e) {
-      console.warn('Failed to parse llm_setting', e);
-    }
-  }
 });
 
 const getBotInfo = async botId => {
@@ -132,7 +101,6 @@ const saveBotInfo = async () => {
         welcome_message: welcomeMessage.value,
         only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
         networking: chatSettingFormActive.value.capabilities.networkSearch,
-        web_search_policy: chatSettingFormActive.value.webSearchPolicy || 'disabled',
         api_base: chatSettingFormActive.value.apiBase,
         api_key: chatSettingFormActive.value.apiKey,
         api_context_length: chatSettingFormActive.value.apiContextLength,

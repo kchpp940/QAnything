@@ -19,7 +19,6 @@ export const useChatSetting = defineStore(
       temperature: 0.5,
       top_P: 1,
       top_K: 30,
-      webSearchPolicy: 'disabled',
       capabilities: {
         networkSearch: false,
         mixedSearch: false,

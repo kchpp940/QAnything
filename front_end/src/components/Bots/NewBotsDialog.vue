@@ -114,9 +114,6 @@ const onFinish = async (values: any) => {
       await urlResquest.createBot({
         bot_name: values.name,
         description: values.introduction,
-        llm_setting: JSON.stringify({
-          web_search_policy: 'disabled',
-        }),
       })
     );
     await getBotInfo(res.bot_id);
