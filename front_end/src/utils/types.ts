@@ -185,18 +185,26 @@ export interface IBotConfig {
 }
 
 // 后端 get_bot_info 返回的规范化结构（同时包含兼容字段和结构化 bot_config）
+// 注意：组件层应只消费 bot_config.*，根级字段（bot_name/description/.../llm_setting/kb_ids）
+//       仅作为兼容层保留，新代码不应再直接访问。
 export interface IBotApiResponse {
   bot_id: string;
   user_id: string;
+  /** @deprecated 请从 bot_config.basic.bot_name 读取 */
   bot_name: string;
+  /** @deprecated 请从 bot_config.basic.description 读取 */
   description: string;
+  /** @deprecated 请从 bot_config.basic.head_image 读取 */
   head_image: string;
+  /** @deprecated 请从 bot_config.basic.prompt_setting 读取 */
   prompt_setting: string;
+  /** @deprecated 请从 bot_config.basic.welcome_message 读取 */
   welcome_message: string;
+  /** @deprecated 请从 bot_config.kb_ids 读取 */
   kb_ids: string[];
   kb_names: string[];
   update_time: string;
-  // 规范化的 llm_setting（兼容性字段）
+  /** @deprecated 请从 bot_config.llm_setting 读取 */
   llm_setting: IBotLLMSetting;
   // 结构化 bot_config（新契约字段）
   bot_config: IBotConfig;

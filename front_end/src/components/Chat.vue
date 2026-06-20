@@ -238,6 +238,7 @@ import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import { useBots } from '@/store/useBots';
 import CopyUrlDialog from '@/components/Bots/CopyUrlDialog.vue';
 import ChatTextarea from '@/components/ChatTextarea.vue';
+import { buildLocalDocChatPayload } from '@/utils/botConfig';
 
 const common = getLanguage().common;
 
@@ -524,26 +525,18 @@ const send = async () => {
   showLoading.value = true;
   ctrl = new AbortController();
 
-  const sendData = {
-    kb_ids: selectList.value,
-    history: history.value,
-    question: q,
-    streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
-    networking: chatSettingFormActive.value.capabilities.networkSearch,
-    product_source: 'saas',
-    rerank: chatSettingFormActive.value.capabilities.rerank,
-    only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-    hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-    max_token: chatSettingFormActive.value.maxToken,
-    api_base: chatSettingFormActive.value.apiBase,
-    api_key: chatSettingFormActive.value.apiKey,
-    model: chatSettingFormActive.value.apiModelName,
-    api_context_length: chatSettingFormActive.value.apiContextLength,
-    chunk_size: chatSettingFormActive.value.chunkSize,
-    top_p: chatSettingFormActive.value.top_P,
-    top_k: chatSettingFormActive.value.top_K,
-    temperature: chatSettingFormActive.value.temperature,
-  };
+  const sendData = buildLocalDocChatPayload(
+    {
+      user_id: userId,
+      user_info: userPhone,
+      question: q,
+      history: history.value,
+      streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
+      product_source: 'saas',
+    },
+    chatSettingFormActive.value,
+    { kb_ids: selectList.value },
+  );
 
   // 如果是仅检索
   if (chatSettingFormActive.value.capabilities.onlySearch) {
@@ -581,11 +574,7 @@ const send = async () => {
         Accept: ['text/event-stream', 'application/json'],
       },
       openWhenHidden: true,
-      body: JSON.stringify({
-        user_id: userId,
-        user_info: userPhone,
-        ...sendData,
-      }),
+      body: JSON.stringify(sendData),
       signal: ctrl.signal,
       onopen(e: any) {
         console.log('open', e);

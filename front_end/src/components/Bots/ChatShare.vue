@@ -239,7 +239,7 @@ import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
 import ChatTextarea from '@/components/ChatTextarea.vue';
 import { useUser } from '@/store/useUser';
-import { llmSettingToChatSetting } from '@/utils/botConfig';
+import { llmSettingToChatSetting, buildLocalDocChatPayload } from '@/utils/botConfig';
 
 const props = defineProps({
   chatType: {
@@ -462,28 +462,19 @@ const send = async () => {
   showLoading.value = true;
   ctrl = new AbortController();
 
-  const sendData = {
-    user_id: props.virtualUserId,
-    user_info: userInfo.phoneNumber,
-    bot_id: props.botInfo.bot_id,
-    history: history.value,
-    question: q,
-    streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
-    networking: chatSettingFormActive.value.capabilities.networkSearch,
-    product_source: 'saas',
-    rerank: chatSettingFormActive.value.capabilities.rerank,
-    only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-    hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-    max_token: chatSettingFormActive.value.maxToken,
-    api_base: chatSettingFormActive.value.apiBase,
-    api_key: chatSettingFormActive.value.apiKey,
-    model: chatSettingFormActive.value.apiModelName,
-    api_context_length: chatSettingFormActive.value.apiContextLength,
-    chunk_size: chatSettingFormActive.value.chunkSize,
-    top_p: chatSettingFormActive.value.top_P,
-    top_k: chatSettingFormActive.value.top_K,
-    temperature: chatSettingFormActive.value.temperature,
-  };
+  const sendData = buildLocalDocChatPayload(
+    {
+      user_id: props.virtualUserId,
+      user_info: userInfo.phoneNumber,
+      bot_id: props.botInfo.bot_id,
+      question: q,
+      history: history.value,
+      streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
+      product_source: 'saas',
+    },
+    chatSettingFormActive.value,
+    props.botInfo.bot_config,
+  );
 
   // 如果是仅检索
   if (chatSettingFormActive.value.capabilities.onlySearch) {

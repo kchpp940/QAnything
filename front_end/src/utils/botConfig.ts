@@ -207,3 +207,47 @@ export function chatSettingFromBot(
 ): IChatSetting {
   return llmSettingToChatSetting(bot.llm_setting, existingConfigured);
 }
+
+// ========== 聊天请求（local_doc_chat / sendQuestion）构造 ==========
+
+/**
+ * local_doc_chat 请求的业务字段（非配置字段，不放入 bot_config）
+ * 无 Bot 的普通聊天场景（首页/快速开始）可不传 bot_id，但必须传 kb_ids。
+ */
+export interface ILocalDocChatBusinessFields {
+  user_id: string;
+  user_info?: string;
+  bot_id?: string;
+  question: string;
+  history: Array<[string, string]>;
+  streaming: boolean;
+  product_source?: string;
+}
+
+/**
+ * 构造 local_doc_chat 发送的 payload。
+ * 聊天入口不再手动拼 llm_setting/kb_ids 等散字段，统一通过此函数构造：
+ * - 业务字段原样保留（user_id / bot_id / question / history / streaming）
+ * - 配置字段统一包装进 bot_config，与 newBot/updateBot 使用相同的契约格式
+ *
+ * 调用场景：
+ * 1. Bot 聊天：传 botInfo.bot_config 作为 baseConfig，kb_ids 从中取
+ * 2. 普通聊天（首页/快速开始）：传 { kb_ids } 作为 baseConfig
+ *
+ * 这样后端 resolver 可以用同一套逻辑解析 new_bot / update_bot / local_doc_chat。
+ */
+export function buildLocalDocChatPayload(
+  business: ILocalDocChatBusinessFields,
+  chatSetting: IChatSetting,
+  baseConfig: { kb_ids: string[] },
+): ILocalDocChatBusinessFields & { bot_config: Partial<IBotConfig> } {
+  const llm_setting = chatSettingToLLMSetting(chatSetting);
+
+  return {
+    ...business,
+    bot_config: {
+      llm_setting,
+      kb_ids: baseConfig.kb_ids,
+    },
+  };
+}
