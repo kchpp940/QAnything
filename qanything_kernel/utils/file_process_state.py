@@ -25,6 +25,25 @@ class ProcessStage(str, Enum):
     COMPLETE = "complete"
 
 
+STAGE_ORDER = [
+    ProcessStage.UPLOAD,
+    ProcessStage.PARSE,
+    ProcessStage.SPLIT,
+    ProcessStage.EMBED,
+    ProcessStage.INDEX,
+    ProcessStage.COMPLETE,
+]
+
+STAGE_TO_STATE_MAP = {
+    ProcessStage.UPLOAD: FileProcessState.PENDING,
+    ProcessStage.PARSE: FileProcessState.PARSING,
+    ProcessStage.SPLIT: FileProcessState.SPLITTING,
+    ProcessStage.EMBED: FileProcessState.EMBEDDING,
+    ProcessStage.INDEX: FileProcessState.INDEXING,
+    ProcessStage.COMPLETE: FileProcessState.COMPLETED,
+}
+
+
 class ErrorCategory(str, Enum):
     PARSE_ERROR = "parse_error"
     SPLIT_ERROR = "split_error"
@@ -187,6 +206,42 @@ class FileProcessContext:
             self.retry_count += 1
             self.state = FileProcessState.RETRYING
 
+    def get_retry_stage(self) -> ProcessStage:
+        if not self.error_history:
+            return ProcessStage.UPLOAD
+        latest_error = self.error_history[-1]
+        error_stage = latest_error.stage
+        stage_index = STAGE_ORDER.index(error_stage)
+        if stage_index > 0:
+            return STAGE_ORDER[stage_index - 1]
+        return ProcessStage.UPLOAD
+
+    def rollback_to(self, stage: ProcessStage, message: str = "") -> None:
+        if stage not in STAGE_ORDER:
+            raise ValueError(f"Invalid stage: {stage}")
+        self.current_stage = stage
+        self.state = STAGE_TO_STATE_MAP.get(stage, FileProcessState.PENDING)
+        self.progress = STAGE_PROGRESS_MAP.get(stage, 0.0)
+        event = StageEvent(stage=stage, progress=self.progress, message=message or f"回滚到 {stage.value} 阶段")
+        self.stage_events.append(event)
+
+    def reset_for_retry(self, policy: Optional[RetryPolicy] = None) -> bool:
+        if not self.can_retry(policy):
+            return False
+        retry_stage = self.get_retry_stage()
+        self.mark_for_retry()
+        self.rollback_to(retry_stage, f"准备第 {self.retry_count} 次重试")
+        return True
+
+    def get_completed_stages(self) -> List[ProcessStage]:
+        completed = []
+        for stage in STAGE_ORDER:
+            if stage == self.current_stage:
+                break
+            if any(e.stage == stage for e in self.stage_events):
+                completed.append(stage)
+        return completed
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "file_id": self.file_id,
@@ -234,9 +289,15 @@ class FileProcessContext:
                 FileProcessState.RETRYING,
             ],
             "is_pending": self.state == FileProcessState.PENDING,
+            "is_retrying": self.state == FileProcessState.RETRYING,
             "can_retry": self.can_retry(),
             "retry_count": self.retry_count,
+            "retry_stage": self.get_retry_stage().value if self.error_history else None,
+            "stage_events": [e.to_dict() for e in self.stage_events],
+            "error_history": [e.to_dict() for e in self.error_history],
             "latest_error": self.error_history[-1].to_dict() if self.error_history else None,
+            "completed_stages": [s.value for s in self.get_completed_stages()],
+            "metadata": self.metadata,
             "legacy_status": STATE_TO_LEGACY_MAP.get(self.state, "red"),
         }
 

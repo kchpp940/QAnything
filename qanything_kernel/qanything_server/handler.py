@@ -591,6 +591,54 @@ async def delete_docs(req: request):
 
 
 @get_time_async
+async def retry_file_process(req: request):
+    local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
+    user_id = safe_get(req, 'user_id')
+    user_info = safe_get(req, 'user_info', "1234")
+    passed, msg = check_user_id_and_user_info(user_id, user_info)
+    if not passed:
+        return sanic_json({"code": 2001, "msg": msg})
+    user_id = user_id + '__' + user_info
+    debug_logger.info("retry_file_process %s", user_id)
+    kb_id = safe_get(req, 'kb_id')
+    kb_id = correct_kb_id(kb_id)
+    file_ids = safe_get(req, "file_ids")
+    not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, [kb_id])
+    if not_exist_kb_ids:
+        return sanic_json({"code": 2003, "msg": "fail, knowledge Base {} not found".format(not_exist_kb_ids[0])})
+    valid_file_infos = local_doc_qa.milvus_summary.check_file_exist(user_id, kb_id, file_ids)
+    if len(valid_file_infos) == 0:
+        return sanic_json({"code": 2004, "msg": "fail, files {} not found".format(file_ids)})
+    valid_file_ids = [file_info[0] for file_info in valid_file_infos]
+    debug_logger.info("retry_file_process valid_file_ids %s", valid_file_ids)
+
+    retried_files = []
+    failed_files = []
+    for file_id in valid_file_ids:
+        context = local_doc_qa.milvus_summary.reset_file_for_retry(file_id)
+        if context:
+            retried_files.append(file_id)
+            expr = f'file_id == "{file_id}"'
+            try:
+                local_doc_qa.milvus_kb.delete_expr(expr)
+            except Exception as e:
+                debug_logger.warning(f"Failed to clean milvus data for retry {file_id}: {e}")
+            try:
+                file_chunks = local_doc_qa.milvus_summary.get_chunk_size([file_id])
+                local_doc_qa.es_client.delete_files([file_id], file_chunks)
+            except Exception as e:
+                debug_logger.warning(f"Failed to clean es data for retry {file_id}: {e}")
+        else:
+            failed_files.append(file_id)
+
+    result = {
+        "retried_files": retried_files,
+        "failed_files": failed_files,
+    }
+    return sanic_json({"code": 200, "msg": "success", "data": result})
+
+
+@get_time_async
 async def get_total_status(req: request):
     local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
     user_id = safe_get(req, 'user_id')

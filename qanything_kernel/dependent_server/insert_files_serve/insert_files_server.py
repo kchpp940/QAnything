@@ -68,6 +68,19 @@ async def update_process_context_async(pool, file_id, context):
             await conn.commit()
 
 
+async def clean_milvus_es_for_retry(milvus_kb, es_client, mysql_client, file_id):
+    try:
+        expr = f'file_id == "{file_id}"'
+        milvus_kb.delete_expr(expr)
+    except Exception as e:
+        insert_logger.warning(f"Clean milvus data failed for retry {file_id}: {e}")
+    try:
+        file_chunks = mysql_client.get_chunk_size([file_id])
+        es_client.delete_files([file_id], file_chunks)
+    except Exception as e:
+        insert_logger.warning(f"Clean es data failed for retry {file_id}: {e}")
+
+
 @get_time_async
 async def process_data(retriever, milvus_kb, mysql_client, pool, file_info, time_record):
     parse_timeout_seconds = 300
@@ -76,9 +89,26 @@ async def process_data(retriever, milvus_kb, mysql_client, pool, file_info, time
     process_start = time.perf_counter()
     insert_logger.info(f'Start insert file: {file_info}')
 
-    id_val, file_id, user_id, file_name, kb_id, file_location, file_size, file_url, chunk_size = file_info
+    if len(file_info) == 10:
+        id_val, file_id, user_id, file_name, kb_id, file_location, file_size, file_url, chunk_size, process_context_json = file_info
+    else:
+        id_val, file_id, user_id, file_name, kb_id, file_location, file_size, file_url, chunk_size = file_info
+        process_context_json = None
 
-    context = FileProcessContext(file_id=file_id)
+    if process_context_json:
+        try:
+            context = FileProcessContext.from_json(process_context_json)
+            insert_logger.info(f"Resuming file {file_id} from state: {context.state.value}, stage: {context.current_stage.value}")
+            if context.state == FileProcessState.RETRYING:
+                if context.current_stage in [ProcessStage.EMBED, ProcessStage.INDEX]:
+                    insert_logger.info(f"Retry: cleaning milvus/es data for {file_id} before reprocessing")
+                    await asyncio.to_thread(clean_milvus_es_for_retry, milvus_kb, retriever.es_client, mysql_client, file_id)
+        except Exception as e:
+            insert_logger.warning(f"Failed to parse process_context for {file_id}: {e}, starting fresh")
+            context = FileProcessContext(file_id=file_id)
+    else:
+        context = FileProcessContext(file_id=file_id)
+
     context.transition_to(FileProcessState.PARSING, ProcessStage.PARSE, "开始解析文件")
     await update_process_context_async(pool, file_id, context)
 
@@ -128,7 +158,7 @@ async def process_data(retriever, milvus_kb, mysql_client, pool, file_info, time
         error_msg = f"split_file_to_docs error: {str(e)}"
         insert_logger.error(f'{error_msg}\n{traceback.format_exc()}')
         context.record_error(ErrorInfo(
-            error_category=ErrorCategory.PARSE_ERROR,
+            error_category=categorize_error(e, ProcessStage.PARSE),
             error_message=error_msg,
             stage=ProcessStage.PARSE,
             stack_trace=traceback.format_exc(),
@@ -162,6 +192,10 @@ async def process_data(retriever, milvus_kb, mysql_client, pool, file_info, time
             milvus_kb.delete_expr(expr)
         except Exception:
             pass
+        try:
+            retriever.es_client.delete_file(local_file.file_id) if hasattr(retriever.es_client, 'delete_file') else None
+        except Exception:
+            pass
         error_msg = f"milvus insert timeout: {insert_timeout_seconds}s"
         time_record['insert_timeout'] = True
         context.record_error(ErrorInfo(
@@ -177,7 +211,7 @@ async def process_data(retriever, milvus_kb, mysql_client, pool, file_info, time
         insert_logger.error(f'{error_msg}\n{traceback.format_exc()}')
         time_record['insert_error'] = True
         context.record_error(ErrorInfo(
-            error_category=ErrorCategory.MILVUS_ERROR,
+            error_category=categorize_error(e, ProcessStage.INDEX),
             error_message=error_msg,
             stage=ProcessStage.INDEX,
             stack_trace=traceback.format_exc(),
@@ -207,22 +241,23 @@ async def get_pending_file(pool, worker_id):
     async with pool.acquire() as conn:
         async with conn.cursor() as cur:
             query = """
-                SELECT id, timestamp, file_id, file_name FROM File
-                WHERE status = 'gray' AND MOD(id, %s) = %s AND deleted = 0
+                SELECT id, timestamp, file_id, file_name, status, process_context FROM File
+                WHERE (status = 'gray' OR (process_context IS NOT NULL AND JSON_EXTRACT(process_context, '$.state') IN ('pending', 'retrying')))
+                AND MOD(id, %s) = %s AND deleted = 0
                 ORDER BY timestamp ASC LIMIT 1;
             """
             await cur.execute(query, (INSERT_WORKERS, dynamic_worker_id))
             file_to_update = await cur.fetchone()
 
             if file_to_update:
-                id_val, timestamp, file_id, file_name = file_to_update
+                id_val, timestamp, file_id, file_name, status, process_context_json = file_to_update
                 await cur.execute("UPDATE File SET status='yellow' WHERE id=%s", (id_val,))
                 await conn.commit()
                 insert_logger.info(f"UPDATE FILE: {timestamp}, {file_id}, {file_name}, yellow")
 
                 await cur.execute(
                     "SELECT id, file_id, user_id, file_name, kb_id, file_location, file_size, file_url, "
-                    "chunk_size FROM File WHERE id=%s", (id_val,))
+                    "chunk_size, process_context FROM File WHERE id=%s", (id_val,))
                 file_info = await cur.fetchone()
                 return file_info
     return None

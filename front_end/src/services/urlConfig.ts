@@ -22,6 +22,7 @@ enum EUrlKey {
   uploadFile = 'uploadFile',
   deleteKB = 'deleteKB',
   deleteFile = 'deleteFile',
+  retryFileProcess = 'retryFileProcess',
   uploadUrl = 'uploadUrl',
   kbConfig = 'kbConfig',
   fileList = 'fileList',
@@ -113,6 +114,18 @@ const urlConfig: IUrlConfig = {
   deleteFile: {
     type: EUrlType.POST,
     url: '/local_doc_qa/delete_files',
+    showLoading: true,
+    param: {
+      user_id: userId,
+      user_info: userPhone,
+      kb_id: '',
+      file_ids: [],
+    },
+  },
+  // 重试文件处理
+  retryFileProcess: {
+    type: EUrlType.POST,
+    url: '/local_doc_qa/retry_file_process',
     showLoading: true,
     param: {
       user_id: userId,

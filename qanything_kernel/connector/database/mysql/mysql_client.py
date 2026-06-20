@@ -948,6 +948,16 @@ class KnowledgeBaseManager:
         self.update_file_process_context(file_id, context)
         return context
 
+    def reset_file_for_retry(self, file_id):
+        context = self.get_file_process_context(file_id)
+        if context is None:
+            return None
+        success = context.reset_for_retry()
+        if not success:
+            return None
+        self.update_file_process_context(file_id, context)
+        return context
+
     def get_files_by_process_state(self, states, kb_ids=None, limit=100):
         if isinstance(states, (FileProcessState, str)):
             states = [states]
