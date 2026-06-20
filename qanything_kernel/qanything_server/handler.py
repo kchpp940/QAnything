@@ -655,16 +655,7 @@ async def local_doc_chat(req: request):
     debug_logger.info('user_info %s', user_info)
     bot_id = safe_get(req, 'bot_id')
 
-    req_data = {}
-    for key in [
-        "kb_ids", "custom_prompt", "rerank", "only_need_search_results",
-        "networking", "api_base", "api_key", "api_context_length",
-        "top_p", "temperature", "top_k", "model", "max_token",
-        "hybrid_search", "chunk_size"
-    ]:
-        val = safe_get(req, key)
-        if val is not None:
-            req_data[key] = val
+    req_data = extract_all_params(req)
 
     db_row = None
     if bot_id:
@@ -1261,24 +1252,17 @@ async def new_bot(req: request):
         return sanic_json({"code": 2001, "msg": msg})
     user_id = user_id + '__' + user_info
 
-    req_data = {}
-    for key in [
-        "bot_name", "description", "head_image", "prompt_setting", "welcome_message",
-        "kb_ids", "bot_config", "api_base", "api_key", "api_context_length",
-        "top_p", "temperature", "top_k", "model", "max_token", "hybrid_search",
-        "chunk_size", "rerank", "networking", "only_need_search_results"
-    ]:
-        val = safe_get(req, key)
-        if val is not None:
-            req_data[key] = val
-
+    req_data = extract_all_params(req)
     config = BotConfig.from_request(req_data)
     ok, msg = config.validate()
     if not ok:
         return sanic_json({"code": 2001, "msg": msg})
 
-    if config.kb_ids:
-        not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, config.kb_ids)
+    kb_ids_override = req_data.get("kb_ids")
+    if kb_ids_override is None and req_data.get("bot_config"):
+        kb_ids_override = req_data["bot_config"].get("kb_ids")
+    if kb_ids_override is not None:
+        not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids_override)
         if not_exist_kb_ids:
             msg = "invalid kb_id: {}, please check...".format(not_exist_kb_ids)
             return sanic_json({"code": 2001, "msg": msg, "data": [{}]})
@@ -1331,25 +1315,17 @@ async def update_bot(req: request):
     existing_row = local_doc_qa.milvus_summary.get_bot(user_id, bot_id)[0]
     existing_config = BotConfig.from_db_row(existing_row)
 
-    req_data = {}
-    for key in [
-        "bot_name", "description", "head_image", "prompt_setting", "welcome_message",
-        "kb_ids", "bot_config", "api_base", "api_key", "api_context_length",
-        "top_p", "temperature", "top_k", "model", "max_token", "hybrid_search",
-        "chunk_size", "rerank", "networking", "only_need_search_results"
-    ]:
-        val = safe_get(req, key)
-        if val is not None:
-            req_data[key] = val
-
+    req_data = extract_all_params(req)
     config = BotConfig.from_request(req_data, existing=existing_config)
     ok, msg = config.validate()
     if not ok:
         return sanic_json({"code": 2001, "msg": msg})
 
-    kb_ids = req_data.get("kb_ids")
-    if kb_ids is not None:
-        not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
+    kb_ids_override = req_data.get("kb_ids")
+    if kb_ids_override is None and req_data.get("bot_config"):
+        kb_ids_override = req_data["bot_config"].get("kb_ids")
+    if kb_ids_override is not None:
+        not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids_override)
         if not_exist_kb_ids:
             msg = "invalid kb_id: {}, please check...".format(not_exist_kb_ids)
             return sanic_json({"code": 2001, "msg": msg, "data": [{}]})

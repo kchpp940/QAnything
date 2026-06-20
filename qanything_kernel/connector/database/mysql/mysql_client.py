@@ -869,11 +869,13 @@ class KnowledgeBaseManager:
             return self.execute_query_(query, (user_id, bot_id), fetch=True)
 
     def update_bot(self, user_id, bot_id, bot_name, description, head_image, prompt_setting, welcome_message,
-                   kb_ids_str, update_time, llm_setting):
-        llm_setting = json.dumps(llm_setting, ensure_ascii=False)
+                   kb_ids_str, update_time, llm_setting=None):
+        if llm_setting is None:
+            llm_setting = {}
+        llm_setting_json = json.dumps(llm_setting, ensure_ascii=False)
         query = "UPDATE QanythingBot SET bot_name = %s, description = %s, head_image = %s, prompt_setting = %s, welcome_message = %s, kb_ids_str = %s, update_time = %s, llm_setting = %s WHERE user_id = %s AND bot_id = %s AND deleted = 0"
         self.execute_query_(query, (
-        bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, llm_setting, user_id,
+        bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, llm_setting_json, user_id,
         bot_id), commit=True)
 
     def get_files_by_status(self, status):
