@@ -1,14 +1,12 @@
-import {
-  IDataSourceItem,
-  IRetrievalTrace,
-  IRetrievalCandidate,
-  IWebSearchTrace,
-  IWebSearchResult,
-  IChatItem,
-  WebSearchPolicy,
-} from '@/utils/types';
+import { IDataSourceItem, IRetrievalCandidate, IWebSearchResult, IChatItem } from '@/utils/types';
 import { useChatSourceFile } from './useChatSourceFile';
 import { getLanguage } from '@/language';
+import {
+  adaptTraces,
+  getPolicyText,
+  NormalizedRetrievalTrace,
+  NormalizedWebSearchTrace,
+} from './traceAdapter';
 
 const sourceLabels = getLanguage().source || {
   kbSources: '知识库来源',
@@ -52,7 +50,7 @@ export interface SourceGroup {
 
 export interface WebSearchMeta {
   triggered: boolean;
-  policy: WebSearchPolicy;
+  policy: string;
   policyText: string;
   reason?: string;
   count?: number;
@@ -69,11 +67,7 @@ export interface SourcePanelViewModel {
   webSearch: WebSearchMeta;
 }
 
-const POLICY_TEXT: Record<WebSearchPolicy, string> = {
-  auto: '自动判断',
-  always: '强制联网',
-  never: '禁止联网',
-};
+const DEFAULT_POLICY = 'auto';
 
 const getScoreLevel = (score: number | null): ScoreLevel => {
   if (score === null || score === undefined || Number.isNaN(score)) return 'unknown';
@@ -150,25 +144,7 @@ const normalizeFromWebSearchResult = (
   };
 };
 
-const isArrayWithContent = (v: unknown): v is unknown[] => {
-  return Array.isArray(v) && v.length > 0;
-};
-
-const isRetrievalTrace = (v: unknown): v is IRetrievalTrace => {
-  if (!v || typeof v !== 'object') return false;
-  const obj = v as Record<string, unknown>;
-  return isArrayWithContent(obj.candidates) || typeof obj.retrieval_query === 'string';
-};
-
-const isWebSearchTrace = (v: unknown): v is IWebSearchTrace => {
-  if (!v || typeof v !== 'object') return false;
-  const obj = v as Record<string, unknown>;
-  return (
-    typeof obj.triggered === 'boolean' ||
-    typeof obj.policy === 'string' ||
-    isArrayWithContent(obj.results)
-  );
-};
+const isArrayWithContent = (v: unknown): v is unknown[] => Array.isArray(v) && v.length > 0;
 
 const createGroup = (
   type: SourceGroupType,
@@ -193,22 +169,15 @@ const createGroup = (
   };
 };
 
-const buildWebSearchMeta = (trace?: IWebSearchTrace | null): WebSearchMeta => {
-  if (!trace) {
-    return {
-      triggered: false,
-      policy: 'auto',
-      policyText: POLICY_TEXT.auto,
-    };
-  }
-  const policy = trace.policy || 'auto';
+const buildWebSearchMeta = (trace: NormalizedWebSearchTrace): WebSearchMeta => {
+  const policy = trace.policy || DEFAULT_POLICY;
   return {
     triggered: !!trace.triggered,
     policy,
-    policyText: POLICY_TEXT[policy] || policy,
+    policyText: getPolicyText(policy),
     reason: trace.reason,
-    count: trace.count ?? trace.results?.length,
-    durationMs: trace.duration_ms,
+    count: trace.count,
+    durationMs: trace.durationMs,
   };
 };
 
@@ -220,12 +189,9 @@ export function useSourcePresenter() {
 
   const buildViewModel = (chatItem: IChatItem): SourcePanelViewModel => {
     const sourceItems = isArrayWithContent(chatItem.source) ? chatItem.source : [];
-    const retrievalTrace = isRetrievalTrace(chatItem.retrieval_trace)
-      ? chatItem.retrieval_trace
-      : null;
-    const webSearchTrace = isWebSearchTrace(chatItem.web_search_trace)
-      ? chatItem.web_search_trace
-      : null;
+    const traces = adaptTraces(chatItem);
+    const retrievalTrace: NormalizedRetrievalTrace = traces.retrieval;
+    const webSearchTrace: NormalizedWebSearchTrace = traces.webSearch;
 
     const kbItems: NormalizedSourceItem[] = [];
     const webItems: NormalizedSourceItem[] = [];
@@ -246,29 +212,25 @@ export function useSourcePresenter() {
       }
     });
 
-    if (retrievalTrace && isArrayWithContent(retrievalTrace.candidates)) {
-      retrievalTrace.candidates.forEach((item, index) => {
-        retrievalItems.push(normalizeFromRetrievalCandidate(item, index));
-      });
-    }
+    retrievalTrace.candidates.forEach((item, index) => {
+      retrievalItems.push(normalizeFromRetrievalCandidate(item, index));
+    });
 
-    if (webSearchTrace && isArrayWithContent(webSearchTrace.results)) {
-      webSearchTrace.results.forEach((item, index) => {
-        webItems.push(normalizeFromWebSearchResult(item, index));
-      });
-    }
+    webSearchTrace.results.forEach((item, index) => {
+      webItems.push(normalizeFromWebSearchResult(item, index));
+    });
 
     const groups: SourceGroup[] = [];
     const kbGroup = createGroup('kb', kbItems);
     const webGroup = createGroup('web', webItems, {
-      totalCount: webSearchTrace?.count,
-      durationMs: webSearchTrace?.duration_ms,
+      totalCount: webSearchTrace.count,
+      durationMs: webSearchTrace.durationMs,
     });
     const retrievalGroup = createGroup('retrieval', retrievalItems, {
-      totalCount: retrievalTrace?.total_count,
-      retrievalQuery: retrievalTrace?.retrieval_query,
-      durationMs: retrievalTrace?.duration_ms,
-      retrievalSource: retrievalTrace?.retrieval_source,
+      totalCount: retrievalTrace.totalCount,
+      retrievalQuery: retrievalTrace.retrievalQuery,
+      durationMs: retrievalTrace.durationMs,
+      retrievalSource: retrievalTrace.retrievalSource,
     });
     const otherGroup = createGroup('other', otherItems);
 
@@ -283,13 +245,20 @@ export function useSourcePresenter() {
     const hasWebSearch =
       webItems.length > 0 || webSearch.triggered || typeof webSearch.count === 'number';
 
+    const hasRetrievalTrace =
+      retrievalItems.length > 0 ||
+      retrievalTrace.hasContent ||
+      typeof retrievalTrace.totalCount === 'number';
+
+    const hasContent = groups.length > 0 || retrievalTrace.hasContent || webSearchTrace.hasContent;
+
     return {
       groups,
       totalCount,
-      hasContent: groups.length > 0,
+      hasContent,
       hasKbSources: kbItems.length > 0,
       hasWebSearch,
-      hasRetrievalTrace: retrievalItems.length > 0,
+      hasRetrievalTrace,
       webSearch,
     };
   };

@@ -36,12 +36,13 @@ export interface IRetrievalCandidate {
   embed_version?: string;
 }
 
-export interface IRetrievalTrace {
-  retrieval_query?: string;
+export interface NormalizedRetrievalTrace {
   candidates: IRetrievalCandidate[];
-  total_count?: number;
-  duration_ms?: number;
-  retrieval_source?: string;
+  retrievalQuery?: string;
+  totalCount?: number;
+  durationMs?: number;
+  retrievalSource?: string;
+  hasContent: boolean;
 }
 
 export interface IWebSearchResult {
@@ -51,15 +52,14 @@ export interface IWebSearchResult {
   score?: number;
 }
 
-export type WebSearchPolicy = 'auto' | 'always' | 'never';
-
-export interface IWebSearchTrace {
+export interface NormalizedWebSearchTrace {
   triggered: boolean;
-  policy: WebSearchPolicy;
+  policy: string;
   reason?: string;
   count?: number;
-  results?: IWebSearchResult[];
-  duration_ms?: number;
+  results: IWebSearchResult[];
+  durationMs?: number;
+  hasContent: boolean;
 }
 
 export interface IChatItem {
@@ -74,8 +74,8 @@ export interface IChatItem {
   showTools?: boolean; //当期问答是否结束 结束展示复制等小工具和取消闪烁
   source?: Array<IDataSourceItem>; // 数据来源
 
-  retrieval_trace?: IRetrievalTrace; // 检索追踪（对象结构，含 candidates 数组）
-  web_search_trace?: IWebSearchTrace; // 联网搜索追踪（对象结构，含 policy/triggered）
+  retrieval_trace?: unknown;
+  web_search_trace?: unknown;
 
   picList?: any; // 不知道是啥，用到了，不敢删
   qaId?: any; // 同上
