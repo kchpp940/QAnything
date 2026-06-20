@@ -60,11 +60,12 @@ import { getLanguage } from '@/language/index';
 import ChatSettingForm from '@/components/ChatSettingForm.vue';
 import { useChatSetting } from '@/store/useChatSetting';
 import { useBotsChat } from '@/store/useBotsChat';
+import { buildBotConfigPayload, llmSettingToChatSetting } from '@/utils/botConfig';
 
 const { curBot, knowledgeList } = storeToRefs(useBots());
 const { QA_List } = storeToRefs(useBotsChat());
 const { setSelectKnowledgeVisible, setCurBot } = useBots();
-const { setChatSettingConfigured } = useChatSetting();
+const { setChatSettingConfigured, chatSettingConfigured } = useChatSetting();
 const { chatSettingFormActive } = storeToRefs(useChatSetting());
 
 const { bots, common } = getLanguage();
@@ -79,6 +80,20 @@ onMounted(() => {
   name.value = curBot.value.bot_name;
   welcomeMessage.value = curBot.value.welcome_message;
   roleSetting.value = curBot.value.prompt_setting;
+  if (curBot.value.llm_setting) {
+    const existing = chatSettingConfigured.value[2];
+    const chatSetting = llmSettingToChatSetting(curBot.value.llm_setting, {
+      modelType: existing.modelType,
+      modelName: existing.modelName,
+      customId: existing.customId,
+      context: existing.context,
+    });
+    chatSettingConfigured.value.forEach(item => {
+      item.active = false;
+    });
+    chatSetting.active = true;
+    chatSettingConfigured.value[2] = chatSetting;
+  }
 });
 
 const getBotInfo = async botId => {
@@ -93,25 +108,17 @@ const getBotInfo = async botId => {
 
 const saveBotInfo = async () => {
   try {
+    const bot_config = buildBotConfigPayload({
+      bot_name: name.value,
+      prompt_setting: roleSetting.value,
+      welcome_message: welcomeMessage.value,
+      llm_setting: chatSettingFormActive.value,
+      fromChatSetting: true,
+    });
     await resultControl(
       await urlResquest.updateBot({
         bot_id: curBot.value.bot_id,
-        bot_name: name.value,
-        prompt_setting: roleSetting.value,
-        welcome_message: welcomeMessage.value,
-        only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-        networking: chatSettingFormActive.value.capabilities.networkSearch,
-        api_base: chatSettingFormActive.value.apiBase,
-        api_key: chatSettingFormActive.value.apiKey,
-        api_context_length: chatSettingFormActive.value.apiContextLength,
-        top_p: chatSettingFormActive.value.top_P,
-        temperature: chatSettingFormActive.value.temperature,
-        top_k: chatSettingFormActive.value.top_K,
-        model: chatSettingFormActive.value.apiModelName,
-        max_token: chatSettingFormActive.value.maxToken,
-        hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-        chunk_size: chatSettingFormActive.value.chunkSize,
-        rerank: chatSettingFormActive.value.capabilities.rerank,
+        bot_config,
       })
     );
     await getBotInfo(curBot.value.bot_id);
@@ -126,10 +133,11 @@ const removeKb = async data => {
   console.log('removeKb', data, kbIds);
   kbIds = kbIds.filter(item => item != data);
   try {
+    const bot_config = buildBotConfigPayload({ kb_ids: kbIds });
     await resultControl(
       await urlResquest.updateBot({
         bot_id: curBot.value.bot_id,
-        kb_ids: kbIds,
+        bot_config,
       })
     );
     getBotInfo(curBot.value.bot_id);

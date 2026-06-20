@@ -75,6 +75,7 @@ import { useBots } from '@/store/useBots';
 import { useBotsChat } from '@/store/useBotsChat';
 import urlResquest from '@/services/urlConfig';
 import { resultControl } from '@/utils/utils';
+import { buildBotConfigPayload } from '@/utils/botConfig';
 import { message } from 'ant-design-vue';
 import routeController from '@/controller/router';
 import { getLanguage } from '@/language/index';
@@ -110,11 +111,12 @@ const getBotInfo = async botId => {
 const onFinish = async (values: any) => {
   console.log('Success:', values);
   try {
+    const bot_config = buildBotConfigPayload({
+      bot_name: values.name,
+      description: values.introduction,
+    });
     const res: any = await resultControl(
-      await urlResquest.createBot({
-        bot_name: values.name,
-        description: values.introduction,
-      })
+      await urlResquest.createBot({ bot_config })
     );
     await getBotInfo(res.bot_id);
     message.success(bots.creationSuccessful);

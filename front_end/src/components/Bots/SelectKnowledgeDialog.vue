@@ -48,6 +48,7 @@ import { resultControl } from '@/utils/utils';
 import routeController from '@/controller/router';
 import { message } from 'ant-design-vue';
 import { getLanguage } from '@/language/index';
+import { buildBotConfigPayload } from '@/utils/botConfig';
 
 const { changePage } = routeController();
 const { selectKnowledgeVisible, knowledgeList, curBot } = storeToRefs(useBots());
@@ -72,10 +73,11 @@ const bindKb = async data => {
   kbIds.push(data.kb_id);
   console.log('kbIds', kbIds);
   try {
+    const bot_config = buildBotConfigPayload({ kb_ids: kbIds });
     await resultControl(
       await urlResquest.updateBot({
         bot_id: curBot.value.bot_id,
-        kb_ids: kbIds,
+        bot_config,
       })
     );
     getBotInfo(curBot.value.bot_id);
@@ -95,10 +97,11 @@ const removeKb = async data => {
   console.log('removeKb', data, kbIds);
   kbIds = kbIds.filter(item => item != data.kb_id);
   try {
+    const bot_config = buildBotConfigPayload({ kb_ids: kbIds });
     await resultControl(
       await urlResquest.updateBot({
         bot_id: curBot.value.bot_id,
-        kb_ids: kbIds,
+        bot_config,
       })
     );
     getBotInfo(curBot.value.bot_id);

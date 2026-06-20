@@ -26,42 +26,6 @@ export interface IDataSourceItem {
   showDetailDataSource?: boolean; //是否展示详细来源信息
 }
 
-export interface IRetrievalCandidate {
-  doc_id: string;
-  doc_name: string;
-  score: number;
-  content?: string;
-  rank?: number;
-  retrieval_source?: string;
-  embed_version?: string;
-}
-
-export interface NormalizedRetrievalTrace {
-  candidates: IRetrievalCandidate[];
-  retrievalQuery?: string;
-  totalCount?: number;
-  durationMs?: number;
-  retrievalSource?: string;
-  hasContent: boolean;
-}
-
-export interface IWebSearchResult {
-  title: string;
-  url: string;
-  snippet?: string;
-  score?: number;
-}
-
-export interface NormalizedWebSearchTrace {
-  triggered: boolean;
-  policy: string;
-  reason?: string;
-  count?: number;
-  results: IWebSearchResult[];
-  durationMs?: number;
-  hasContent: boolean;
-}
-
 export interface IChatItem {
   type: 'ai' | 'user'; //区别用户提问 和ai回复
   question?: string; //问题
@@ -73,9 +37,6 @@ export interface IChatItem {
 
   showTools?: boolean; //当期问答是否结束 结束展示复制等小工具和取消闪烁
   source?: Array<IDataSourceItem>; // 数据来源
-
-  retrieval_trace?: unknown;
-  web_search_trace?: unknown;
 
   picList?: any; // 不知道是啥，用到了，不敢删
   qaId?: any; // 同上
@@ -192,3 +153,33 @@ export interface IChatSetting {
 // 第一个对象类型，第二个参数联合类型，把联合类型里面的参数设定为可选
 // MakePartial<IChatSetting, 'modelType'>
 export type MakePartial<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
+
+export interface IBotLLMSetting {
+  api_key: string;
+  api_base: string;
+  model: string;
+  api_context_length: number;
+  max_token: number | null;
+  chunk_size: number;
+  temperature: number;
+  top_k: number;
+  top_p: number;
+  rerank: boolean;
+  hybrid_search: boolean;
+  networking: boolean;
+  only_need_search_results: boolean;
+}
+
+export interface IBotBasicConfig {
+  bot_name: string;
+  description: string;
+  head_image: string;
+  prompt_setting: string;
+  welcome_message: string;
+}
+
+export interface IBotConfig {
+  basic: IBotBasicConfig;
+  llm_setting: Partial<IBotLLMSetting>;
+  kb_ids: string[];
+}
