@@ -832,7 +832,13 @@ async def local_doc_chat(req: request):
                                  'result': result, 'retrieval_documents': retrieval_documents,
                                  'source_documents': source_documents, 'bot_id': bot_id,
                                  'retrieval_trace': retrieval_trace}
-                    local_doc_qa.milvus_summary.add_qalog(**chat_data)
+                    qa_id = local_doc_qa.milvus_summary.add_qalog(**chat_data)
+
+                    from qanything_kernel.core.retriever.candidate import RetrievalDiagnosis
+                    diagnosis_record = RetrievalDiagnosis.from_retrieval_trace(
+                        retrieval_trace, user_id=user_id, kb_ids=kb_ids, query=question, qa_id=qa_id
+                    )
+                    local_doc_qa.milvus_summary.add_retrieval_diagnosis(diagnosis_record)
                     qa_logger.info("chat_data: %s", chat_data)
                     debug_logger.info("response: %s", chat_data['result'])
                     stream_res = {
@@ -909,7 +915,14 @@ async def local_doc_chat(req: request):
                      'retrieval_documents': retrieval_documents, 'prompt': resp['prompt'], 'result': resp['result'],
                      'source_documents': source_documents, 'bot_id': bot_id,
                      'retrieval_trace': retrieval_trace}
-        local_doc_qa.milvus_summary.add_qalog(**chat_data)
+        qa_id = local_doc_qa.milvus_summary.add_qalog(**chat_data)
+
+        from qanything_kernel.core.retriever.candidate import RetrievalDiagnosis
+        diagnosis_record = RetrievalDiagnosis.from_retrieval_trace(
+            retrieval_trace, user_id=user_id, kb_ids=kb_ids, query=question, qa_id=qa_id
+        )
+        local_doc_qa.milvus_summary.add_retrieval_diagnosis(diagnosis_record)
+
         qa_logger.info("chat_data: %s", chat_data)
         debug_logger.info("response: %s", chat_data['result'])
         return sanic_json({"code": 200, "msg": "success no stream chat", "question": question,

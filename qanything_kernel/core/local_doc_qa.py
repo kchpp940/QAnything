@@ -605,10 +605,10 @@ class LocalDocQA:
                                                                 hybrid_search, top_k)
             stage_results.append(retrieval_result)
             all_candidates = list(retrieval_result.active_candidates)
-            retrieval_trace.retrieval_candidates = list(retrieval_result.candidates)
+            retrieval_trace.set_stage_candidates('retrieval', retrieval_result.candidates)
         else:
             all_candidates = []
-            retrieval_trace.retrieval_candidates = []
+            retrieval_trace.set_stage_candidates('retrieval', [])
 
         # === Web search integration ===
         if need_web_search:
@@ -659,18 +659,18 @@ class LocalDocQA:
         rerank_result = await self._rerank_candidates(all_candidates, condense_question, time_record, rerank)
         stage_results.append(rerank_result)
         all_candidates = rerank_result.candidates
-        retrieval_trace.rerank_candidates = list(rerank_result.candidates)
+        retrieval_trace.set_stage_candidates('rerank', rerank_result.candidates)
 
         # === Stage 4: Filter ===
         filter_result = self._filter_candidates(all_candidates, top_k)
         stage_results.append(filter_result)
         active_candidates = [c for c in filter_result.candidates if not c.is_filtered]
-        retrieval_trace.filter_candidates = list(filter_result.candidates)
+        retrieval_trace.set_stage_candidates('filter', filter_result.candidates)
 
         # === Build retrieval diagnostics ===
         retrieval_diagnostics = self._build_retrieval_diagnostics(stage_results)
         time_record['retrieval_diagnostics'] = retrieval_diagnostics
-        retrieval_trace.diagnostics = retrieval_diagnostics
+        retrieval_trace.set_diagnostics(retrieval_diagnostics)
         debug_logger.info(f"retrieval_diagnostics: {retrieval_diagnostics}")
 
         # Strip headers after rerank
@@ -692,9 +692,9 @@ class LocalDocQA:
                     yield active_candidates, None
                     return
                 res = candidate.document.metadata['faq_dict']['answer']
-                retrieval_trace.selected_candidates = list(active_candidates)
-                for c in retrieval_trace.selected_candidates:
+                for c in active_candidates:
                     c.stage = CandidateStage.SELECTED
+                retrieval_trace.set_stage_candidates('selected', active_candidates)
                 async for response, history in self.generate_response(query, res, condense_question,
                                                                       active_candidates, active_candidates,
                                                                       time_record, chat_history, streaming, 'MATCH_FAQ',
@@ -731,9 +731,9 @@ class LocalDocQA:
                         f"抱歉，由于留给相关文档使用的token数量不足(docs_available_token_nums: {limited_token_nums} < 文本分片大小: {web_chunk_size})，"
                         f"\n无法保证回答质量，请在模型配置中提高【总Token数量】或减少【输出Tokens数量】或减少【上下文消息数量】再继续提问。"
                         f"\n计算方式：{tokens_msg}")
-                    retrieval_trace.selected_candidates = list(active_candidates)
-                    for c in retrieval_trace.selected_candidates:
+                    for c in active_candidates:
                         c.stage = CandidateStage.SELECTED
+                    retrieval_trace.set_stage_candidates('selected', active_candidates)
                     async for response, history in self.generate_response(query, res, condense_question,
                                                                           active_candidates, active_candidates,
                                                                           time_record, chat_history, streaming,
@@ -753,9 +753,9 @@ class LocalDocQA:
                                                                                        limited_token_nums,
                                                                                        rerank)
 
-            retrieval_trace.selected_candidates = list(source_candidates)
-            for c in retrieval_trace.selected_candidates:
+            for c in source_candidates:
                 c.stage = CandidateStage.SELECTED
+            retrieval_trace.set_stage_candidates('selected', source_candidates)
 
             for candidate in source_candidates:
                 if candidate.document.metadata.get('images', []):

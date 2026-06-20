@@ -145,28 +145,96 @@ class RetrievalStageResult:
 
 @dataclass
 class RetrievalTrace:
-    retrieval_candidates: List[CandidateDocument] = field(default_factory=list)
-    rerank_candidates: List[CandidateDocument] = field(default_factory=list)
-    filter_candidates: List[CandidateDocument] = field(default_factory=list)
-    selected_candidates: List[CandidateDocument] = field(default_factory=list)
+    retrieval_candidates: List[dict] = field(default_factory=list)
+    rerank_candidates: List[dict] = field(default_factory=list)
+    filter_candidates: List[dict] = field(default_factory=list)
+    selected_candidates: List[dict] = field(default_factory=list)
     diagnostics: Dict = field(default_factory=dict)
     created_at: float = field(default_factory=lambda: time.time())
 
+    def set_stage_candidates(self, stage: str, candidates: List['CandidateDocument']):
+        stage_map = {
+            'retrieval': 'retrieval_candidates',
+            'rerank': 'rerank_candidates',
+            'filter': 'filter_candidates',
+            'selected': 'selected_candidates'
+        }
+        attr = stage_map.get(stage)
+        if attr:
+            snapshot = [c.to_trace_candidate() for c in candidates]
+            setattr(self, attr, snapshot)
+
+    def set_diagnostics(self, diagnostics: Dict):
+        self.diagnostics = dict(diagnostics)
+
     def to_dict(self) -> dict:
         return {
-            'retrieval_candidates': [c.to_trace_candidate() for c in self.retrieval_candidates],
-            'rerank_candidates': [c.to_trace_candidate() for c in self.rerank_candidates],
-            'filter_candidates': [c.to_trace_candidate() for c in self.filter_candidates],
-            'selected_candidates': [c.to_trace_candidate() for c in self.selected_candidates],
-            'diagnostics': self.diagnostics,
+            'retrieval_candidates': list(self.retrieval_candidates),
+            'rerank_candidates': list(self.rerank_candidates),
+            'filter_candidates': list(self.filter_candidates),
+            'selected_candidates': list(self.selected_candidates),
+            'diagnostics': dict(self.diagnostics),
             'created_at': self.created_at
         }
 
-    def get_active_by_stage(self, stage: str) -> List[CandidateDocument]:
+    def get_stage_snapshot(self, stage: str) -> List[dict]:
         stage_map = {
             'retrieval': self.retrieval_candidates,
             'rerank': self.rerank_candidates,
             'filter': self.filter_candidates,
             'selected': self.selected_candidates
         }
-        return [c for c in stage_map.get(stage, []) if not c.is_filtered]
+        return list(stage_map.get(stage, []))
+
+    def get_active_by_stage(self, stage: str) -> List[dict]:
+        return [c for c in self.get_stage_snapshot(stage) if not c.get('is_filtered', False)]
+
+
+class RetrievalDiagnosis:
+    STAGE_ORDER = ['retrieval', 'rerank', 'filter', 'selected']
+
+    @classmethod
+    def from_retrieval_trace(cls, retrieval_trace, user_id: str = '', kb_ids: List[str] = None,
+                             query: str = '', qa_id: str = '') -> dict:
+        trace_dict = retrieval_trace.to_dict() if hasattr(retrieval_trace, 'to_dict') else dict(retrieval_trace)
+        diagnosis = trace_dict.get('diagnostics', {})
+
+        stage_stats = {}
+        for stage in cls.STAGE_ORDER:
+            key = f'{stage}_candidates'
+            candidates = trace_dict.get(key, [])
+            total = len(candidates)
+            active = len([c for c in candidates if not c.get('is_filtered', False)])
+            filtered = total - active
+            scores = [c.get('current_score', 0.0) for c in candidates]
+            sources = {}
+            for c in candidates:
+                src = c.get('retrieval_source') or 'unknown'
+                sources[src] = sources.get(src, 0) + 1
+            filter_reason_counts = {}
+            for c in candidates:
+                if c.get('is_filtered'):
+                    for r in c.get('filter_reasons', []):
+                        filter_reason_counts[r] = filter_reason_counts.get(r, 0) + 1
+
+            stage_stats[stage] = {
+                'total_count': total,
+                'active_count': active,
+                'filtered_count': filtered,
+                'avg_score': round(sum(scores) / len(scores), 4) if scores else 0.0,
+                'max_score': round(max(scores), 4) if scores else 0.0,
+                'min_score': round(min(scores), 4) if scores else 0.0,
+                'source_distribution': sources,
+                'filter_reason_counts': filter_reason_counts,
+            }
+
+        diagnosis_record = {
+            'qa_id': qa_id,
+            'user_id': user_id,
+            'kb_ids': kb_ids or [],
+            'query': query,
+            'stage_stats': stage_stats,
+            'diagnostics': diagnosis,
+            'created_at': trace_dict.get('created_at', time.time())
+        }
+        return diagnosis_record
