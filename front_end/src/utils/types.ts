@@ -26,18 +26,40 @@ export interface IDataSourceItem {
   showDetailDataSource?: boolean; //是否展示详细来源信息
 }
 
-export interface IRetrievalTraceItem {
+export interface IRetrievalCandidate {
   doc_id: string;
   doc_name: string;
   score: number;
   content?: string;
+  rank?: number;
+  retrieval_source?: string;
+  embed_version?: string;
 }
 
-export interface IWebSearchTraceItem {
+export interface IRetrievalTrace {
+  retrieval_query?: string;
+  candidates: IRetrievalCandidate[];
+  total_count?: number;
+  duration_ms?: number;
+  retrieval_source?: string;
+}
+
+export interface IWebSearchResult {
   title: string;
   url: string;
   snippet?: string;
   score?: number;
+}
+
+export type WebSearchPolicy = 'auto' | 'always' | 'never';
+
+export interface IWebSearchTrace {
+  triggered: boolean;
+  policy: WebSearchPolicy;
+  reason?: string;
+  count?: number;
+  results?: IWebSearchResult[];
+  duration_ms?: number;
 }
 
 export interface IChatItem {
@@ -52,8 +74,8 @@ export interface IChatItem {
   showTools?: boolean; //当期问答是否结束 结束展示复制等小工具和取消闪烁
   source?: Array<IDataSourceItem>; // 数据来源
 
-  retrieval_trace?: IRetrievalTraceItem[]; // 检索追踪
-  web_search_trace?: IWebSearchTraceItem[]; // 联网搜索追踪
+  retrieval_trace?: IRetrievalTrace; // 检索追踪（对象结构，含 candidates 数组）
+  web_search_trace?: IWebSearchTrace; // 联网搜索追踪（对象结构，含 policy/triggered）
 
   picList?: any; // 不知道是啥，用到了，不敢删
   qaId?: any; // 同上

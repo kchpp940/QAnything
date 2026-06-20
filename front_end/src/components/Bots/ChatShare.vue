@@ -39,11 +39,7 @@
                       />
                     </p>
                     <SourcePanel
-                      v-if="
-                        item.source?.length ||
-                        item.retrieval_trace?.length ||
-                        item.web_search_trace?.length
-                      "
+                      v-if="buildSourceViewModel(item).hasContent"
                       :view-model="buildSourceViewModel(item)"
                       variant="home"
                       content-mode="markdown"

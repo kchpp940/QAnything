@@ -3,9 +3,13 @@
     <div :class="['source-total', !expanded ? 'source-total-last' : '']">
       <span v-if="language === 'zh'"> 找到了{{ viewModel.totalCount }}个信息来源： </span>
       <span v-else> Found {{ viewModel.totalCount }} source of information </span>
-      <span v-if="viewModel.webSearchTriggered" class="web-badge">
+      <span v-if="viewModel.webSearch.triggered" class="web-badge">
         <SvgIcon name="network" :size="12" />
-        联网搜索
+        联网搜索 · {{ viewModel.webSearch.policyText }}
+      </span>
+      <span v-else-if="viewModel.webSearch.policy !== 'auto'" class="web-badge web-badge-disabled">
+        <SvgIcon name="network" :size="12" />
+        {{ viewModel.webSearch.policyText }}
       </span>
       <SvgIcon v-show="!expanded" name="down" @click="expanded = !expanded" />
       <SvgIcon v-show="expanded" name="up" @click="expanded = !expanded" />
@@ -14,8 +18,26 @@
       <div v-show="expanded" class="source-list">
         <div v-for="group in viewModel.groups" :key="group.type" class="source-group">
           <div class="group-header">
-            <span class="group-label">{{ group.label }}</span>
-            <span class="group-count">{{ group.count }}个</span>
+            <div class="group-title">
+              <span class="group-label">{{ group.label }}</span>
+              <span class="group-count">
+                {{ group.count }}
+                <template v-if="group.totalCount && group.totalCount !== group.count">
+                  /{{ group.totalCount }}
+                </template>
+                个
+              </span>
+              <span v-if="group.durationMs" class="group-duration">
+                {{ formatDuration(group.durationMs) }}
+              </span>
+            </div>
+            <div v-if="group.retrievalQuery" class="group-retrieval-query">
+              <span class="retrieval-label">检索查询：</span>
+              <span class="retrieval-text">{{ group.retrievalQuery }}</span>
+            </div>
+            <div v-if="group.retrievalSource" class="group-retrieval-source">
+              来源: {{ group.retrievalSource }}
+            </div>
           </div>
           <div
             v-for="(sourceItem, sourceIndex) in group.items"
@@ -23,7 +45,9 @@
             class="data-source"
           >
             <p v-show="sourceItem.name" class="control">
-              <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
+              <span class="tips"
+                >{{ common.dataSource }}{{ sourceItem.rank ?? sourceIndex + 1 }}:</span
+              >
               <a
                 v-if="sourceItem.isExternalLink"
                 :href="sourceItem.linkUrl || undefined"
@@ -40,6 +64,9 @@
               </span>
               <span :class="['score-badge', `score-${sourceItem.scoreLevel}`]">
                 {{ sourceItem.scoreText }}
+              </span>
+              <span v-if="sourceItem.retrievalSource" class="source-type">
+                {{ sourceItem.retrievalSource }}
               </span>
               <SvgIcon
                 v-show="isDetailOpen(sourceItem.id)"
@@ -67,6 +94,10 @@
             </Transition>
           </div>
         </div>
+        <div v-if="viewModel.webSearch.reason" class="web-reason">
+          <span class="reason-label">联网搜索说明：</span>
+          <span>{{ viewModel.webSearch.reason }}</span>
+        </div>
       </div>
     </Transition>
   </div>
@@ -75,10 +106,11 @@
 <script lang="ts" setup>
 import { ref } from 'vue';
 import { storeToRefs } from 'pinia';
-import { SourcePanelViewModel } from '@/composables/useSourcePresenter';
+import { SourcePanelViewModel, NormalizedSourceItem } from '@/composables/useSourcePresenter';
 import { useLanguage } from '@/store/useLanguage';
 import { getLanguage } from '@/language';
 import { useChatSourceFile } from '@/composables/useChatSourceFile';
+import { IDataSourceItem } from '@/utils/types';
 import SvgIcon from './SvgIcon.vue';
 import HighLightMarkDown from './HighLightMarkDown.vue';
 
@@ -113,11 +145,16 @@ const toggleDetail = (id: string) => {
   }
 };
 
-const handleItemClick = (item: SourcePanelViewModel['groups'][0]['items'][0]) => {
+const handleItemClick = (item: NormalizedSourceItem) => {
   if (!item.isPreviewable) return;
   if ('file_id' in item.raw || 'file_url' in item.raw) {
-    handleChatSource(item.raw as any);
+    handleChatSource(item.raw as IDataSourceItem);
   }
+};
+
+const formatDuration = (ms: number): string => {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
 };
 </script>
 
@@ -148,6 +185,12 @@ const handleItemClick = (item: SourcePanelViewModel['groups'][0]['items'][0]) =>
       font-size: 12px;
       border-radius: 10px;
       margin-left: 8px;
+      line-height: 18px;
+
+      &.web-badge-disabled {
+        background: rgba(0, 0, 0, 0.06);
+        color: $label2;
+      }
     }
   }
 
@@ -167,10 +210,13 @@ const handleItemClick = (item: SourcePanelViewModel['groups'][0]['items'][0]) =>
     }
 
     .group-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 20px 0;
+      padding: 4px 20px 8px;
+
+      .group-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
 
       .group-label {
         font-size: 13px;
@@ -180,6 +226,44 @@ const handleItemClick = (item: SourcePanelViewModel['groups'][0]['items'][0]) =>
 
       .group-count {
         font-size: 12px;
+        color: $label2;
+      }
+
+      .group-duration {
+        font-size: 12px;
+        color: $label2;
+        padding: 1px 6px;
+        background: rgba(0, 0, 0, 0.04);
+        border-radius: 4px;
+      }
+
+      .group-retrieval-query {
+        margin-top: 4px;
+        font-size: 12px;
+        line-height: 18px;
+        padding: 2px 6px;
+        background: rgba(90, 71, 229, 0.06);
+        border-radius: 4px;
+        display: inline-flex;
+
+        .retrieval-label {
+          color: $label2;
+          flex-shrink: 0;
+        }
+
+        .retrieval-text {
+          color: $title1;
+          font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+          max-width: 400px;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      }
+
+      .group-retrieval-source {
+        margin-top: 2px;
+        font-size: 11px;
         color: $label2;
       }
     }
@@ -254,11 +338,36 @@ const handleItemClick = (item: SourcePanelViewModel['groups'][0]['items'][0]) =>
       }
     }
 
+    .source-type {
+      font-size: 11px;
+      color: $label2;
+      padding: 1px 4px;
+      background: rgba(0, 0, 0, 0.04);
+      border-radius: 3px;
+      margin-right: 8px;
+    }
+
     a {
       color: #5a47e5;
       text-decoration: underline;
       cursor: pointer;
       margin-right: 8px;
+    }
+  }
+
+  .web-reason {
+    margin: 12px 20px 8px;
+    padding: 8px 12px;
+    background: rgba(90, 71, 229, 0.04);
+    border-left: 3px solid #5a47e5;
+    border-radius: 0 4px 4px 0;
+    font-size: 12px;
+    line-height: 18px;
+    color: $title2;
+
+    .reason-label {
+      font-weight: 500;
+      color: $title1;
     }
   }
 
