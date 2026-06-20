@@ -79,7 +79,7 @@ class LocalDocQA:
     def get_web_search(self, queries, top_k):
         query = queries[0]
         web_content, web_documents = duckduckgo_search(query, top_k)
-        candidates = []
+        docs = []
         for idx, doc in enumerate(web_documents):
             if 'title' not in doc.metadata:
                 continue
@@ -90,25 +90,16 @@ class LocalDocQA:
             doc.metadata['score'] = 1 - (idx / len(web_documents))
             doc.metadata['file_id'] = 'websearch' + str(idx)
             doc.metadata['headers'] = {"新闻标题": file_name}
-            score = 1 - (idx / len(web_documents))
-            candidate = CandidateDocument(
-                document=doc,
-                retrieval_source=RetrievalSource.WEB,
-                retrieval_query=query,
-                scores={'web_rank': score},
-                embed_version=self.embeddings.embed_version,
-            )
+            doc.metadata['retrieval_source'] = RetrievalSource.WEB
+            doc.metadata['retrieval_query'] = query
             if 'description' in doc.metadata:
-                desc_doc = Document(page_content=doc.metadata['description'], metadata=doc.metadata)
-                desc_candidate = CandidateDocument(
-                    document=desc_doc,
-                    retrieval_source=RetrievalSource.WEB,
-                    retrieval_query=query,
-                    scores={'web_rank': score},
-                    embed_version=self.embeddings.embed_version,
-                )
-                candidates.append(desc_candidate)
-            candidates.append(candidate)
+                desc_doc = Document(page_content=doc.metadata['description'], metadata=doc.metadata.copy())
+                docs.append(desc_doc)
+            docs.append(doc)
+        candidates = self._docs_to_candidates(docs, retrieval_query=query)
+        for candidate in candidates:
+            if 'score' in candidate.document.metadata:
+                candidate.update_score('web_rank', candidate.document.metadata['score'])
         return web_content, candidates
 
     def web_page_search(self, query, top_k=None):
@@ -120,26 +111,74 @@ class LocalDocQA:
 
         return candidates
 
+    def _docs_to_candidates(self, docs: List[Document], retrieval_query: str = '') -> List[CandidateDocument]:
+        candidates = []
+        for idx, doc in enumerate(docs):
+            retrieval_source = doc.metadata.get('retrieval_source', '')
+            score = doc.metadata.get('score')
+            embed_version = doc.metadata.get('embed_version', self.embeddings.embed_version if hasattr(self, 'embeddings') else '')
+            candidate = CandidateDocument.from_document(
+                doc,
+                retrieval_source=retrieval_source,
+                retrieval_query=retrieval_query,
+                embed_version=embed_version,
+                score=score,
+                score_type='embed'
+            )
+            if score is None:
+                candidate.update_score('embed', 1 - (idx / len(docs)))
+            candidates.append(candidate)
+        return candidates
+
+    def _candidate_to_prompt_doc(self, candidate: CandidateDocument) -> Document:
+        doc = candidate.document
+        doc.metadata['score'] = candidate.current_score
+        doc.metadata['retrieval_source'] = candidate.retrieval_source
+        doc.metadata['retrieval_query'] = candidate.retrieval_query
+        doc.metadata['embed_version'] = candidate.embed_version
+        doc.metadata['filter_reasons'] = candidate.filter_reasons
+        doc.metadata['stage'] = candidate.stage
+        return doc
+
+    def _build_retrieval_diagnostics(self, stage_results: List[RetrievalStageResult]) -> Dict:
+        diagnostics = {}
+        for stage in stage_results:
+            stage_diag = {
+                'total_count': len(stage.candidates),
+                'active_count': len(stage.active_candidates),
+                'filtered_count': len(stage.filtered_candidates),
+                'elapsed_time': stage.elapsed_time,
+                'metadata': stage.metadata,
+                'filter_reason_counts': {},
+                'source_distribution': {}
+            }
+            for c in stage.candidates:
+                if c.is_filtered:
+                    for reason in c.filter_reasons:
+                        stage_diag['filter_reason_counts'][reason] = stage_diag['filter_reason_counts'].get(reason, 0) + 1
+                src = c.retrieval_source or 'unknown'
+                stage_diag['source_distribution'][src] = stage_diag['source_distribution'].get(src, 0) + 1
+            diagnostics[stage.stage_name] = stage_diag
+        return diagnostics
+
     @get_time_async
     async def _retrieve_candidates(self, query, retriever: ParentRetriever, kb_ids, time_record, hybrid_search, top_k):
         start_time = time.perf_counter()
-        candidates = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
-                                                             hybrid_search=hybrid_search, top_k=top_k)
-        if len(candidates) == 0:
+        docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
+                                                       hybrid_search=hybrid_search, top_k=top_k)
+        if len(docs) == 0:
             debug_logger.warning("MILVUS SEARCH ERROR, RESTARTING MILVUS CLIENT!")
             retriever.vectorstore_client = VectorStoreMilvusClient()
             debug_logger.warning("MILVUS CLIENT RESTARTED!")
-            candidates = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
-                                                                  hybrid_search=hybrid_search, top_k=top_k)
+            docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
+                                                            hybrid_search=hybrid_search, top_k=top_k)
         end_time = time.perf_counter()
         time_record['retriever_search'] = round(end_time - start_time, 2)
         debug_logger.info(f"retriever_search time: {time_record['retriever_search']}s")
 
-        for idx, candidate in enumerate(candidates):
-            candidate.retrieval_query = query
-            candidate.embed_version = self.embeddings.embed_version
-            if not candidate.scores:
-                candidate.update_score('embed', 1 - (idx / len(candidates)))
+        candidates = self._docs_to_candidates(docs, retrieval_query=query)
+
+        for candidate in candidates:
             if retriever.mysql_client.is_deleted_file(candidate.file_id):
                 debug_logger.warning(f"file_id: {candidate.file_id} is deleted")
                 candidate.mark_filtered('file_deleted')
@@ -194,9 +233,10 @@ class LocalDocQA:
             file_id = candidate.file_id
             if file_id not in not_repeated_file_ids:
                 not_repeated_file_ids.append(file_id)
-                if 'headers' in candidate.metadata:
-                    headers = f"headers={candidate.metadata['headers']}"
-                    headers_token_num = custom_llm.num_tokens_from_messages([headers])
+                headers = candidate.document.metadata.get('headers')
+                if headers:
+                    headers_str = f"headers={headers}"
+                    headers_token_num = custom_llm.num_tokens_from_messages([headers_str])
             doc_valid_content = re.sub(r'!\[figure]\(.*?\)', '', candidate.page_content)
             doc_token_num = custom_llm.num_tokens_from_messages([doc_valid_content])
             doc_token_num += headers_token_num
@@ -220,9 +260,9 @@ class LocalDocQA:
                     if len(not_repeated_file_ids) != 0:
                         context += '</reference>\n'
                     not_repeated_file_ids.append(file_id)
-                    if 'headers' in candidate.metadata:
-                        headers = f"headers={candidate.metadata['headers']}"
-                        context += f"<reference {headers}>[{len(not_repeated_file_ids)}]" + '\n' + doc_valid_content + '\n'
+                    headers = candidate.document.metadata.get('headers')
+                    if headers:
+                        context += f"<reference headers={headers}>[{len(not_repeated_file_ids)}]" + '\n' + doc_valid_content + '\n'
                     else:
                         context += f"<reference>[{len(not_repeated_file_ids)}]" + '\n' + doc_valid_content + '\n'
                 else:
@@ -555,9 +595,11 @@ class LocalDocQA:
                 retrieval_query = condense_question
 
         # === Stage 1: Retrieval ===
+        stage_results: List[RetrievalStageResult] = []
         if kb_ids:
             retrieval_result = await self._retrieve_candidates(retrieval_query, retriever, kb_ids, time_record,
                                                                 hybrid_search, top_k)
+            stage_results.append(retrieval_result)
             all_candidates = list(retrieval_result.active_candidates)
         else:
             all_candidates = []
@@ -574,28 +616,26 @@ class LocalDocQA:
             )
             if web_candidates:
                 web_docs = web_splitter.split_documents([c.document for c in web_candidates])
-                new_web_candidates = []
-                current_doc_id = 0
-                current_file_id = web_docs[0].metadata['file_id'] if web_docs else ''
                 for doc in web_docs:
-                    if doc.metadata['file_id'] == current_file_id:
-                        doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
+                    doc.metadata['retrieval_source'] = RetrievalSource.WEB
+                    doc.metadata['retrieval_query'] = query
+                new_web_candidates = self._docs_to_candidates(web_docs, retrieval_query=query)
+                current_doc_id = 0
+                current_file_id = new_web_candidates[0].file_id if new_web_candidates else ''
+                for candidate in new_web_candidates:
+                    if candidate.file_id == current_file_id:
+                        candidate.document.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
                         current_doc_id += 1
                     else:
-                        current_file_id = doc.metadata['file_id']
+                        current_file_id = candidate.file_id
                         current_doc_id = 0
-                        doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
+                        candidate.document.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
                         current_doc_id += 1
-                    doc_json = doc.to_json()
+                    doc_json = candidate.document.to_json()
                     if doc_json['kwargs'].get('metadata') is None:
-                        doc_json['kwargs']['metadata'] = doc.metadata
-                    self.milvus_summary.add_document(doc_id=doc.metadata['doc_id'], json_data=doc_json)
-                    web_candidate = CandidateDocument.from_document(
-                        doc, retrieval_source=RetrievalSource.WEB,
-                        retrieval_query=query, embed_version=self.embeddings.embed_version,
-                        score_type='web_rank'
-                    )
-                    new_web_candidates.append(web_candidate)
+                        doc_json['kwargs']['metadata'] = candidate.document.metadata
+                    self.milvus_summary.add_document(doc_id=candidate.document.metadata['doc_id'], json_data=doc_json)
+                    candidate.update_score('web_rank', candidate.current_score)
                 all_candidates.extend(new_web_candidates)
             t2 = time.perf_counter()
             time_record['web_search'] = round(t2 - t1, 2)
@@ -611,11 +651,18 @@ class LocalDocQA:
 
         # === Stage 3: Rerank ===
         rerank_result = await self._rerank_candidates(all_candidates, condense_question, time_record, rerank)
+        stage_results.append(rerank_result)
         all_candidates = rerank_result.candidates
 
         # === Stage 4: Filter ===
         filter_result = self._filter_candidates(all_candidates, top_k)
+        stage_results.append(filter_result)
         active_candidates = [c for c in filter_result.candidates if not c.is_filtered]
+
+        # === Build retrieval diagnostics ===
+        retrieval_diagnostics = self._build_retrieval_diagnostics(stage_results)
+        time_record['retrieval_diagnostics'] = retrieval_diagnostics
+        debug_logger.info(f"retrieval_diagnostics: {retrieval_diagnostics}")
 
         # Strip headers after rerank
         for candidate in active_candidates:
@@ -630,12 +677,12 @@ class LocalDocQA:
         # FAQ exact match
         for candidate in active_candidates:
             if candidate.file_name.endswith('.faq') and clear_string_is_equal(
-                    candidate.metadata['faq_dict']['question'], query):
+                    candidate.document.metadata['faq_dict']['question'], query):
                 debug_logger.info(f"match faq question: {query}")
                 if only_need_search_results:
                     yield active_candidates, None
                     return
-                res = candidate.metadata['faq_dict']['answer']
+                res = candidate.document.metadata['faq_dict']['answer']
                 async for response, history in self.generate_response(query, res, condense_question,
                                                                       active_candidates, active_candidates,
                                                                       time_record, chat_history, streaming, 'MATCH_FAQ'):
@@ -690,8 +737,8 @@ class LocalDocQA:
                                                                                        rerank)
 
             for candidate in source_candidates:
-                if candidate.metadata.get('images', []):
-                    total_images_number += len(candidate.metadata['images'])
+                if candidate.document.metadata.get('images', []):
+                    total_images_number += len(candidate.document.metadata['images'])
                     candidate.page_content = replace_image_references(candidate.page_content, candidate.file_id)
             debug_logger.info(f"total_images_number: {total_images_number}")
 
@@ -758,7 +805,7 @@ class LocalDocQA:
                 time_record['llm_completed'] = round(last_return_time - t1, 2) - time_record['llm_first_return']
                 history[-1][1] = acc_resp
                 if total_images_number != 0:
-                    candidates_with_images = [c for c in source_candidates if c.metadata.get('images', [])]
+                    candidates_with_images = [c for c in source_candidates if c.document.metadata.get('images', [])]
                     time1 = time.perf_counter()
                     relevant_docs = await self.calculate_relevance_optimized(
                         question=query,

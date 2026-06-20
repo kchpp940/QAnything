@@ -3,7 +3,6 @@ from qanything_kernel.core.retriever.vectorstore import VectorStoreMilvusClient
 from qanything_kernel.core.retriever.elasticsearchstore import StoreElasticSearchClient
 from qanything_kernel.connector.database.mysql.mysql_client import KnowledgeBaseManager
 from qanything_kernel.core.retriever.docstrore import MysqlStore
-from qanything_kernel.core.retriever.candidate import CandidateDocument, RetrievalSource
 from qanything_kernel.configs.model_config import DEFAULT_CHILD_CHUNK_SIZE, DEFAULT_PARENT_CHUNK_SIZE, SEPARATORS
 from qanything_kernel.utils.custom_log import debug_logger, insert_logger
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -212,24 +211,19 @@ class ParentRetriever:
                                                    es_store=self.es_store, ids=ids, single_parent=single_parent)
 
     async def get_retrieved_documents(self, query: str, partition_keys: List[str], time_record: dict,
-                                      hybrid_search: bool, top_k: int) -> List[CandidateDocument]:
+                                      hybrid_search: bool, top_k: int) -> List[Document]:
         milvus_start_time = time.perf_counter()
         expr = f'kb_id in {partition_keys}'
         self.retriever.set_search_kwargs("similarity", k=top_k, expr=expr)
         query_docs = await self.retriever.aget_relevant_documents(query)
-        candidates = []
-        for idx, doc in enumerate(query_docs):
-            score = doc.metadata.get('score')
-            candidate = CandidateDocument.from_document(
-                doc, retrieval_source=RetrievalSource.MILVUS,
-                retrieval_query=query, score=score, score_type='embed'
-            )
-            candidates.append(candidate)
+        for doc in query_docs:
+            doc.metadata['retrieval_source'] = 'milvus'
+            doc.metadata['retrieval_query'] = query
         milvus_end_time = time.perf_counter()
         time_record['retriever_search_by_milvus'] = round(milvus_end_time - milvus_start_time, 2)
 
         if not hybrid_search:
-            return candidates
+            return query_docs
 
         try:
             filter = [{"terms": {"metadata.kb_id.keyword": partition_keys}}]
@@ -242,13 +236,11 @@ class ParentRetriever:
             es_docs = await self.retriever.docstore.amget(es_ids)
             es_docs = [d for d in es_docs if d is not None]
             for doc in es_docs:
-                candidate = CandidateDocument.from_document(
-                    doc, retrieval_source=RetrievalSource.ES,
-                    retrieval_query=query, score_type='embed'
-                )
-                candidates.append(candidate)
+                doc.metadata['retrieval_source'] = 'es'
+                doc.metadata['retrieval_query'] = query
             time_record['retriever_search_by_es'] = round(time.perf_counter() - milvus_end_time, 2)
-            debug_logger.info(f"Got {len(query_docs)} documents from vectorstore and {len(es_sub_docs)} documents from es, total {len(candidates)} merged candidates.")
+            debug_logger.info(f"Got {len(query_docs)} documents from vectorstore and {len(es_sub_docs)} documents from es, total {len(query_docs) + len(es_docs)} merged documents.")
+            return query_docs + es_docs
         except Exception as e:
             debug_logger.error(f"Error in get_retrieved_documents on es_search: {e}")
-        return candidates
+        return query_docs

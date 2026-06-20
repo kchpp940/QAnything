@@ -77,11 +77,14 @@ def format_source_documents(ori_source_documents):
 def format_time_record(time_record):
     token_usage = {}
     time_usage = {}
+    retrieval_diagnostics = None
     for k, v in time_record.items():
-        if 'tokens' in k:
+        if k == 'retrieval_diagnostics':
+            retrieval_diagnostics = v
+        elif 'tokens' in k:
             token_usage[k] = round(v)
         else:
-            time_usage[k] = round(v, 2)
+            time_usage[k] = round(v, 2) if isinstance(v, (int, float)) else v
     if 'rewrite_prompt_tokens' in token_usage:
         if 'prompt_tokens' in token_usage:
             token_usage['prompt_tokens'] += token_usage['rewrite_prompt_tokens']
@@ -92,7 +95,10 @@ def format_time_record(time_record):
             token_usage['completion_tokens'] += token_usage['rewrite_completion_tokens']
         if 'total_tokens' in token_usage:
             token_usage['total_tokens'] += token_usage['rewrite_completion_tokens']
-    return {"time_usage": time_usage, "token_usage": token_usage}
+    result = {"time_usage": time_usage, "token_usage": token_usage}
+    if retrieval_diagnostics is not None:
+        result['retrieval_diagnostics'] = retrieval_diagnostics
+    return result
 
 
 def safe_get(req: Request, attr: str, default=None):
