@@ -219,26 +219,23 @@
   <DefaultModal :content="content" :confirm-loading="confirmLoading" @ok="confirm" />
 </template>
 <script lang="ts" setup>
-import { apiBase } from '@/services';
-import { IChatItem, IChatSetting, MakePartial } from '@/utils/types';
-import { useThrottleFn, useClipboard } from '@vueuse/core';
+import { IChatSetting, MakePartial } from '@/utils/types';
+import { useThrottleFn } from '@vueuse/core';
 import { message } from 'ant-design-vue';
 import SvgIcon from '../SvgIcon.vue';
-import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { useBotsChat } from '@/store/useBotsChat';
-import { useChat } from '@/store/useChat';
-import { useChatSource } from '@/store/useChatSource';
-import { Typewriter } from '@/utils/typewriter';
 import DefaultModal from '../DefaultModal.vue';
-import html2canvas from 'html2canvas';
 import { getLanguage } from '@/language/index';
 import { useLanguage } from '@/store/useLanguage';
 import urlResquest from '@/services/urlConfig';
-import { ChatInfoClass, resultControl } from '@/utils/utils';
-import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
+import { resultControl } from '@/utils/utils';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
 import ChatTextarea from '@/components/ChatTextarea.vue';
 import { useUser } from '@/store/useUser';
+import { useChatSession } from '@/composables/useChatSession';
+import { useChatActions } from '@/composables/useChatActions';
+import { useChatSourceFile } from '@/composables/useChatSourceFile';
+import { useDownloadChat } from '@/composables/useDownloadChat';
 
 const props = defineProps({
   chatType: {
@@ -258,79 +255,48 @@ const props = defineProps({
 const common = getLanguage().common;
 const bots = getLanguage().bots;
 
-const typewriter = new Typewriter((str: string) => {
-  if (str) {
-    QA_List.value[QA_List.value.length - 1].answer += str || '';
-  }
-});
-
 const { QA_List } = storeToRefs(useBotsChat());
-
-const { copy } = useClipboard();
-const { setChatSourceVisible, setSourceType, setSourceUrl, setTextContent } = useChatSource();
 const { language } = storeToRefs(useLanguage());
 const { userInfo } = useUser();
 declare module _czc {
   const push: (array: any) => void;
 }
 
-// 当前问的问题
 const question = ref('');
 
-// 格式化 chatSetting
 type ShareSettingType = MakePartial<IChatSetting, 'modelType'>;
 // eslint-disable-next-line vue/no-setup-props-destructure
 const { llm_setting } = props.botInfo;
-const chatSetting = JSON.parse(llm_setting);
+const chatSettingParsed = JSON.parse(llm_setting);
 const chatSettingFormActive = ref<ShareSettingType>();
-// 初始化 chatSetting 为自己的格式
+
 onMounted(() => {
   chatSettingFormActive.value = {
-    apiKey: chatSetting.api_key,
-    apiBase: chatSetting.api_base,
-    apiModelName: chatSetting.model,
-    apiContextLength: chatSetting.api_context_length,
-    maxToken: chatSetting.max_token,
-    chunkSize: chatSetting.chunk_size,
-    temperature: chatSetting.temperature,
+    apiKey: chatSettingParsed.api_key,
+    apiBase: chatSettingParsed.api_base,
+    apiModelName: chatSettingParsed.model,
+    apiContextLength: chatSettingParsed.api_context_length,
+    maxToken: chatSettingParsed.max_token,
+    chunkSize: chatSettingParsed.chunk_size,
+    temperature: chatSettingParsed.temperature,
     context: 0,
-    top_K: chatSetting.top_k,
-    top_P: chatSetting.top_p,
+    top_K: chatSettingParsed.top_k,
+    top_P: chatSettingParsed.top_p,
     capabilities: {
-      onlySearch: chatSetting.only_need_search_results,
-      mixedSearch: chatSetting.hybrid_search,
-      networkSearch: chatSetting.networking,
-      rerank: chatSetting.rerank,
+      onlySearch: chatSettingParsed.only_need_search_results,
+      mixedSearch: chatSettingParsed.hybrid_search,
+      networkSearch: chatSettingParsed.networking,
+      rerank: chatSettingParsed.rerank,
     },
     active: true,
   };
 });
 
-// 上下文条数，无限制tooltip
 const sliderFormatter = (value: number) => {
-  // 11代表无限制，所以最后发送的时候如果是11，需要做无限制处理
   return value >= 11 ? '无限制' : value;
 };
 
-//问答的上下文
-const history = computed(() => {
-  const context = chatSettingFormActive.value.context;
-  if (context === 0) return [];
-  const usefulChat = QA_List.value.filter(item => item.type === 'ai');
-  const historyChat = context === 11 ? usefulChat : usefulChat.slice(-context);
-  return historyChat.map(item => [item.question, item.answer]);
-});
-
-//当前是否回答中
-const showLoading = ref(false);
-
-const showSourceIdxs = ref([]);
-
-//取消请求用
-let ctrl: AbortController;
-
 const chatContainer = ref(null);
-
 const scrollDom = ref(null);
 
 const scrollBottom = () => {
@@ -348,86 +314,58 @@ onMounted(() => {
   scrollBottom();
 });
 
-const like = useThrottleFn((item, e) => {
-  item.like = !item.like;
-  item.unlike = false;
-  _czc.push(['_trackEvent', 'qanything', '问答页面', '点赞', '', '']);
-  if (item.like) {
-    e.target.parentNode.style.animation = 'shake ease-in .5s';
-    const timer = setTimeout(() => {
-      clearTimeout(timer);
-      e.target.parentNode.style.animation = '';
-    }, 600);
-  }
-}, 800);
-const unlike = (item: IChatItem) => {
-  item.unlike = !item.unlike;
-  item.like = false;
-  _czc.push(['_trackEvent', 'qanything', '问答页面', '点踩', '', '']);
-};
+const { handleChatSource, checkFileType } = useChatSourceFile();
 
-//拷贝
-const myCopy = (item: IChatItem) => {
-  copy(item.answer)
-    .then(() => {
-      item.copied = !item.copied;
-      message.success(common.copySuccess, 1);
-      const timer = setTimeout(() => {
-        clearTimeout(timer);
-        item.copied = !item.copied;
-      }, 1000);
-    })
-    .catch(() => {
-      message.error(common.copyFailed, 1);
-    });
-};
-
-const addQuestion = q => {
-  QA_List.value.push({
-    question: q,
-    type: 'user',
-  });
-  scrollBottom();
-};
-
-const addAnswer = (question: string) => {
-  QA_List.value.push({
-    answer: '',
-    question,
-    onlySearch: chatSettingFormActive.value.capabilities.onlySearch,
-    type: 'ai',
-    copied: false,
-    like: false,
-    unlike: false,
-    source: [],
-    showTools: false,
-  });
-};
-
-const chatInfoClass = new ChatInfoClass<ShareSettingType>();
-
-const stopChat = () => {
-  if (ctrl) {
-    ctrl.abort('停止对话');
-  }
-  typewriter.done();
-  showLoading.value = false;
-  QA_List.value[QA_List.value.length - 1].showTools = true;
-};
-
-// 问答前处理 判断创建对话
-const beforeSend = title => {
-  try {
-    // 判断需不需要新建对话, 为null直接跳出
-    if (title.length > 100) {
-      title = title.substring(0, 100);
+const {
+  showLoading,
+  stopChat,
+  send: chatSend,
+} = useChatSession({
+  QA_List,
+  chatSetting: chatSettingFormActive as Ref<ShareSettingType>,
+  scrollBottom,
+  beforeSend: (q: string) => {
+    try {
+      if (q.length > 100) {
+        q = q.substring(0, 100);
+      }
+    } catch (e) {
+      message.error(e.msg || '创建对话失败');
     }
-  } catch (e) {
-    message.error(e.msg || '创建对话失败');
-  }
+  },
+  buildExtraParams: () => ({
+    user_id: props.virtualUserId,
+    user_info: userInfo.phoneNumber,
+    bot_id: props.botInfo.bot_id,
+  }),
+});
+
+const {
+  showSourceIdxs,
+  like: chatLike,
+  unlike,
+  myCopy,
+  reAnswer,
+  showDetail,
+  hideDetail,
+  showSourceList,
+  hideSourceList,
+} = useChatActions({
+  onReAnswer: (q: string) => {
+    question.value = q;
+    handleSend();
+  },
+});
+
+const throttledLike = useThrottleFn((item, e) => {
+  chatLike(item, e);
+  _czc.push(['_trackEvent', 'qanything', '问答页面', '点赞', '', '']);
+}, 800);
+
+const like = (item, e) => {
+  throttledLike(item, e);
 };
 
-// Mention 的 配置项
 const mentionOptions = ref<string[]>([]);
 const getMentionOptions = async () => {
   const res: any = await resultControl(
@@ -450,14 +388,13 @@ watch(
     deep: true,
   }
 );
-// 统计几个 @ 超过10个报错
-const computedCallNumber = (question: string) => {
-  const atCount = (question.match(/@/g) || []).length;
+
+const computedCallNumber = (q: string) => {
+  const atCount = (q.match(/@/g) || []).length;
   return atCount <= 10;
 };
 
-//发送问答消息
-const send = async () => {
+const handleSend = async () => {
   if (!question.value.trim().length) {
     return;
   }
@@ -471,301 +408,18 @@ const send = async () => {
   }
 
   const q = question.value;
-  beforeSend(q);
   question.value = '';
-  addQuestion(q);
-  showLoading.value = true;
-  ctrl = new AbortController();
-
-  const sendData = {
-    user_id: props.virtualUserId,
-    user_info: userInfo.phoneNumber,
-    bot_id: props.botInfo.bot_id,
-    history: history.value,
-    question: q,
-    streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
-    networking: chatSettingFormActive.value.capabilities.networkSearch,
-    product_source: 'saas',
-    rerank: chatSettingFormActive.value.capabilities.rerank,
-    only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-    hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-    max_token: chatSettingFormActive.value.maxToken,
-    api_base: chatSettingFormActive.value.apiBase,
-    api_key: chatSettingFormActive.value.apiKey,
-    model: chatSettingFormActive.value.apiModelName,
-    api_context_length: chatSettingFormActive.value.apiContextLength,
-    chunk_size: chatSettingFormActive.value.chunkSize,
-    top_p: chatSettingFormActive.value.top_P,
-    top_k: chatSettingFormActive.value.top_K,
-    temperature: chatSettingFormActive.value.temperature,
-  };
-
-  // 如果是仅检索
-  if (chatSettingFormActive.value.capabilities.onlySearch) {
-    // 模型配置添加进去
-    chatInfoClass.addChatSetting(chatSettingFormActive.value);
-    addAnswer(q);
-    try {
-      const res: any = await resultControl(
-        await urlResquest.sendQuestion(sendData, { signal: ctrl.signal })
-      );
-      if (res.code === 200) {
-        QA_List.value[QA_List.value.length - 1].answer = res?.source_documents.length
-          ? common.searchCompleted
-          : common.searchNotFound;
-        QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
-      }
-    } catch (e) {
-      console.log('出错', e);
-      // message.error(e.msg || '出错了');
-      QA_List.value[QA_List.value.length - 1].answer = e.msg || 'error';
-    }
-    // 无论成不成功,结束后的操作
-    showLoading.value = false;
-    QA_List.value[QA_List.value.length - 1].showTools = true;
-    await nextTick(() => {
-      scrollBottom();
-    });
-  } else {
-    fetchEventSource(apiBase + '/local_doc_qa/local_doc_chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: ['text/event-stream', 'application/json'],
-      },
-      openWhenHidden: true,
-      body: JSON.stringify({
-        ...sendData,
-      }),
-      signal: ctrl.signal,
-      onopen(e: any) {
-        console.log('open', e);
-        addAnswer(q);
-        if (e.ok && e.headers.get('content-type') === 'text/event-stream') {
-          // 模型配置添加进去
-          chatInfoClass.addChatSetting(chatSettingFormActive.value);
-          typewriter.start();
-        } else if (e.headers.get('content-type') === 'application/json') {
-          typewriter.add('Error 请检查模型是否配置正确');
-        }
-      },
-      onmessage(msg: { data: string }) {
-        console.log('message', msg);
-        const res: any = JSON.parse(msg.data);
-        if (res?.code == 200 && res?.response && res.msg === 'success') {
-          // 中间的回答
-          // QA_List.value[QA_List.value.length - 1].answer += res.result.response;
-          // typewriter.add(res?.response.replaceAll('\n', '<br/>'));
-          typewriter.add(res?.response);
-          scrollBottom();
-        } else {
-          // 最后一次回答
-          const timeObj = res.time_record.time_usage;
-          delete timeObj['retriever_search_by_milvus'];
-          chatInfoClass.addTime(res.time_record.time_usage);
-          chatInfoClass.addToken(res.time_record.token_usage);
-          chatInfoClass.addDate(Date.now());
-        }
-
-        if (res?.source_documents?.length) {
-          QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
-        }
-
-        if (res?.show_images?.length) {
-          res?.show_images.map(item => {
-            typewriter.add(item);
-            console.log(QA_List.value.at(-1).answer);
-          });
-        }
-      },
-      onclose(e: any) {
-        console.log('close', e);
-        typewriter.done();
-        ctrl.abort();
-        showLoading.value = false;
-        QA_List.value[QA_List.value.length - 1].showTools = true;
-        // 将chat info添加进回答中
-        QA_List.value.at(-1).itemInfo = chatInfoClass.getChatInfo();
-        nextTick(() => {
-          scrollBottom();
-        });
-      },
-      onerror(err: any) {
-        console.log('error', err);
-        typewriter?.done();
-        ctrl?.abort();
-        showLoading.value = false;
-        QA_List.value[QA_List.value.length - 1].showTools = true;
-        message.error(err.msg || '出错了');
-        nextTick(() => {
-          scrollBottom();
-        });
-        throw err;
-      },
-    });
-  }
+  await chatSend(q);
 };
 
-const reAnswer = (item: IChatItem) => {
-  console.log('reAnswer');
-  question.value = item.question;
-  send();
-};
+const send = handleSend;
 
-//点击查看是否显示详细来源
-const showDetail = (item: IChatItem, index) => {
-  item.source[index].showDetailDataSource = !item.source[index].showDetailDataSource;
-};
-
-const hideDetail = (item: IChatItem, index) => {
-  item.source[index].showDetailDataSource = false;
-};
-
-const showSourceList = index => {
-  showSourceIdxs.value.push(index);
-};
-
-const hideSourceList = index => {
-  showSourceIdxs.value = showSourceIdxs.value.filter(item => item !== index);
-};
-
-//下载 清除聊天记录相关
-const { showModal } = storeToRefs(useChat());
-const confirmLoading = ref(false);
-const content = ref('');
-const type = ref('');
-const downloadChat = () => {
-  if (showLoading.value) return;
-  type.value = 'download';
-  showModal.value = true;
-  content.value = common.saveTip;
-};
-
-const confirm = async () => {
-  confirmLoading.value = true;
-  if (type.value === 'download') {
-    console.log('download');
-    try {
-      const ele = document.getElementById('chat-ul');
-      const canvas = await html2canvas(ele as HTMLDivElement, {
-        useCORS: true,
-      });
-      const imgUrl = canvas.toDataURL('image/png');
-      const tempLink = document.createElement('a');
-      tempLink.style.display = 'none';
-      tempLink.href = imgUrl;
-      tempLink.setAttribute('download', 'chat-shot.png');
-      if (typeof tempLink.download === 'undefined') tempLink.setAttribute('target', '_blank');
-
-      document.body.appendChild(tempLink);
-      tempLink.click();
-      document.body.removeChild(tempLink);
-      window.URL.revokeObjectURL(imgUrl);
-      message.success('下载成功');
-      Promise.resolve();
-    } catch (e) {
-      console.log(e);
-      message.error(e.message || e.msg || '出错了');
-    }
-  } else if (type.value === 'delete') {
-    console.log('delete');
+const { confirmLoading, content, downloadChat, confirm } = useDownloadChat({
+  showLoading,
+  onClear: () => {
     QA_List.value = [];
-  }
-  type.value = '';
-  content.value = '';
-  confirmLoading.value = false;
-  showModal.value = false;
-};
-
-// 检查信息来源的文件是否支持窗口化渲染
-let supportSourceTypes = [
-  'md',
-  'txt',
-  'pdf',
-  'jpg',
-  'png',
-  'jpeg',
-  'doc',
-  'docx',
-  'xls',
-  'xlsx',
-  'ppt',
-  'pptx',
-  'jsonl',
-  'csv',
-  'eml',
-];
-const checkFileType = filename => {
-  if (!filename) {
-    return false;
-  }
-  const arr = filename.split('.');
-  if (arr.length) {
-    const suffix = arr.pop();
-    if (supportSourceTypes.includes(suffix)) {
-      return true;
-    } else {
-      return false;
-    }
-  } else {
-    return false;
-  }
-};
-
-const handleChatSource = file => {
-  console.log('handleChatSource', file);
-  const isSupport = checkFileType(file.file_name);
-  if (isSupport) {
-    queryFile(file);
-  }
-};
-
-async function queryFile(file) {
-  try {
-    setSourceUrl(null);
-    const res: any = await resultControl(await urlResquest.getFile({ file_id: file.file_id }));
-    console.log('queryFile', res);
-    const suffix = file.file_name.split('.').pop();
-    const b64Type = getB64Type(suffix);
-    console.log('b64Type', b64Type);
-    setSourceType(suffix);
-    setSourceUrl(`data:${b64Type};base64,${res.file_base64}`);
-    if (suffix === 'txt' || suffix === 'md' || suffix === 'csv' || suffix === 'eml') {
-      const decodedTxt = atob(res.file_base64);
-      const correctStr = decodeURIComponent(escape(decodedTxt));
-      console.log('decodedTxt', correctStr);
-      setTextContent(correctStr);
-      setChatSourceVisible(true);
-    } else {
-      setChatSourceVisible(true);
-    }
-  } catch (e) {
-    message.error(e.msg || '获取文件失败');
-  }
-}
-
-let b64Types = [
-  'text/markdown', // md
-  'text/plain', // txt
-  'application/pdf', // pdf
-  'image/jpeg', // jpg
-  'image/png', // png
-  'image/jpeg', // jpeg
-  'application/msword', // doc
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // docx
-  'application/vnd.ms-excel', // xls
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', // xlsx
-  'application/vnd.ms-powerpoint', // ppt
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation', // pptx
-  'application/jsonl', // jsonl
-  'text/csv', // csv
-  'message/rfc822', // eml
-];
-
-function getB64Type(suffix) {
-  const index = supportSourceTypes.indexOf(suffix);
-  return b64Types[index];
-}
+  },
+});
 </script>
 
 <style lang="scss" scoped>

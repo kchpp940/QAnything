@@ -221,21 +221,6 @@ class KnowledgeBaseManager:
         # self.execute_query_(create_index_query, (), commit=True)
 
         query = """
-            CREATE TABLE IF NOT EXISTS RetrievalDiagnosis (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                diagnosis_id VARCHAR(255) UNIQUE,
-                qa_id VARCHAR(255),
-                user_id VARCHAR(255) NOT NULL,
-                kb_ids VARCHAR(2048) NOT NULL,
-                query VARCHAR(512) NOT NULL,
-                stage_stats MEDIUMTEXT NOT NULL,
-                diagnostics MEDIUMTEXT NOT NULL,
-                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-        """
-        self.execute_query_(query, (), commit=True)
-
-        query = """
             CREATE TABLE IF NOT EXISTS FileImages (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 image_id VARCHAR(255) UNIQUE,
@@ -686,7 +671,7 @@ class KnowledgeBaseManager:
         debug_logger.info(f"delete_faqs count: {total_deleted}")
 
     def add_qalog(self, user_id, bot_id, kb_ids, query, model, product_source, time_record, history, condense_question,
-                  prompt, result, retrieval_documents, source_documents, retrieval_trace=None):
+                  prompt, result, retrieval_documents, source_documents):
         debug_logger.info("add_qalog: {}".format(query))
         qa_id = uuid.uuid4().hex
         kb_ids = json.dumps(kb_ids, ensure_ascii=False)
@@ -694,38 +679,16 @@ class KnowledgeBaseManager:
         source_documents = json.dumps(source_documents, ensure_ascii=False)
         history = json.dumps(history, ensure_ascii=False)
         time_record = json.dumps(time_record, ensure_ascii=False)
-        if retrieval_trace is not None:
-            if hasattr(retrieval_trace, 'to_dict'):
-                retrieval_trace = retrieval_trace.to_dict()
-            retrieval_trace = json.dumps(retrieval_trace, ensure_ascii=False)
-        else:
-            retrieval_trace = None
         insert_query = (
             "INSERT INTO QaLogs (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record, "
-            "history, condense_question, prompt, result, retrieval_documents, source_documents, retrieval_trace) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            "history, condense_question, prompt, result, retrieval_documents, source_documents) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
         self.execute_query_(insert_query, (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record,
                                            history, condense_question, prompt, result, retrieval_documents,
-                                           source_documents, retrieval_trace), commit=True)
-        return qa_id
-
-    def add_retrieval_diagnosis(self, diagnosis_record: dict):
-        debug_logger.info(f"add_retrieval_diagnosis for query: {diagnosis_record.get('query', '')}")
-        diagnosis_id = uuid.uuid4().hex
-        qa_id = diagnosis_record.get('qa_id', '')
-        user_id = diagnosis_record.get('user_id', '')
-        kb_ids = json.dumps(diagnosis_record.get('kb_ids', []), ensure_ascii=False)
-        query = diagnosis_record.get('query', '')
-        stage_stats = json.dumps(diagnosis_record.get('stage_stats', {}), ensure_ascii=False)
-        diagnostics = json.dumps(diagnosis_record.get('diagnostics', {}), ensure_ascii=False)
-        insert_query = (
-            "INSERT INTO RetrievalDiagnosis (diagnosis_id, qa_id, user_id, kb_ids, query, stage_stats, diagnostics) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s)")
-        self.execute_query_(insert_query, (diagnosis_id, qa_id, user_id, kb_ids, query, stage_stats, diagnostics),
-                            commit=True)
-        return diagnosis_id
+                                           source_documents), commit=True)
 
     def get_qalog_by_filter(self, need_info, user_id=None, query=None, bot_id=None, time_range=None, any_kb_id=None, qa_ids=None):
+        # 判断哪些条件不是None，构建搜索query
         need_info = ", ".join(need_info)
         if qa_ids is not None:
             mysql_query = f"SELECT {need_info} FROM QaLogs WHERE qa_id IN ({','.join(['%s'] * len(qa_ids))})"

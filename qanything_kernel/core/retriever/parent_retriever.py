@@ -211,14 +211,14 @@ class ParentRetriever:
                                                    es_store=self.es_store, ids=ids, single_parent=single_parent)
 
     async def get_retrieved_documents(self, query: str, partition_keys: List[str], time_record: dict,
-                                      hybrid_search: bool, top_k: int) -> List[Document]:
+                                      hybrid_search: bool, top_k: int):
         milvus_start_time = time.perf_counter()
         expr = f'kb_id in {partition_keys}'
+        # self.retriever.set_search_kwargs("mmr", k=VECTOR_SEARCH_TOP_K, expr=expr)
         self.retriever.set_search_kwargs("similarity", k=top_k, expr=expr)
         query_docs = await self.retriever.aget_relevant_documents(query)
         for doc in query_docs:
             doc.metadata['retrieval_source'] = 'milvus'
-            doc.metadata['retrieval_query'] = query
         milvus_end_time = time.perf_counter()
         time_record['retriever_search_by_milvus'] = round(milvus_end_time - milvus_start_time, 2)
 
@@ -226,6 +226,8 @@ class ParentRetriever:
             return query_docs
 
         try:
+            # filter = []
+            # for partition_key in partition_keys:
             filter = [{"terms": {"metadata.kb_id.keyword": partition_keys}}]
             es_sub_docs = await self.es_store.asimilarity_search(query, k=top_k, filter=filter)
             es_ids = []
@@ -237,10 +239,9 @@ class ParentRetriever:
             es_docs = [d for d in es_docs if d is not None]
             for doc in es_docs:
                 doc.metadata['retrieval_source'] = 'es'
-                doc.metadata['retrieval_query'] = query
             time_record['retriever_search_by_es'] = round(time.perf_counter() - milvus_end_time, 2)
             debug_logger.info(f"Got {len(query_docs)} documents from vectorstore and {len(es_sub_docs)} documents from es, total {len(query_docs) + len(es_docs)} merged documents.")
-            return query_docs + es_docs
+            query_docs.extend(es_docs)
         except Exception as e:
             debug_logger.error(f"Error in get_retrieved_documents on es_search: {e}")
         return query_docs

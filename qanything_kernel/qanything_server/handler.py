@@ -816,8 +816,6 @@ async def local_doc_chat(req: request):
                 if chunk_str.startswith("[DONE]"):
                     retrieval_documents = format_source_documents(resp["retrieval_documents"])
                     source_documents = format_source_documents(resp["source_documents"])
-                    retrieval_trace = resp.get("retrieval_trace")
-                    retrieval_trace_dict = format_retrieval_trace(retrieval_trace)
                     result = next_history[-1][1]
                     # result = resp['result']
                     time_record['chat_completed'] = round(time.perf_counter() - preprocess_start, 2)
@@ -830,15 +828,8 @@ async def local_doc_chat(req: request):
                                  'history': history,
                                  'condense_question': resp['condense_question'], 'prompt': resp['prompt'],
                                  'result': result, 'retrieval_documents': retrieval_documents,
-                                 'source_documents': source_documents, 'bot_id': bot_id,
-                                 'retrieval_trace': retrieval_trace}
-                    qa_id = local_doc_qa.milvus_summary.add_qalog(**chat_data)
-
-                    diagnosis_record = resp.get("diagnosis_record")
-                    if diagnosis_record is not None:
-                        diagnosis_record['qa_id'] = qa_id
-                        diagnosis_record['user_id'] = user_id
-                        local_doc_qa.milvus_summary.add_retrieval_diagnosis(diagnosis_record)
+                                 'source_documents': source_documents, 'bot_id': bot_id}
+                    local_doc_qa.milvus_summary.add_qalog(**chat_data)
                     qa_logger.info("chat_data: %s", chat_data)
                     debug_logger.info("response: %s", chat_data['result'])
                     stream_res = {
@@ -852,8 +843,7 @@ async def local_doc_chat(req: request):
                         "source_documents": source_documents,
                         "retrieval_documents": retrieval_documents,
                         "time_record": formatted_time_record,
-                        "show_images": resp.get('show_images', []),
-                        "retrieval_trace": retrieval_trace_dict
+                        "show_images": resp.get('show_images', [])
                     }
                 else:
                     time_record['rollback_length'] = resp.get('rollback_length', 0)
@@ -906,30 +896,20 @@ async def local_doc_chat(req: request):
                 {"code": 200, "question": question, "source_documents": format_source_documents(resp)})
         retrieval_documents = format_source_documents(resp["retrieval_documents"])
         source_documents = format_source_documents(resp["source_documents"])
-        retrieval_trace = resp.get("retrieval_trace")
-        retrieval_trace_dict = format_retrieval_trace(retrieval_trace)
         formatted_time_record = format_time_record(time_record)
         chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, 'time_record': formatted_time_record,
                      'history': history, "condense_question": resp['condense_question'], "model": model,
                      "product_source": request_source,
                      'retrieval_documents': retrieval_documents, 'prompt': resp['prompt'], 'result': resp['result'],
-                     'source_documents': source_documents, 'bot_id': bot_id,
-                     'retrieval_trace': retrieval_trace}
-        qa_id = local_doc_qa.milvus_summary.add_qalog(**chat_data)
-
-        diagnosis_record = resp.get("diagnosis_record")
-        if diagnosis_record is not None:
-            diagnosis_record['qa_id'] = qa_id
-            diagnosis_record['user_id'] = user_id
-            local_doc_qa.milvus_summary.add_retrieval_diagnosis(diagnosis_record)
-
+                     'source_documents': source_documents, 'bot_id': bot_id}
+        local_doc_qa.milvus_summary.add_qalog(**chat_data)
         qa_logger.info("chat_data: %s", chat_data)
         debug_logger.info("response: %s", chat_data['result'])
         return sanic_json({"code": 200, "msg": "success no stream chat", "question": question,
                            "response": resp["result"], "model": model,
                            "history": history, "condense_question": resp['condense_question'],
                            "source_documents": source_documents, "retrieval_documents": retrieval_documents,
-                           "time_record": formatted_time_record, "retrieval_trace": retrieval_trace_dict})
+                           "time_record": formatted_time_record})
 
 
 @get_time_async

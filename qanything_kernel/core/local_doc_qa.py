@@ -16,8 +16,6 @@ from qanything_kernel.connector.database.mysql.mysql_client import KnowledgeBase
 from qanything_kernel.core.retriever.vectorstore import VectorStoreMilvusClient
 from qanything_kernel.core.retriever.elasticsearchstore import StoreElasticSearchClient
 from qanything_kernel.core.retriever.parent_retriever import ParentRetriever
-from qanything_kernel.core.retriever.candidate import CandidateDocument, RetrievalStageResult, RetrievalSource, CandidateStage, RetrievalTrace
-from qanything_kernel.core.retriever.retrieval_diagnosis import RetrievalDiagnosisSerializer
 from qanything_kernel.utils.general_utils import (get_time, clear_string, get_time_async, num_tokens,
                                                   cosine_similarity, clear_string_is_equal, num_tokens_embed,
                                                   num_tokens_rerank, deduplicate_documents, replace_image_references)
@@ -80,10 +78,12 @@ class LocalDocQA:
     def get_web_search(self, queries, top_k):
         query = queries[0]
         web_content, web_documents = duckduckgo_search(query, top_k)
-        docs = []
+        source_documents = []
         for idx, doc in enumerate(web_documents):
             if 'title' not in doc.metadata:
                 continue
+            doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
+            debug_logger.info(f"web search doc: {doc.metadata}")
             file_name = re.sub(r'[\uFF01-\uFF5E\u3000-\u303F]', '', doc.metadata['title'])
             doc.metadata['file_name'] = file_name + '.web'
             doc.metadata['file_url'] = doc.metadata['source']
@@ -91,117 +91,64 @@ class LocalDocQA:
             doc.metadata['score'] = 1 - (idx / len(web_documents))
             doc.metadata['file_id'] = 'websearch' + str(idx)
             doc.metadata['headers'] = {"新闻标题": file_name}
-            doc.metadata['retrieval_source'] = RetrievalSource.WEB
-            doc.metadata['retrieval_query'] = query
             if 'description' in doc.metadata:
-                desc_doc = Document(page_content=doc.metadata['description'], metadata=doc.metadata.copy())
-                docs.append(desc_doc)
-            docs.append(doc)
-        candidates = self._docs_to_candidates(docs, retrieval_query=query)
-        for candidate in candidates:
-            if 'score' in candidate.document.metadata:
-                candidate.update_score('web_rank', candidate.document.metadata['score'])
-        return web_content, candidates
+                desc_doc = Document(page_content=doc.metadata['description'], metadata=doc.metadata)
+                source_documents.append(desc_doc)
+            source_documents.append(doc)  # 先插入description，再插入原文
+        return web_content, source_documents
 
     def web_page_search(self, query, top_k=None):
+        # 防止get_web_search调用失败，需要try catch
         try:
-            web_content, candidates = self.get_web_search([query], top_k)
+            web_content, source_documents = self.get_web_search([query], top_k)
         except Exception as e:
             debug_logger.error(f"web search error: {traceback.format_exc()}")
             return []
 
-        return candidates
-
-    def _docs_to_candidates(self, docs: List[Document], retrieval_query: str = '') -> List[CandidateDocument]:
-        candidates = []
-        for idx, doc in enumerate(docs):
-            retrieval_source = doc.metadata.get('retrieval_source', '')
-            score = doc.metadata.get('score')
-            embed_version = doc.metadata.get('embed_version', self.embeddings.embed_version if hasattr(self, 'embeddings') else '')
-            candidate = CandidateDocument.from_document(
-                doc,
-                retrieval_source=retrieval_source,
-                retrieval_query=retrieval_query,
-                embed_version=embed_version,
-                score=score,
-                score_type='embed'
-            )
-            if score is None:
-                candidate.update_score('embed', 1 - (idx / len(docs)))
-            candidates.append(candidate)
-        return candidates
-
-    def _candidate_to_prompt_doc(self, candidate: CandidateDocument) -> Document:
-        doc = candidate.document
-        doc.metadata['score'] = candidate.current_score
-        doc.metadata['retrieval_source'] = candidate.retrieval_source
-        doc.metadata['retrieval_query'] = candidate.retrieval_query
-        doc.metadata['embed_version'] = candidate.embed_version
-        doc.metadata['filter_reasons'] = candidate.filter_reasons
-        doc.metadata['stage'] = candidate.stage
-        return doc
-
-    def _build_retrieval_diagnostics(self, stage_results: List[RetrievalStageResult]) -> Dict:
-        diagnostics = {}
-        for stage in stage_results:
-            stage_diag = {
-                'total_count': len(stage.candidates),
-                'active_count': len(stage.active_candidates),
-                'filtered_count': len(stage.filtered_candidates),
-                'elapsed_time': stage.elapsed_time,
-                'metadata': stage.metadata,
-                'filter_reason_counts': {},
-                'source_distribution': {}
-            }
-            for c in stage.candidates:
-                if c.is_filtered:
-                    for reason in c.filter_reasons:
-                        stage_diag['filter_reason_counts'][reason] = stage_diag['filter_reason_counts'].get(reason, 0) + 1
-                src = c.retrieval_source or 'unknown'
-                stage_diag['source_distribution'][src] = stage_diag['source_distribution'].get(src, 0) + 1
-            diagnostics[stage.stage_name] = stage_diag
-        return diagnostics
+        return source_documents
 
     @get_time_async
-    async def _retrieve_candidates(self, query, retriever: ParentRetriever, kb_ids, time_record, hybrid_search, top_k):
+    async def get_source_documents(self, query, retriever: ParentRetriever, kb_ids, time_record, hybrid_search, top_k):
+        source_documents = []
         start_time = time.perf_counter()
-        docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
-                                                       hybrid_search=hybrid_search, top_k=top_k)
-        if len(docs) == 0:
+        query_docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
+                                                             hybrid_search=hybrid_search, top_k=top_k)
+        if len(query_docs) == 0:
             debug_logger.warning("MILVUS SEARCH ERROR, RESTARTING MILVUS CLIENT!")
             retriever.vectorstore_client = VectorStoreMilvusClient()
             debug_logger.warning("MILVUS CLIENT RESTARTED!")
-            docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
-                                                            hybrid_search=hybrid_search, top_k=top_k)
+            query_docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
+                                                                    hybrid_search=hybrid_search, top_k=top_k)
         end_time = time.perf_counter()
         time_record['retriever_search'] = round(end_time - start_time, 2)
         debug_logger.info(f"retriever_search time: {time_record['retriever_search']}s")
+        # debug_logger.info(f"query_docs num: {len(query_docs)}, query_docs: {query_docs}")
+        for idx, doc in enumerate(query_docs):
+            if retriever.mysql_client.is_deleted_file(doc.metadata['file_id']):
+                debug_logger.warning(f"file_id: {doc.metadata['file_id']} is deleted")
+                continue
+            doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
+            doc.metadata['embed_version'] = self.embeddings.embed_version
+            if 'score' not in doc.metadata:
+                doc.metadata['score'] = 1 - (idx / len(query_docs))  # TODO 这个score怎么获取呢
+            source_documents.append(doc)
+        debug_logger.info(f"embed scores: {[doc.metadata['score'] for doc in source_documents]}")
+        # if cosine_thresh:
+        #     source_documents = [item for item in source_documents if float(item.metadata['score']) > cosine_thresh]
 
-        candidates = self._docs_to_candidates(docs, retrieval_query=query)
+        return source_documents
 
-        for candidate in candidates:
-            if retriever.mysql_client.is_deleted_file(candidate.file_id):
-                debug_logger.warning(f"file_id: {candidate.file_id} is deleted")
-                candidate.mark_filtered('file_deleted')
-
-        debug_logger.info(f"embed scores: {[c.current_score for c in candidates if not c.is_filtered]}")
-
-        return RetrievalStageResult(
-            stage_name='retrieval',
-            candidates=candidates,
-            elapsed_time=time_record.get('retriever_search', 0.0)
-        )
-
-    def _select_by_token_limit(self, custom_llm: OpenAILLM, query: str,
-                               candidates: List[CandidateDocument],
-                               history: List[str],
-                               prompt_template: str) -> Tuple[List[CandidateDocument], int, str]:
+    def reprocess_source_documents(self, custom_llm: OpenAILLM, query: str,
+                                   source_docs: List[Document],
+                                   history: List[str],
+                                   prompt_template: str) -> Tuple[List[Document], int, str]:
+        # 组装prompt,根据max_token
         query_token_num = int(custom_llm.num_tokens_from_messages([query]) * 4)
         history_token_num = int(custom_llm.num_tokens_from_messages([x for sublist in history for x in sublist]))
         template_token_num = int(custom_llm.num_tokens_from_messages([prompt_template]))
 
         reference_field_token_num = int(custom_llm.num_tokens_from_messages(
-            [f"<reference>[{idx + 1}]</reference>" for idx in range(len(candidates))]))
+            [f"<reference>[{idx + 1}]</reference>" for idx in range(len(source_docs))]))
         limited_token_nums = custom_llm.token_window - custom_llm.max_token - custom_llm.offcut_token - query_token_num - history_token_num - template_token_num - reference_field_token_num
 
         debug_logger.info(f"=============================================")
@@ -225,103 +172,59 @@ class LocalDocQA:
                      reference_field_token_num=reference_field_token_num, query_token_num=query_token_num // 4,
                      history_token_num=history_token_num)
 
-        new_candidates = []
+        # if limited_token_nums < 200:
+        #     return []
+        # 从最后一个往前删除，直到长度合适,这样是最优的，因为超长度的情况比较少见
+        # 已知箱子容量，装满这个箱子
+        new_source_docs = []
         total_token_num = 0
 
         not_repeated_file_ids = []
-        for candidate in candidates:
+        for doc in source_docs:
             headers_token_num = 0
-            file_id = candidate.file_id
+            file_id = doc.metadata['file_id']
             if file_id not in not_repeated_file_ids:
                 not_repeated_file_ids.append(file_id)
-                headers = candidate.document.metadata.get('headers')
-                if headers:
-                    headers_str = f"headers={headers}"
-                    headers_token_num = custom_llm.num_tokens_from_messages([headers_str])
-            doc_valid_content = re.sub(r'!\[figure]\(.*?\)', '', candidate.page_content)
+                if 'headers' in doc.metadata:
+                    headers = f"headers={doc.metadata['headers']}"
+                    headers_token_num = custom_llm.num_tokens_from_messages([headers])
+            doc_valid_content = re.sub(r'!\[figure]\(.*?\)', '', doc.page_content)
             doc_token_num = custom_llm.num_tokens_from_messages([doc_valid_content])
             doc_token_num += headers_token_num
             if total_token_num + doc_token_num <= limited_token_nums:
-                new_candidates.append(candidate)
+                new_source_docs.append(doc)
                 total_token_num += doc_token_num
             else:
-                candidate.mark_filtered('token_limit_exceeded')
+                break
 
-        debug_logger.info(f"new_candidates token nums: {custom_llm.num_tokens_from_docs([c.document for c in new_candidates])}")
-        return new_candidates, limited_token_nums, tokens_msg
+        debug_logger.info(f"new_source_docs token nums: {custom_llm.num_tokens_from_docs(new_source_docs)}")
+        return new_source_docs, limited_token_nums, tokens_msg
 
-    def generate_prompt(self, query, candidates: List[CandidateDocument], prompt_template):
-        if candidates:
+    def generate_prompt(self, query, source_docs, prompt_template):
+        if source_docs:
             context = ''
             not_repeated_file_ids = []
-            for candidate in candidates:
-                doc_valid_content = re.sub(r'!\[figure]\(.*?\)', '', candidate.page_content)
-                file_id = candidate.file_id
+            for doc in source_docs:
+                doc_valid_content = re.sub(r'!\[figure]\(.*?\)', '', doc.page_content)  # 生成prompt时去掉图片
+                file_id = doc.metadata['file_id']
                 if file_id not in not_repeated_file_ids:
                     if len(not_repeated_file_ids) != 0:
                         context += '</reference>\n'
                     not_repeated_file_ids.append(file_id)
-                    headers = candidate.document.metadata.get('headers')
-                    if headers:
-                        context += f"<reference headers={headers}>[{len(not_repeated_file_ids)}]" + '\n' + doc_valid_content + '\n'
+                    if 'headers' in doc.metadata:
+                        headers = f"headers={doc.metadata['headers']}"
+                        context += f"<reference {headers}>[{len(not_repeated_file_ids)}]" + '\n' + doc_valid_content + '\n'
                     else:
                         context += f"<reference>[{len(not_repeated_file_ids)}]" + '\n' + doc_valid_content + '\n'
                 else:
                     context += doc_valid_content + '\n'
             context += '</reference>\n'
 
+            # prompt = prompt_template.format(context=context).replace("{{question}}", query)
             prompt = prompt_template.replace("{{context}}", context).replace("{{question}}", query)
         else:
             prompt = prompt_template.replace("{{question}}", query)
         return prompt
-
-    async def _rerank_candidates(self, candidates: List[CandidateDocument], query: str,
-                                 time_record: dict, use_rerank: bool) -> RetrievalStageResult:
-        active = [c for c in candidates if not c.is_filtered]
-        if not use_rerank or len(active) <= 1 or num_tokens_rerank(query) > 300:
-            return RetrievalStageResult(stage_name='rerank', candidates=candidates)
-
-        docs = [c.document for c in active]
-        try:
-            t1 = time.perf_counter()
-            debug_logger.info(f"use rerank, rerank docs num: {len(docs)}")
-            reranked_docs = await self.rerank.arerank_documents(query, docs)
-            t2 = time.perf_counter()
-            time_record['rerank'] = round(t2 - t1, 2)
-
-            doc_score_map = {}
-            for doc in reranked_docs:
-                doc_score_map[id(doc)] = doc.metadata.get('score', 0)
-
-            for candidate in active:
-                rerank_score = doc_score_map.get(id(candidate.document))
-                if rerank_score is not None:
-                    candidate.update_score('rerank', rerank_score)
-                    candidate.stage = CandidateStage.RERANKED
-
-            active.sort(key=lambda c: c.scores.get('rerank', 0), reverse=True)
-
-            debug_logger.info(f"rerank step1 num: {len(active)}")
-            debug_logger.info(f"rerank step1 scores: {[c.scores.get('rerank', 0) for c in active]}")
-        except Exception as e:
-            time_record['rerank'] = 0.0
-            debug_logger.error(f"query {query}: rerank error: {traceback.format_exc()}")
-            try:
-                embed1 = await self.embeddings.aembed_query(query)
-                for candidate in active:
-                    embed2 = await self.embeddings.aembed_query(candidate.page_content)
-                    fallback_score = cosine_similarity(embed1, embed2)
-                    candidate.update_score('cosine_fallback', fallback_score)
-                    candidate.stage = CandidateStage.RERANKED
-                active.sort(key=lambda c: c.scores.get('cosine_fallback', 0), reverse=True)
-            except Exception as e2:
-                debug_logger.error(f"cosine fallback error: {e2}")
-
-        return RetrievalStageResult(
-            stage_name='rerank',
-            candidates=candidates,
-            elapsed_time=time_record.get('rerank', 0.0)
-        )
 
     async def get_rerank_results(self, query, doc_ids=None, doc_strs=None):
         docs = []
@@ -333,7 +236,7 @@ class LocalDocQA:
                 if doc_json is None:
                     docs.append(None)
                     continue
-                _user_id, _file_id, file_name, _kb_id = doc_json['kwargs']['metadata']['user_id'], \
+                user_id, file_id, file_name, kb_id = doc_json['kwargs']['metadata']['user_id'], \
                     doc_json['kwargs']['metadata']['file_id'], doc_json['kwargs']['metadata']['file_name'], \
                     doc_json['kwargs']['metadata']['kb_id']
                 doc = Document(page_content=doc_json['kwargs']['page_content'], metadata=doc_json['kwargs']['metadata'])
@@ -348,105 +251,64 @@ class LocalDocQA:
                     doc.metadata['nos_keys'] = nos_keys
                 docs.append(doc)
 
-        candidates = [CandidateDocument.from_document(doc, retrieval_query=query,
-                         embed_version=self.embeddings.embed_version) for doc in docs if doc is not None]
-
-        if len(candidates) > 1 and num_tokens_rerank(query) <= 300:
+        if len(docs) > 1 and num_tokens_rerank(query) <= 300:
             try:
-                debug_logger.info(f"use rerank, rerank docs num: {len(candidates)}")
-                reranked_docs = await self.rerank.arerank_documents(query, [c.document for c in candidates])
-                doc_score_map = {id(doc): doc.metadata.get('score', 0) for doc in reranked_docs}
-                for candidate in candidates:
-                    rerank_score = doc_score_map.get(id(candidate.document))
-                    if rerank_score is not None:
-                        candidate.update_score('rerank', rerank_score)
-                candidates.sort(key=lambda c: c.scores.get('rerank', 0), reverse=True)
-                if len(candidates) > 1:
-                    candidates = [c for c in candidates if c.scores.get('rerank', 0) >= 0.28]
-                return candidates
+                debug_logger.info(f"use rerank, rerank docs num: {len(docs)}")
+                docs = await self.rerank.arerank_documents(query, docs)
+                if len(docs) > 1:
+                    docs = [doc for doc in docs if doc.metadata['score'] >= 0.28]
+                return docs
             except Exception as e:
                 debug_logger.error(f"query tokens: {num_tokens_rerank(query)}, rerank error: {e}")
                 embed1 = await self.embeddings.aembed_query(query)
-                for candidate in candidates:
-                    embed2 = await self.embeddings.aembed_query(candidate.page_content)
-                    candidate.update_score('cosine_fallback', cosine_similarity(embed1, embed2))
-                return candidates
+                for doc in docs:
+                    embed2 = await self.embeddings.aembed_query(doc.page_content)
+                    doc.metadata['score'] = cosine_similarity(embed1, embed2)
+                return docs
         else:
-            if candidates:
-                embed1 = await self.embeddings.aembed_query(query)
-                for candidate in candidates:
-                    embed2 = await self.embeddings.aembed_query(candidate.page_content)
-                    candidate.update_score('cosine_fallback', cosine_similarity(embed1, embed2))
-            return candidates
+            embed1 = await self.embeddings.aembed_query(query)
+            for doc in docs:
+                embed2 = await self.embeddings.aembed_query(doc.page_content)
+                doc.metadata['score'] = cosine_similarity(embed1, embed2)
+            return docs
 
-    def _filter_candidates(self, candidates: List[CandidateDocument], top_k: int) -> RetrievalStageResult:
-        active = [c for c in candidates if not c.is_filtered]
-
-        if len(active) > 1:
-            passing = [c for c in active if c.scores.get('rerank', c.current_score) >= 0.28]
-            if passing:
-                for c in active:
-                    if c not in passing:
-                        c.mark_filtered('rerank_score_below_threshold')
-                active = passing
-            debug_logger.info(f"rerank step2 num: {len(active)}")
-
-        if len(active) > 1:
-            top_score = active[0].scores.get('rerank', active[0].current_score)
-            saved = [active[0]]
-            for c in active[1:]:
-                c_score = c.scores.get('rerank', c.current_score)
-                relative_diff = (top_score - c_score) / top_score if top_score > 0 else 0
-                if relative_diff > 0.5:
-                    remaining = active[active.index(c):]
-                    for dropped in remaining:
-                        dropped.mark_filtered('rerank_score_drop_off')
-                    break
-                saved.append(c)
-            active = saved
-            debug_logger.info(f"rerank step3 num: {len(active)}")
-
-        if len(active) > top_k:
-            for c in active[top_k:]:
-                c.mark_filtered('top_k_truncated')
-            active = active[:top_k]
-
-        return RetrievalStageResult(stage_name='filter', candidates=candidates)
-
-    async def _aggregate_candidates(self, custom_llm: OpenAILLM, candidates: List[CandidateDocument],
-                                     limited_token_nums: int, use_rerank: bool) -> Tuple[List[CandidateDocument], List[CandidateDocument]]:
-        return candidates, candidates
-        debug_logger.info(f"retrieval_candidates len: {len(candidates)}")
+    async def prepare_source_documents(self, custom_llm: OpenAILLM, retrieval_documents: List[Document],
+                                       limited_token_nums: int, rerank: bool):
+        return retrieval_documents, retrieval_documents
+        debug_logger.info(f"retrieval_documents len: {len(retrieval_documents)}")
         try:
-            new_docs = self.aggregate_documents(candidates, limited_token_nums, custom_llm, use_rerank)
+            new_docs = self.aggregate_documents(retrieval_documents, limited_token_nums, custom_llm, rerank)
             if new_docs:
-                source_candidates = new_docs
+                source_documents = new_docs
             else:
+                # 合并所有候选文档，从前往后，所有file_id相同的文档合并，按照doc_id排序
                 merged_documents_file_ids = []
-                for candidate in candidates:
-                    if candidate.file_id not in merged_documents_file_ids:
-                        merged_documents_file_ids.append(candidate.file_id)
-                source_candidates = []
+                for doc in retrieval_documents:
+                    if doc.metadata['file_id'] not in merged_documents_file_ids:
+                        merged_documents_file_ids.append(doc.metadata['file_id'])
+                source_documents = []
                 for file_id in merged_documents_file_ids:
-                    file_candidates = [c for c in candidates if c.file_id == file_id]
-                    file_candidates = sorted(file_candidates, key=lambda x: int(x.doc_id.split('_')[-1]))
-                    source_candidates.extend(file_candidates)
+                    docs = [doc for doc in retrieval_documents if doc.metadata['file_id'] == file_id]
+                    docs = sorted(docs, key=lambda x: int(x.metadata['doc_id'].split('_')[-1]))
+                    source_documents.extend(docs)
+
+            # source_documents = self.incomplete_table(source_documents, limited_token_nums, custom_llm)
         except Exception as e:
             debug_logger.error(f"aggregate_documents error w/ {e}: {traceback.format_exc()}")
-            source_candidates = candidates
+            source_documents = retrieval_documents
 
-        debug_logger.info(f"source_candidates len: {len(source_candidates)}")
-        return source_candidates, candidates
+        debug_logger.info(f"source_documents len: {len(source_documents)}")
+        return source_documents, retrieval_documents
 
     async def calculate_relevance_optimized(
             self,
             question: str,
             llm_answer: str,
-            reference_candidates: List[CandidateDocument],
+            reference_docs: List[Document],
             top_k: int = 5
     ) -> List[Dict]:
-        reference_docs = [c.document for c in reference_candidates]
-        question_scores = [c.current_score for c in reference_candidates]
+        # 获取问题的scores
+        question_scores = [doc.metadata['score'] for doc in reference_docs]
 
         # 计算LLM回答的embedding
         llm_answer_embedding = await self.embeddings.aembed_query(llm_answer)
@@ -509,11 +371,19 @@ class LocalDocQA:
         return relevant_docs
 
     @staticmethod
-    async def generate_response(query, res, condense_question, source_candidates: List[CandidateDocument],
-                                retrieval_candidates: List[CandidateDocument],
-                                time_record, chat_history, streaming, prompt,
-                                retrieval_trace: Optional[RetrievalTrace] = None,
-                                diagnosis_record: Optional[dict] = None):
+    async def generate_response(query, res, condense_question, source_documents, time_record, chat_history, streaming, prompt):
+        """
+        生成response并使用yield返回。
+
+        :param query: 用户的原始查询
+        :param res: 生成的答案
+        :param condense_question: 压缩后的问题
+        :param source_documents: 从检索中获取的文档
+        :param time_record: 记录时间的字典
+        :param chat_history: 聊天历史
+        :param streaming: 是否启用流式输出
+        :param prompt: 生成response时的prompt类型
+        """
         history = chat_history + [[query, res]]
 
         if streaming:
@@ -521,16 +391,12 @@ class LocalDocQA:
 
         response = {
             "query": query,
-            "prompt": prompt,
+            "prompt": prompt,  # 允许自定义 prompt
             "result": res,
             "condense_question": condense_question,
-            "retrieval_documents": retrieval_candidates,
-            "source_documents": source_candidates,
+            "retrieval_documents": source_documents,
+            "source_documents": source_documents
         }
-        if retrieval_trace is not None:
-            response["retrieval_trace"] = retrieval_trace
-        if diagnosis_record is not None:
-            response["diagnosis_record"] = diagnosis_record
 
         if 'llm_completed' not in time_record:
             time_record['llm_completed'] = 0.0
@@ -590,206 +456,201 @@ class LocalDocQA:
                     },
                 )
                 t2 = time.perf_counter()
+                # 时间保留两位小数
                 time_record['condense_q_chain'] = round(t2 - t1, 2)
                 time_record['rewrite_completion_tokens'] = custom_llm.num_tokens_from_messages([condense_question])
                 debug_logger.info(f"condense_q_chain time: {time_record['condense_q_chain']}s")
             except Exception as e:
                 debug_logger.error(f"condense_q_chain error: {e}")
                 condense_question = query
+            # 生成prompt
+            # full_prompt = condense_q_prompt.format_messages(
+            #     chat_history=formatted_chat_history,
+            #     question=query
+            # )
+            # qa_logger.info(f"condense_q_chain full_prompt: {full_prompt}, condense_question: {condense_question}")
             debug_logger.info(f"condense_question: {condense_question}")
             time_record['rewrite_prompt_tokens'] = custom_llm.num_tokens_from_messages([full_prompt, condense_question])
+            # 判断两个字符串是否相似：只保留中文，英文和数字
             if clear_string(condense_question) != clear_string(query):
                 retrieval_query = condense_question
 
-        # === Stage 1: Retrieval ===
-        stage_results: List[RetrievalStageResult] = []
-        retrieval_trace = RetrievalTrace()
         if kb_ids:
-            retrieval_result = await self._retrieve_candidates(retrieval_query, retriever, kb_ids, time_record,
-                                                                hybrid_search, top_k)
-            stage_results.append(retrieval_result)
-            all_candidates = list(retrieval_result.active_candidates)
-            retrieval_trace.set_stage_candidates('retrieval', retrieval_result.candidates)
+            source_documents = await self.get_source_documents(retrieval_query, retriever, kb_ids, time_record,
+                                                               hybrid_search, top_k)
         else:
-            all_candidates = []
-            retrieval_trace.set_stage_candidates('retrieval', [])
+            source_documents = []
 
-        # === Web search integration ===
         if need_web_search:
             t1 = time.perf_counter()
-            web_candidates = self.web_page_search(query, top_k=3)
+            web_search_results = self.web_page_search(query, top_k=3)
             web_splitter = RecursiveCharacterTextSplitter(
                 separators=SEPARATORS,
                 chunk_size=web_chunk_size,
                 chunk_overlap=int(web_chunk_size / 4),
                 length_function=num_tokens_embed,
             )
-            if web_candidates:
-                web_docs = web_splitter.split_documents([c.document for c in web_candidates])
-                for doc in web_docs:
-                    doc.metadata['retrieval_source'] = RetrievalSource.WEB
-                    doc.metadata['retrieval_query'] = query
-                new_web_candidates = self._docs_to_candidates(web_docs, retrieval_query=query)
-                current_doc_id = 0
-                current_file_id = new_web_candidates[0].file_id if new_web_candidates else ''
-                for candidate in new_web_candidates:
-                    if candidate.file_id == current_file_id:
-                        candidate.document.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
-                        current_doc_id += 1
-                    else:
-                        current_file_id = candidate.file_id
-                        current_doc_id = 0
-                        candidate.document.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
-                        current_doc_id += 1
-                    doc_json = candidate.document.to_json()
-                    if doc_json['kwargs'].get('metadata') is None:
-                        doc_json['kwargs']['metadata'] = candidate.document.metadata
-                    self.milvus_summary.add_document(doc_id=candidate.document.metadata['doc_id'], json_data=doc_json)
-                    candidate.update_score('web_rank', candidate.current_score)
-                all_candidates.extend(new_web_candidates)
+            web_search_results = web_splitter.split_documents(web_search_results)
+
+            current_doc_id = 0
+            current_file_id = web_search_results[0].metadata['file_id']
+            for doc in web_search_results:
+                if doc.metadata['file_id'] == current_file_id:
+                    doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
+                    current_doc_id += 1
+                else:
+                    current_file_id = doc.metadata['file_id']
+                    current_doc_id = 0
+                    doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
+                    current_doc_id += 1
+                doc_json = doc.to_json()
+                if doc_json['kwargs'].get('metadata') is None:
+                    doc_json['kwargs']['metadata'] = doc.metadata
+                self.milvus_summary.add_document(doc_id=doc.metadata['doc_id'], json_data=doc_json)
+
             t2 = time.perf_counter()
             time_record['web_search'] = round(t2 - t1, 2)
+            source_documents += web_search_results
 
-        # === Stage 2: Deduplicate ===
-        seen_contents = set()
-        deduped_candidates = []
-        for candidate in all_candidates:
-            if candidate.page_content not in seen_contents:
-                seen_contents.add(candidate.page_content)
-                deduped_candidates.append(candidate)
-        all_candidates = deduped_candidates
+        # if kb_ids and not source_documents:
+        #     res = "数据库检索失败，请检查logs/debug_logs/debug.log日志！"
+        #     async for response, history in self.generate_response(query, res, condense_question, source_documents,
+        #                                                           time_record, chat_history, streaming,'NO_DOCUMENTS'):
+        #         yield response, history
+        #     return
 
-        # === Stage 3: Rerank ===
-        rerank_result = await self._rerank_candidates(all_candidates, condense_question, time_record, rerank)
-        stage_results.append(rerank_result)
-        all_candidates = rerank_result.candidates
-        retrieval_trace.set_stage_candidates('rerank', rerank_result.candidates)
+        source_documents = deduplicate_documents(source_documents)
+        if rerank and len(source_documents) > 1 and num_tokens_rerank(query) <= 300:
+            try:
+                t1 = time.perf_counter()
+                debug_logger.info(f"use rerank, rerank docs num: {len(source_documents)}")
+                source_documents = await self.rerank.arerank_documents(condense_question, source_documents)
+                t2 = time.perf_counter()
+                time_record['rerank'] = round(t2 - t1, 2)
+                # 过滤掉低分的文档
+                debug_logger.info(f"rerank step1 num: {len(source_documents)}")
+                debug_logger.info(f"rerank step1 scores: {[doc.metadata['score'] for doc in source_documents]}")
+                if len(source_documents) > 1:
+                    if filtered_documents := [doc for doc in source_documents if doc.metadata['score'] >= 0.28]:
+                        source_documents = filtered_documents
+                    debug_logger.info(f"rerank step2 num: {len(source_documents)}")
+                    saved_docs = [source_documents[0]]
+                    for doc in source_documents[1:]:
+                        debug_logger.info(f"rerank doc score: {doc.metadata['score']}")
+                        relative_difference = (saved_docs[0].metadata['score'] - doc.metadata['score']) / saved_docs[0].metadata['score']
+                        if relative_difference > 0.5:
+                            break
+                        else:
+                            saved_docs.append(doc)
+                    source_documents = saved_docs
+                    debug_logger.info(f"rerank step3 num: {len(source_documents)}")
+            except Exception as e:
+                time_record['rerank'] = 0.0
+                debug_logger.error(f"query {query}: kb_ids: {kb_ids}, rerank error: {traceback.format_exc()}")
 
-        # === Stage 4: Filter ===
-        filter_result = self._filter_candidates(all_candidates, top_k)
-        stage_results.append(filter_result)
-        active_candidates = [c for c in filter_result.candidates if not c.is_filtered]
-        retrieval_trace.set_stage_candidates('filter', filter_result.candidates)
+        # es检索+milvus检索结果最多可能是2k
+        source_documents = source_documents[:top_k]
 
-        # === Build retrieval diagnostics ===
-        retrieval_diagnostics = self._build_retrieval_diagnostics(stage_results)
-        time_record['retrieval_diagnostics'] = retrieval_diagnostics
-        retrieval_trace.set_diagnostics(retrieval_diagnostics)
-        debug_logger.info(f"retrieval_diagnostics: {retrieval_diagnostics}")
+        # rerank之后删除headers，只保留文本内容，用于后续处理
+        for doc in source_documents:
+            doc.page_content = re.sub(r'^\[headers]\(.*?\)\n', '', doc.page_content)
 
-        # === Build diagnosis record from same trace ===
-        diagnosis_record = RetrievalDiagnosisSerializer.from_retrieval_trace(
-            retrieval_trace, user_id='', kb_ids=kb_ids, query=query
-        )
-
-        # Strip headers after rerank
-        for candidate in active_candidates:
-            candidate.page_content = re.sub(r'^\[headers]\(.*?\)\n', '', candidate.page_content)
-
-        # FAQ high-score handling
-        high_score_faq = [c for c in active_candidates
-                          if c.file_name.endswith('.faq') and c.current_score >= 0.9]
-        if high_score_faq:
-            active_candidates = high_score_faq
-
-        # FAQ exact match
-        for candidate in active_candidates:
-            if candidate.file_name.endswith('.faq') and clear_string_is_equal(
-                    candidate.document.metadata['faq_dict']['question'], query):
+        high_score_faq_documents = [doc for doc in source_documents if
+                                    doc.metadata['file_name'].endswith('.faq') and doc.metadata['score'] >= 0.9]
+        if high_score_faq_documents:
+            source_documents = high_score_faq_documents
+        # FAQ完全匹配处理逻辑
+        for doc in source_documents:
+            if doc.metadata['file_name'].endswith('.faq') and clear_string_is_equal(
+                    doc.metadata['faq_dict']['question'], query):
                 debug_logger.info(f"match faq question: {query}")
                 if only_need_search_results:
-                    yield active_candidates, None
+                    yield source_documents, None
                     return
-                res = candidate.document.metadata['faq_dict']['answer']
-                for c in active_candidates:
-                    c.stage = CandidateStage.SELECTED
-                retrieval_trace.set_stage_candidates('selected', active_candidates)
-                async for response, history in self.generate_response(query, res, condense_question,
-                                                                      active_candidates, active_candidates,
-                                                                      time_record, chat_history, streaming, 'MATCH_FAQ',
-                                                                      retrieval_trace=retrieval_trace,
-                                                                      diagnosis_record=diagnosis_record):
+                res = doc.metadata['faq_dict']['answer']
+                async for response, history in self.generate_response(query, res, condense_question, source_documents,
+                                                                      time_record, chat_history, streaming, 'MATCH_FAQ'):
                     yield response, history
                 return
 
-        # === Prompt and token selection ===
+        # 获取今日日期
         today = time.strftime("%Y-%m-%d", time.localtime())
+        # 获取当前时间
         now = time.strftime("%H:%M:%S", time.localtime())
 
         extra_msg = None
         total_images_number = 0
-        retrieval_candidates = []
-        if active_candidates:
+        retrieval_documents = []
+        if source_documents:
             if custom_prompt:
+                # escaped_custom_prompt = custom_prompt.replace('{', '{{').replace('}', '}}')
+                # prompt_template = CUSTOM_PROMPT_TEMPLATE.format(custom_prompt=escaped_custom_prompt)
                 prompt_template = CUSTOM_PROMPT_TEMPLATE.replace("{{custom_prompt}}", custom_prompt)
             else:
+                # system_prompt = SYSTEM.format(today_date=today, current_time=now)
                 system_prompt = SYSTEM.replace("{{today_date}}", today).replace("{{current_time}}", now)
+                # prompt_template = PROMPT_TEMPLATE.format(system=system_prompt, instructions=INSTRUCTIONS)
                 prompt_template = PROMPT_TEMPLATE.replace("{{system}}", system_prompt).replace("{{instructions}}",
                                                                                                INSTRUCTIONS)
 
             t1 = time.perf_counter()
-            retrieval_candidates, limited_token_nums, tokens_msg = self._select_by_token_limit(
-                custom_llm=custom_llm, query=query,
-                candidates=active_candidates,
-                history=chat_history,
-                prompt_template=prompt_template)
+            retrieval_documents, limited_token_nums, tokens_msg = self.reprocess_source_documents(custom_llm=custom_llm,
+                                                                                                  query=query,
+                                                                                                  source_docs=source_documents,
+                                                                                                  history=chat_history,
+                                                                                                  prompt_template=prompt_template)
 
-            if len(retrieval_candidates) < len(active_candidates):
-                if len(retrieval_candidates) == 0:
+            if len(retrieval_documents) < len(source_documents):
+                # 重新处理后文档数量减少，说明由于tokens不足而被裁切
+                if len(retrieval_documents) == 0:  # 说明被裁切后文档数量为0
                     debug_logger.error(f"limited_token_nums: {limited_token_nums} < {web_chunk_size}!")
                     res = (
                         f"抱歉，由于留给相关文档使用的token数量不足(docs_available_token_nums: {limited_token_nums} < 文本分片大小: {web_chunk_size})，"
                         f"\n无法保证回答质量，请在模型配置中提高【总Token数量】或减少【输出Tokens数量】或减少【上下文消息数量】再继续提问。"
                         f"\n计算方式：{tokens_msg}")
-                    for c in active_candidates:
-                        c.stage = CandidateStage.SELECTED
-                    retrieval_trace.set_stage_candidates('selected', active_candidates)
-                    async for response, history in self.generate_response(query, res, condense_question,
-                                                                          active_candidates, active_candidates,
+                    async for response, history in self.generate_response(query, res, condense_question, source_documents,
                                                                           time_record, chat_history, streaming,
-                                                                          'TOKENS_NOT_ENOUGH',
-                                                                          retrieval_trace=retrieval_trace,
-                                                                          diagnosis_record=diagnosis_record):
+                                                                          'TOKENS_NOT_ENOUGH'):
                         yield response, history
                     return
 
                 extra_msg = (
                     f"\n\nWARNING: 由于留给相关文档使用的token数量不足(docs_available_token_nums: {limited_token_nums})，"
-                    f"\n检索到的部分文档chunk被裁切，原始来源数量：{len(active_candidates)}，裁切后数量：{len(retrieval_candidates)}，"
+                    f"\n检索到的部分文档chunk被裁切，原始来源数量：{len(source_documents)}，裁切后数量：{len(retrieval_documents)}，"
                     f"\n可能会影响回答质量，尤其是问题涉及的相关内容较多时。"
                     f"\n可在模型配置中提高【总Token数量】或减少【输出Tokens数量】或减少【上下文消息数量】再继续提问。\n")
 
-            source_candidates, retrieval_candidates = await self._aggregate_candidates(custom_llm,
-                                                                                       retrieval_candidates,
-                                                                                       limited_token_nums,
-                                                                                       rerank)
+            source_documents, retrieval_documents = await self.prepare_source_documents(custom_llm,
+                                                                                        retrieval_documents,
+                                                                                        limited_token_nums,
+                                                                                        rerank)
 
-            for c in source_candidates:
-                c.stage = CandidateStage.SELECTED
-            retrieval_trace.set_stage_candidates('selected', source_candidates)
-
-            for candidate in source_candidates:
-                if candidate.document.metadata.get('images', []):
-                    total_images_number += len(candidate.document.metadata['images'])
-                    candidate.page_content = replace_image_references(candidate.page_content, candidate.file_id)
+            for doc in source_documents:
+                if doc.metadata.get('images', []):
+                    total_images_number += len(doc.metadata['images'])
+                    doc.page_content = replace_image_references(doc.page_content, doc.metadata['file_id'])
             debug_logger.info(f"total_images_number: {total_images_number}")
 
             t2 = time.perf_counter()
             time_record['reprocess'] = round(t2 - t1, 2)
         else:
-            source_candidates = []
             if custom_prompt:
+                # escaped_custom_prompt = custom_prompt.replace('{', '{{').replace('}', '}}')
+                # prompt_template = SIMPLE_PROMPT_TEMPLATE.format(today=today, now=now, custom_prompt=escaped_custom_prompt)
                 prompt_template = SIMPLE_PROMPT_TEMPLATE.replace("{{today}}", today).replace("{{now}}", now).replace(
                     "{{custom_prompt}}", custom_prompt)
             else:
                 simple_custom_prompt = """
                 - If you cannot answer based on the given information, you will return the sentence \"抱歉，已知的信息不足，因此无法回答。\". 
                 """
+                # prompt_template = SIMPLE_PROMPT_TEMPLATE.format(today=today, now=now, custom_prompt=simple_custom_prompt)
                 prompt_template = SIMPLE_PROMPT_TEMPLATE.replace("{{today}}", today).replace("{{now}}", now).replace(
                     "{{custom_prompt}}", simple_custom_prompt)
 
+
+
         if only_need_search_results:
-            yield source_candidates, None
+            yield source_documents, None
             return
 
         t1 = time.perf_counter()
@@ -797,8 +658,9 @@ class LocalDocQA:
 
         acc_resp = ''
         prompt = self.generate_prompt(query=query,
-                                      candidates=source_candidates,
+                                      source_docs=source_documents,
                                       prompt_template=prompt_template)
+        # debug_logger.info(f"prompt: {prompt}")
         est_prompt_tokens = num_tokens(prompt) + num_tokens(str(chat_history))
         async for answer_result in custom_llm.generatorAnswer(prompt=prompt, history=chat_history, streaming=streaming):
             resp = answer_result.llm_output["answer"]
@@ -814,10 +676,8 @@ class LocalDocQA:
                         "prompt": prompt,
                         "result": resp,
                         "condense_question": condense_question,
-                        "retrieval_documents": retrieval_candidates,
-                        "source_documents": source_candidates,
-                        "retrieval_trace": retrieval_trace,
-                        "diagnosis_record": diagnosis_record}
+                        "retrieval_documents": retrieval_documents,
+                        "source_documents": source_documents}
             time_record['prompt_tokens'] = prompt_tokens if prompt_tokens != 0 else est_prompt_tokens
             time_record['completion_tokens'] = completion_tokens if completion_tokens != 0 else num_tokens(acc_resp)
             time_record['total_tokens'] = total_tokens if total_tokens != 0 else time_record['prompt_tokens'] + \
@@ -832,25 +692,29 @@ class LocalDocQA:
                                 "prompt": prompt,
                                 "result": f"data: {json.dumps({'answer': extra_msg}, ensure_ascii=False)}",
                                 "condense_question": condense_question,
-                                "retrieval_documents": retrieval_candidates,
-                                "source_documents": source_candidates,
-                                "retrieval_trace": retrieval_trace,
-                                "diagnosis_record": diagnosis_record}
+                                "retrieval_documents": retrieval_documents,
+                                "source_documents": source_documents}
                     yield msg_response, history
                 last_return_time = time.perf_counter()
                 time_record['llm_completed'] = round(last_return_time - t1, 2) - time_record['llm_first_return']
                 history[-1][1] = acc_resp
-                if total_images_number != 0:
-                    candidates_with_images = [c for c in source_candidates if c.document.metadata.get('images', [])]
+                if total_images_number != 0:  # 如果有图片，需要处理回答带图的情况
+                    docs_with_images = [doc for doc in source_documents if doc.metadata.get('images', [])]
                     time1 = time.perf_counter()
                     relevant_docs = await self.calculate_relevance_optimized(
                         question=query,
                         llm_answer=acc_resp,
-                        reference_candidates=candidates_with_images,
+                        reference_docs=docs_with_images,
                         top_k=1
                     )
                     show_images = ["\n### 引用图文如下：\n"]
                     for doc in relevant_docs:
+                        print(f"文档: {doc['document']}...")  # 只打印前50个字符
+                        print(f"最相关段落: {doc['segment']}...")  # 打印最相关段落的前100个字符
+                        print(f"与LLM回答的相似度: {doc['similarity_llm']:.4f}")
+                        print(f"原始问题相关性分数: {doc['question_score']:.4f}")
+                        print(f"综合得分: {doc['combined_score']:.4f}")
+                        print()
                         for image in doc['document'].metadata.get('images', []):
                             image_str = replace_image_references(image, doc['document'].metadata['file_id'])
                             debug_logger.info(f"image_str: {image} -> {image_str}")

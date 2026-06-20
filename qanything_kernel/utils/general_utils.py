@@ -51,51 +51,34 @@ def isURL(string):
 
 
 def format_source_documents(ori_source_documents):
-    from qanything_kernel.core.retriever.candidate import CandidateDocument
     source_documents = []
     for inum, doc in enumerate(ori_source_documents):
-        if isinstance(doc, CandidateDocument):
-            source_documents.append(doc.to_source_dict())
-        else:
-            source_info = {'file_id': doc.metadata.get('file_id', ''),
-                           'file_name': doc.metadata.get('file_name', ''),
-                           'content': doc.page_content,
-                           'retrieval_query': doc.metadata.get('retrieval_query', ''),
-                           'file_url': doc.metadata.get('file_url', ''),
-                           'score': str(doc.metadata.get('score', '')),
-                           'embed_version': doc.metadata.get('embed_version', ''),
-                           'nos_keys': doc.metadata.get('nos_keys', ''),
-                           'doc_id': doc.metadata.get('doc_id', ''),
-                           'retrieval_source': doc.metadata.get('retrieval_source', ''),
-                           'headers': doc.metadata.get('headers', {}),
-                           'page_id': doc.metadata.get('page_id', 0),
-                           }
-            source_documents.append(source_info)
+        source_info = {'file_id': doc.metadata.get('file_id', ''),
+                       'file_name': doc.metadata.get('file_name', ''),
+                       'content': doc.page_content,
+                       'retrieval_query': doc.metadata.get('retrieval_query', ''),
+                       # 'kernel': doc.metadata['kernel'],
+                       'file_url': doc.metadata.get('file_url', ''),
+                       'score': str(doc.metadata['score']),
+                       'embed_version': doc.metadata.get('embed_version', ''),
+                       'nos_keys': doc.metadata.get('nos_keys', ''),
+                       'doc_id': doc.metadata.get('doc_id', ''),
+                       'retrieval_source': doc.metadata.get('retrieval_source', ''),
+                       'headers': doc.metadata.get('headers', {}),
+                       'page_id': doc.metadata.get('page_id', 0),
+                       }
+        source_documents.append(source_info)
     return source_documents
-
-
-def format_retrieval_trace(retrieval_trace):
-    from qanything_kernel.core.retriever.candidate import RetrievalTrace
-    if retrieval_trace is None:
-        return None
-    if isinstance(retrieval_trace, RetrievalTrace):
-        return retrieval_trace.to_dict()
-    if isinstance(retrieval_trace, dict):
-        return retrieval_trace
-    return None
 
 
 def format_time_record(time_record):
     token_usage = {}
     time_usage = {}
-    retrieval_diagnostics = None
     for k, v in time_record.items():
-        if k == 'retrieval_diagnostics':
-            retrieval_diagnostics = v
-        elif 'tokens' in k:
+        if 'tokens' in k:
             token_usage[k] = round(v)
         else:
-            time_usage[k] = round(v, 2) if isinstance(v, (int, float)) else v
+            time_usage[k] = round(v, 2)
     if 'rewrite_prompt_tokens' in token_usage:
         if 'prompt_tokens' in token_usage:
             token_usage['prompt_tokens'] += token_usage['rewrite_prompt_tokens']
@@ -106,10 +89,7 @@ def format_time_record(time_record):
             token_usage['completion_tokens'] += token_usage['rewrite_completion_tokens']
         if 'total_tokens' in token_usage:
             token_usage['total_tokens'] += token_usage['rewrite_completion_tokens']
-    result = {"time_usage": time_usage, "token_usage": token_usage}
-    if retrieval_diagnostics is not None:
-        result['retrieval_diagnostics'] = retrieval_diagnostics
-    return result
+    return {"time_usage": time_usage, "token_usage": token_usage}
 
 
 def safe_get(req: Request, attr: str, default=None):
