@@ -25,7 +25,7 @@
       :rows="6"
     />
     <div class="title">{{ bots.associatedKb }}<span>*</span></div>
-    <div v-for="(item, index) in curBot.bot_config.kb_ids" :key="item" class="knowedge-item knowledge-info">
+    <div v-for="(item, index) in curBot.kb_ids" :key="item" class="knowedge-item knowledge-info">
       <img class="knowledge-icon" src="@/assets/bots/knowledge.png" alt="knowledge" />
       <div class="kb-name">{{ curBot.kb_names[index] }}</div>
       <img
@@ -53,6 +53,8 @@
 </template>
 <script lang="ts" setup>
 import { useBots } from '@/store/useBots';
+import urlResquest from '@/services/urlConfig';
+import { resultControl } from '@/utils/utils';
 import { message } from 'ant-design-vue';
 import { getLanguage } from '@/language/index';
 import ChatSettingForm from '@/components/ChatSettingForm.vue';
@@ -61,14 +63,8 @@ import { useBotsChat } from '@/store/useBotsChat';
 
 const { curBot, knowledgeList } = storeToRefs(useBots());
 const { QA_List } = storeToRefs(useBotsChat());
-const {
-  setSelectKnowledgeVisible,
-  fetchBotInfo,
-  updateBot,
-  updateBotKbIds,
-  getChatSettingFromBot,
-} = useBots();
-const { setChatSettingConfigured, chatSettingConfigured } = useChatSetting();
+const { setSelectKnowledgeVisible, setCurBot } = useBots();
+const { setChatSettingConfigured } = useChatSetting();
 const { chatSettingFormActive } = storeToRefs(useChatSetting());
 
 const { bots, common } = getLanguage();
@@ -80,37 +76,45 @@ const matches: any = computed(() => roleSetting.value.match(/[^a-zA-Z\s]|\p{P}|\
 
 onMounted(() => {
   console.log('curBot', curBot.value);
-  const cfg = curBot.value.bot_config;
-  name.value = cfg.basic.bot_name;
-  welcomeMessage.value = cfg.basic.welcome_message;
-  roleSetting.value = cfg.basic.prompt_setting;
-  if (cfg.llm_setting) {
-    const existing = chatSettingConfigured.value[2];
-    const chatSetting = getChatSettingFromBot({
-      modelType: existing.modelType,
-      modelName: existing.modelName,
-      customId: existing.customId,
-      context: existing.context,
-    });
-    if (chatSetting) {
-      chatSettingConfigured.value.forEach(item => {
-        item.active = false;
-      });
-      chatSetting.active = true;
-      chatSettingConfigured.value[2] = chatSetting;
-    }
-  }
+  name.value = curBot.value.bot_name;
+  welcomeMessage.value = curBot.value.welcome_message;
+  roleSetting.value = curBot.value.prompt_setting;
 });
+
+const getBotInfo = async botId => {
+  try {
+    const res: any = await resultControl(await urlResquest.queryBotInfo({ bot_id: botId }));
+    console.log('getBotInfo', res);
+    setCurBot(res[0]);
+  } catch (e) {
+    message.error(e.msg || '获取Bot信息失败');
+  }
+};
 
 const saveBotInfo = async () => {
   try {
-    await updateBot(curBot.value.bot_id, {
-      bot_name: name.value,
-      prompt_setting: roleSetting.value,
-      welcome_message: welcomeMessage.value,
-      llm_setting: chatSettingFormActive.value,
-      fromChatSetting: true,
-    });
+    await resultControl(
+      await urlResquest.updateBot({
+        bot_id: curBot.value.bot_id,
+        bot_name: name.value,
+        prompt_setting: roleSetting.value,
+        welcome_message: welcomeMessage.value,
+        only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
+        networking: chatSettingFormActive.value.capabilities.networkSearch,
+        api_base: chatSettingFormActive.value.apiBase,
+        api_key: chatSettingFormActive.value.apiKey,
+        api_context_length: chatSettingFormActive.value.apiContextLength,
+        top_p: chatSettingFormActive.value.top_P,
+        temperature: chatSettingFormActive.value.temperature,
+        top_k: chatSettingFormActive.value.top_K,
+        model: chatSettingFormActive.value.apiModelName,
+        max_token: chatSettingFormActive.value.maxToken,
+        hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
+        chunk_size: chatSettingFormActive.value.chunkSize,
+        rerank: chatSettingFormActive.value.capabilities.rerank,
+      })
+    );
+    await getBotInfo(curBot.value.bot_id);
   } catch (e) {
     console.log('error--', e);
     message.error(e.msg || '保存失败，请重试');
@@ -118,11 +122,17 @@ const saveBotInfo = async () => {
 };
 
 const removeKb = async data => {
-  let kbIds = curBot.value.bot_config.kb_ids;
+  let kbIds = curBot.value.kb_ids;
   console.log('removeKb', data, kbIds);
   kbIds = kbIds.filter(item => item != data);
   try {
-    await updateBotKbIds(curBot.value.bot_id, kbIds);
+    await resultControl(
+      await urlResquest.updateBot({
+        bot_id: curBot.value.bot_id,
+        kb_ids: kbIds,
+      })
+    );
+    getBotInfo(curBot.value.bot_id);
     knowledgeList.value = knowledgeList.value.map(item => {
       if (item.kb_id === data) {
         item.state = item.state === 0 ? 1 : 0;

@@ -2,6 +2,9 @@ from qanything_kernel.configs.model_config import (MYSQL_HOST_LOCAL, MYSQL_PORT_
                                                    MYSQL_PASSWORD_LOCAL,
                                                    MYSQL_DATABASE_LOCAL, KB_SUFFIX, MILVUS_HOST_LOCAL)
 from qanything_kernel.utils.custom_log import debug_logger, insert_logger
+from qanything_kernel.utils.file_process_state import (FileProcessState, ProcessStage, FileProcessContext,
+                                                      ErrorInfo, ErrorCategory, legacy_status_to_state,
+                                                      state_to_legacy_status, categorize_error)
 import mysql.connector
 from mysql.connector import pooling
 import json
@@ -149,7 +152,8 @@ class KnowledgeBaseManager:
                 file_url VARCHAR(2048) DEFAULT '',
                 upload_infos TEXT,
                 chunk_size INT DEFAULT -1,
-                timestamp VARCHAR(255) DEFAULT '197001010000'
+                timestamp VARCHAR(255) DEFAULT '197001010000',
+                process_context TEXT
             );
 
         """
@@ -262,6 +266,7 @@ class KnowledgeBaseManager:
             # 如果没有的话，给QanythingBot添加一列：llm_setting VARCHAR(512)
             "ALTER TABLE QanythingBot ADD COLUMN llm_setting VARCHAR(512) DEFAULT '{}'",
             "ALTER TABLE QanythingBot DROP COLUMN model",
+            "ALTER TABLE File ADD COLUMN process_context TEXT",
         ]
 
         for query in index_queries:
@@ -842,13 +847,10 @@ class KnowledgeBaseManager:
         return result is not None and len(result) > 0
 
     def new_qanything_bot(self, bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message,
-                          kb_ids_str, llm_setting=None):
-        if llm_setting is None:
-            llm_setting = {}
-        llm_setting_json = json.dumps(llm_setting, ensure_ascii=False)
-        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, llm_setting) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
-        self.execute_query(query, (
-        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, llm_setting_json),
+                          kb_ids_str):
+        query = "INSERT INTO QanythingBot (bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+        self.execute_query_(query, (
+        bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str),
                             commit=True)
         return bot_id, "success"
 
@@ -869,13 +871,11 @@ class KnowledgeBaseManager:
             return self.execute_query_(query, (user_id, bot_id), fetch=True)
 
     def update_bot(self, user_id, bot_id, bot_name, description, head_image, prompt_setting, welcome_message,
-                   kb_ids_str, update_time, llm_setting=None):
-        if llm_setting is None:
-            llm_setting = {}
-        llm_setting_json = json.dumps(llm_setting, ensure_ascii=False)
+                   kb_ids_str, update_time, llm_setting):
+        llm_setting = json.dumps(llm_setting, ensure_ascii=False)
         query = "UPDATE QanythingBot SET bot_name = %s, description = %s, head_image = %s, prompt_setting = %s, welcome_message = %s, kb_ids_str = %s, update_time = %s, llm_setting = %s WHERE user_id = %s AND bot_id = %s AND deleted = 0"
         self.execute_query_(query, (
-        bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, llm_setting_json, user_id,
+        bot_name, description, head_image, prompt_setting, welcome_message, kb_ids_str, update_time, llm_setting, user_id,
         bot_id), commit=True)
 
     def get_files_by_status(self, status):
@@ -887,3 +887,146 @@ class KnowledgeBaseManager:
         result = self.execute_query_(query, (file_id,), fetch=True)
         file_location = result[0][0] if result else None
         return file_location
+
+    def init_file_process_context(self, file_id):
+        context = FileProcessContext(file_id=file_id)
+        context.transition_to(FileProcessState.PENDING, ProcessStage.UPLOAD, "文件已上传，等待处理")
+        context_json = context.to_json()
+        query = "UPDATE File SET process_context = %s, status = %s WHERE file_id = %s"
+        self.execute_query_(query, (context_json, state_to_legacy_status(FileProcessState.PENDING), file_id), commit=True)
+        return context
+
+    def get_file_process_context(self, file_id):
+        query = "SELECT process_context, status FROM File WHERE file_id = %s"
+        result = self.execute_query_(query, (file_id,), fetch=True)
+        if result and result[0]:
+            process_context = result[0][0]
+            legacy_status = result[0][1]
+            if process_context:
+                try:
+                    return FileProcessContext.from_json(process_context)
+                except Exception as e:
+                    debug_logger.error(f"Failed to parse process_context for {file_id}: {e}")
+            context = FileProcessContext(file_id=file_id)
+            context.state = legacy_status_to_state(legacy_status)
+            return context
+        return None
+
+    def update_file_process_context(self, file_id, context):
+        context_json = context.to_json()
+        legacy_status = state_to_legacy_status(context.state)
+        query = "UPDATE File SET process_context = %s, status = %s WHERE file_id = %s"
+        self.execute_query_(query, (context_json, legacy_status, file_id), commit=True)
+
+    def transition_file_state(self, file_id, new_state, stage=None, message=""):
+        context = self.get_file_process_context(file_id)
+        if context is None:
+            context = FileProcessContext(file_id=file_id)
+        context.transition_to(new_state, stage, message)
+        self.update_file_process_context(file_id, context)
+        return context
+
+    def record_file_error(self, file_id, error_category, error_message, stage, stack_trace=None):
+        context = self.get_file_process_context(file_id)
+        if context is None:
+            context = FileProcessContext(file_id=file_id)
+        error_info = ErrorInfo(
+            error_category=error_category,
+            error_message=error_message,
+            stage=stage,
+            stack_trace=stack_trace,
+        )
+        context.record_error(error_info)
+        self.update_file_process_context(file_id, context)
+        return context
+
+    def mark_file_for_retry(self, file_id):
+        context = self.get_file_process_context(file_id)
+        if context is None or not context.can_retry():
+            return None
+        context.mark_for_retry()
+        self.update_file_process_context(file_id, context)
+        return context
+
+    def get_files_by_process_state(self, states, kb_ids=None, limit=100):
+        if isinstance(states, (FileProcessState, str)):
+            states = [states]
+        state_values = [s.value if isinstance(s, FileProcessState) else s for s in states]
+        placeholders = ','.join(['%s'] * len(state_values))
+
+        if kb_ids:
+            kb_placeholders = ','.join(['%s'] * len(kb_ids))
+            query = f"""
+                SELECT file_id, file_name, kb_id, process_context, status
+                FROM File
+                WHERE deleted = 0
+                AND (
+                    (process_context IS NOT NULL AND JSON_EXTRACT(process_context, '$.state') IN ({placeholders}))
+                    OR status IN ({placeholders})
+                )
+                AND kb_id IN ({kb_placeholders})
+                ORDER BY timestamp ASC LIMIT %s
+            """
+            params = state_values + [state_to_legacy_status(FileProcessState(s)) if s in [v.value for v in FileProcessState] else 'gray' for s in state_values] + kb_ids + [limit]
+        else:
+            query = f"""
+                SELECT file_id, file_name, kb_id, process_context, status
+                FROM File
+                WHERE deleted = 0
+                AND (
+                    (process_context IS NOT NULL AND JSON_EXTRACT(process_context, '$.state') IN ({placeholders}))
+                    OR status IN ({placeholders})
+                )
+                ORDER BY timestamp ASC LIMIT %s
+            """
+            params = state_values + [state_to_legacy_status(FileProcessState(s)) if s in [v.value for v in FileProcessState] else 'gray' for s in state_values] + [limit]
+
+        result = self.execute_query_(query, tuple(params), fetch=True)
+        files = []
+        if result:
+            for row in result:
+                file_id, file_name, kb_id, process_context_json, legacy_status = row
+                if process_context_json:
+                    try:
+                        context = FileProcessContext.from_json(process_context_json)
+                    except Exception:
+                        context = FileProcessContext(file_id=file_id)
+                        context.state = legacy_status_to_state(legacy_status)
+                else:
+                    context = FileProcessContext(file_id=file_id)
+                    context.state = legacy_status_to_state(legacy_status)
+                files.append({
+                    'file_id': file_id,
+                    'file_name': file_name,
+                    'kb_id': kb_id,
+                    'context': context,
+                })
+        return files
+
+    def get_file_display_status(self, file_id):
+        context = self.get_file_process_context(file_id)
+        if context:
+            return context.get_display_status()
+        return None
+
+    def get_files_with_status_info(self, user_id, kb_id, file_id=None):
+        files = self.get_files(user_id, kb_id, file_id)
+        result = []
+        for file_info in files:
+            file_id_val = file_info[0]
+            context = self.get_file_process_context(file_id_val)
+            display_status = context.get_display_status() if context else None
+            result.append({
+                'file_id': file_info[0],
+                'file_name': file_info[1],
+                'status': file_info[2],
+                'bytes': file_info[3],
+                'content_length': file_info[4],
+                'timestamp': file_info[5],
+                'file_location': file_info[6],
+                'file_url': file_info[7],
+                'chunks_number': file_info[8],
+                'msg': file_info[9],
+                'process_state': display_status,
+            })
+        return result

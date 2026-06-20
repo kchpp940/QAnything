@@ -11,6 +11,7 @@ import urlResquest from '@/services/urlConfig';
 import { formatDate, formatFileSize, resultControl } from '@/utils/utils';
 import { message } from 'ant-design-vue';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
+import { ProcessStateDisplay, FileProcessState, getStatusFromProcessState } from '@/utils/fileProcessState';
 
 const { currentId } = storeToRefs(useKnowledgeBase());
 
@@ -27,6 +28,7 @@ interface IDataSource {
   status: Status;
   createtime: string;
   remark: { [key: string]: string } | string;
+  processState?: ProcessStateDisplay | null;
 }
 
 export const useOptiionList = defineStore(
@@ -42,6 +44,17 @@ export const useOptiionList = defineStore(
       gray: 0,
       yellow: 0,
       red: 0,
+    });
+
+    const processStateCount = ref<Record<string, number>>({
+      pending: 0,
+      parsing: 0,
+      splitting: 0,
+      embedding: 0,
+      indexing: 0,
+      completed: 0,
+      failed: 0,
+      retrying: 0,
     });
 
     // 知识库文件总数
@@ -103,12 +116,10 @@ export const useOptiionList = defineStore(
     const timer = ref(null);
 
     const getDetails = async () => {
-      // try {
       if (timer.value) {
         clearTimeout(timer.value);
       }
       const res: any = await resultControl(
-        // 接口的page_id为页码，page_limit为一页几个
         await urlResquest.fileList({
           kb_id: currentId.value,
           page_id: kbPageNum.value,
@@ -116,46 +127,58 @@ export const useOptiionList = defineStore(
         })
       );
 
-      // 初始化状态计数
       Object.keys(totalStatus.value).forEach(key => {
         totalStatus.value[key] = 0;
       });
-
-      // 更新状态计数
       Object.assign(totalStatus.value, res.status_count);
 
-      setDataSource([]);
+      if (res.process_state_count) {
+        Object.keys(processStateCount.value).forEach(key => {
+          processStateCount.value[key] = 0;
+        });
+        Object.assign(processStateCount.value, res.process_state_count);
+      }
 
-      // 设置一共几个文件
+      setDataSource([]);
       setKbTotal(res.total);
 
-      // 格式化success
-      const computedRemark = (msg: string = '', status: string = 'green') => {
+      const computedRemark = (msg: string = '', status: string = 'green', processState?: ProcessStateDisplay | null) => {
+        if (processState && processState.is_failed && processState.latest_error) {
+          return processState.latest_error.error_message;
+        }
         if (status !== 'green') return msg;
-        // stringify转不了, 只能toString()
-        return JSON.parse(msg.toString());
+        try {
+          return JSON.parse(msg.toString());
+        } catch {
+          return msg;
+        }
       };
 
       res?.details.forEach((item: any, index) => {
+        const processState = item?.process_state || null;
+        const displayStatus = getStatusFromProcessState(processState) || item?.status;
         dataSource.value.push({
           key: item?.file_id,
           id: 10000 + index,
           fileId: item?.file_id,
           fileIdName: item?.file_name,
           fileTag: item?.tags,
-          status: item?.status,
+          status: displayStatus,
           bytes: formatFileSize(item?.bytes || 0),
           contentLength: item?.content_length,
           createtime: formatDate(item?.timestamp),
-          remark: item?.status === 'gray' ? '' : computedRemark(item?.msg, item?.status),
+          remark: item?.status === 'gray' && !processState ? '' : computedRemark(item?.msg, item?.status, processState),
+          processState: processState,
         });
       });
 
-      const flag = res?.details.some(item => {
+      const hasProcessing = res?.details.some((item: any) => {
+        if (item?.process_state) {
+          return item.process_state.is_processing || item.process_state.is_pending;
+        }
         return item.status === 'gray' || item.status === 'yellow';
       });
-      if (flag) {
-        //有解析中的
+      if (hasProcessing) {
         timer.value = setTimeout(() => {
           clearTimeout(timer.value);
           getDetails();
@@ -316,6 +339,7 @@ export const useOptiionList = defineStore(
       loading,
       setLoading,
       totalStatus,
+      processStateCount,
       kbTotal,
       kbPageSize,
       kbPageNum,

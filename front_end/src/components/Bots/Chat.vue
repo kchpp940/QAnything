@@ -3,14 +3,14 @@
     <div class="my-page">
       <div class="header">
         <img src="@/assets/bots/bot-avatar.png" alt="avatar" />
-        {{ botInfo.bot_config.basic.bot_name }}
+        {{ botInfo.bot_name }}
       </div>
       <div id="chat" class="chat">
         <ul id="chat-ul" ref="scrollDom">
           <div class="ai">
             <div class="content">
               <img class="avatar" src="@/assets/home/ai-avatar.png" alt="头像" />
-              <p class="question-text" v-html="botInfo.bot_config.basic.welcome_message"></p>
+              <p class="question-text" v-html="botInfo.welcome_message"></p>
             </div>
           </div>
           <li v-for="(item, index) in QA_List" :key="index">
@@ -207,7 +207,7 @@
         </div>
       </div>
     </div>
-    <div v-if="!botInfo.bot_config.kb_ids || !botInfo.bot_config.kb_ids.length" class="mask">
+    <div v-if="!botInfo.kb_ids || !botInfo.kb_ids.length" class="mask">
       <img src="@/assets/bots/lock.png" alt="icon" />
       <p>{{ bots.bindKbtoPreview }}</p>
     </div>
@@ -238,7 +238,6 @@ import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
 import ChatSettingDialog from '@/components/ChatSettingDialog.vue';
 import ChatTextarea from '@/components/ChatTextarea.vue';
-import { buildLocalDocChatPayload } from '@/utils/botConfig';
 
 const props = defineProps({
   chatType: {
@@ -366,7 +365,7 @@ const mentionOptions = ref<string[]>([]);
 const getMentionOptions = async () => {
   const res: any = await resultControl(
     await urlResquest.getTags({
-      kb_ids: props.botInfo.bot_config.kb_ids,
+      kb_ids: props.botInfo.kb_ids,
     })
   );
   mentionOptions.value = res.tags;
@@ -425,25 +424,32 @@ const send = async () => {
     Connection: 'keep-alive',
   };
 
-  const body = buildLocalDocChatPayload(
-    {
+  fetchEventSource(apiBase + '/local_doc_qa/local_doc_chat', {
+    method: 'POST',
+    headers: headers,
+    openWhenHidden: true,
+    body: JSON.stringify({
       user_id: userId,
       user_info: userPhone,
       bot_id: props.botInfo.bot_id,
       history: history.value,
       question: q,
       streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
+      // networking: chatSettingFormActive.value.capabilities.networkSearch,
       product_source: 'saas',
-    },
-    chatSettingFormActive.value,
-    props.botInfo.bot_config,
-  );
-
-  fetchEventSource(apiBase + '/local_doc_qa/local_doc_chat', {
-    method: 'POST',
-    headers: headers,
-    openWhenHidden: true,
-    body: JSON.stringify(body),
+      // rerank: chatSettingFormActive.value.capabilities.rerank,
+      // only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
+      // hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
+      // max_token: chatSettingFormActive.value.maxToken,
+      // api_base: chatSettingFormActive.value.apiBase,
+      // api_key: chatSettingFormActive.value.apiKey,
+      // model: chatSettingFormActive.value.apiModelName,
+      // api_context_length: chatSettingFormActive.value.apiContextLength,
+      // chunk_size: chatSettingFormActive.value.chunkSize,
+      // top_p: chatSettingFormActive.value.top_P,
+      // top_k: chatSettingFormActive.value.top_K,
+      // temperature: chatSettingFormActive.value.temperature,
+    }),
     signal: ctrl.signal,
     onopen(e: any) {
       console.log('open', e);

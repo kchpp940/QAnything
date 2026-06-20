@@ -274,7 +274,6 @@ import FileUploadDialog from '@/components/FileUploadDialog.vue';
 import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import { useBots } from '@/store/useBots';
 import CopyUrlDialog from '@/components/Bots/CopyUrlDialog.vue';
-import { buildLocalDocChatPayload } from '@/utils/botConfig';
 
 const { common, home } = getLanguage();
 
@@ -289,7 +288,7 @@ const {
   renameHistory,
   addFileToBeSendList,
 } = useQuickStart();
-const { setCopyUrlVisible, setWebUrl, createBot, updateBot } = useBots();
+const { setCopyUrlVisible, setWebUrl } = useBots();
 const { setChatSourceVisible, setSourceType, setSourceUrl, setTextContent } = useChatSource();
 const { chatSettingFormActive } = storeToRefs(useChatSetting());
 const { showDefault } = storeToRefs(useKnowledgeBase());
@@ -520,18 +519,26 @@ const send = async () => {
   showLoading.value = true;
   ctrl = new AbortController();
 
-  const sendData = buildLocalDocChatPayload(
-    {
-      user_id: userId,
-      user_info: userPhone,
-      question: q,
-      history: history.value,
-      streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
-      product_source: 'saas',
-    },
-    chatSettingFormActive.value,
-    { kb_ids: [kbId.value] },
-  );
+  const sendData = {
+    kb_ids: [kbId.value],
+    history: history.value,
+    question: q,
+    streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
+    networking: chatSettingFormActive.value.capabilities.networkSearch,
+    product_source: 'saas',
+    rerank: chatSettingFormActive.value.capabilities.rerank,
+    only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
+    hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
+    max_token: chatSettingFormActive.value.maxToken,
+    api_base: chatSettingFormActive.value.apiBase,
+    api_key: chatSettingFormActive.value.apiKey,
+    model: chatSettingFormActive.value.apiModelName,
+    api_context_length: chatSettingFormActive.value.apiContextLength,
+    chunk_size: chatSettingFormActive.value.chunkSize,
+    top_p: chatSettingFormActive.value.top_P,
+    top_k: chatSettingFormActive.value.top_K,
+    temperature: chatSettingFormActive.value.temperature,
+  };
 
   // 如果是仅检索
   if (chatSettingFormActive.value.capabilities.onlySearch) {
@@ -566,7 +573,11 @@ const send = async () => {
         Accept: ['text/event-stream', 'application/json'],
       },
       openWhenHidden: true,
-      body: JSON.stringify(sendData),
+      body: JSON.stringify({
+        user_id: userId,
+        user_info: userPhone,
+        ...sendData,
+      }),
       signal: ctrl.signal,
       onopen(e: any) {
         console.log('open', e);
@@ -667,18 +678,36 @@ const hideSourceList = index => {
 const shareChat = async () => {
   if (chatId.value === null) return;
   try {
-    const botId = await createBot({
-      bot_name: 'bot-' + formatTimestamp(Date.now()),
-      description: '来源: 快速开始创建-' + formatTimestamp(Date.now()),
-    });
-    await updateBot(botId, {
-      kb_ids: [kbId.value],
-      llm_setting: chatSettingFormActive.value,
-      fromChatSetting: true,
-    });
+    // 创建机器人
+    const { bot_id } = (await resultControl(
+      await urlResquest.createBot({
+        bot_name: 'bot-' + formatTimestamp(Date.now()),
+        description: '来源: 快速开始创建-' + formatTimestamp(Date.now()),
+      })
+    )) as any;
+    // 将知识库变为现在这个
+    await resultControl(
+      await urlResquest.updateBot({
+        bot_id,
+        kb_ids: [kbId.value],
+        only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
+        networking: chatSettingFormActive.value.capabilities.networkSearch,
+        api_base: chatSettingFormActive.value.apiBase,
+        api_key: chatSettingFormActive.value.apiKey,
+        api_context_length: chatSettingFormActive.value.apiContextLength,
+        top_p: chatSettingFormActive.value.top_P,
+        temperature: chatSettingFormActive.value.temperature,
+        top_k: chatSettingFormActive.value.top_K,
+        model: chatSettingFormActive.value.apiModelName,
+        max_token: chatSettingFormActive.value.maxToken,
+        hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
+        chunk_size: chatSettingFormActive.value.chunkSize,
+        rerank: chatSettingFormActive.value.capabilities.rerank,
+      })
+    );
     setCopyUrlVisible(true);
     const { origin, pathname } = window.location;
-    setWebUrl(`${origin + pathname}#/bots/${botId}/share`);
+    setWebUrl(`${origin + pathname}#/bots/${bot_id}/share`);
   } catch (e) {
     message.error(e?.msg || '分享失败');
   }

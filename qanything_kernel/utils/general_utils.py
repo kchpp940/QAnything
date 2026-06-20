@@ -100,34 +100,19 @@ def safe_get(req: Request, attr: str, default=None):
             return req.args[attr]
         if attr in req.json:
             return req.json[attr]
+        # if value := req.form.get(attr):
+        #     return value
+        # if value := req.args.get(attr):
+        #     return value
+        # """req.json执行时不校验content-type，body字段可能不能被正确解析为json"""
+        # if value := req.json.get(attr):
+        #     return value
     except BadRequest:
         logging.warning(f"missing {attr} in request")
     except Exception as e:
         logging.warning(f"get {attr} from request failed:")
         logging.warning(traceback.format_exc())
     return default
-
-
-def extract_all_params(req: Request) -> dict:
-    """
-    从请求中提取所有参数（合并 form、args、json），
-    不做字段过滤，完全交由上层 resolver 根据 schema 决定需要哪些。
-    这确保契约只在 resolver 层维护，handler 无需感知具体字段。
-    """
-    params = {}
-    try:
-        if req.args:
-            params.update(dict(req.args))
-        if req.form:
-            params.update(dict(req.form))
-        if req.json:
-            params.update(dict(req.json))
-    except BadRequest:
-        pass
-    except Exception as e:
-        logging.warning(f"extract_all_params from request failed:")
-        logging.warning(traceback.format_exc())
-    return params
 
 
 def truncate_filename(filename, max_length=200):

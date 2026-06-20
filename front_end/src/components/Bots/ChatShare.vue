@@ -3,7 +3,7 @@
     <div class="bots-chat-container">
       <div class="header">
         <img src="@/assets/bots/bot-avatar.png" alt="avatar" />
-        {{ botInfo.bot_config.basic.bot_name }}
+        {{ botInfo.bot_name }}
       </div>
       <div class="my-page">
         <div id="chat" ref="chatContainer" class="chat showSider">
@@ -12,7 +12,7 @@
               <img class="avatar" src="@/assets/home/ai-avatar.png" alt="头像" />
               <div class="ai-content">
                 <div class="ai-right">
-                  <p class="question-text welcome" v-html="botInfo.bot_config.basic.welcome_message"></p>
+                  <p class="question-text welcome" v-html="botInfo.welcome_message"></p>
                 </div>
               </div>
             </li>
@@ -200,7 +200,7 @@
           </div>
         </div>
 
-        <div v-if="!botInfo.bot_config.kb_ids || !botInfo.bot_config.kb_ids.length" class="mask">
+        <div v-if="!botInfo.kb_ids || !botInfo.kb_ids.length" class="mask">
           <img src="@/assets/bots/lock.png" alt="icon" />
           <p>{{ bots.bindKbtoPreview }}</p>
         </div>
@@ -239,7 +239,6 @@ import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
 import ChatTextarea from '@/components/ChatTextarea.vue';
 import { useUser } from '@/store/useUser';
-import { llmSettingToChatSetting, buildLocalDocChatPayload } from '@/utils/botConfig';
 
 const props = defineProps({
   chatType: {
@@ -280,14 +279,30 @@ const question = ref('');
 
 // 格式化 chatSetting
 type ShareSettingType = MakePartial<IChatSetting, 'modelType'>;
+// eslint-disable-next-line vue/no-setup-props-destructure
+const { llm_setting } = props.botInfo;
+const chatSetting = JSON.parse(llm_setting);
 const chatSettingFormActive = ref<ShareSettingType>();
-// 初始化 chatSetting：从 normalized bot_config.llm_setting 通过 adapter 转换
+// 初始化 chatSetting 为自己的格式
 onMounted(() => {
-  const llm_setting = props.botInfo.bot_config.llm_setting;
-  const chatSetting = llmSettingToChatSetting(llm_setting);
   chatSettingFormActive.value = {
-    ...chatSetting,
+    apiKey: chatSetting.api_key,
+    apiBase: chatSetting.api_base,
+    apiModelName: chatSetting.model,
+    apiContextLength: chatSetting.api_context_length,
+    maxToken: chatSetting.max_token,
+    chunkSize: chatSetting.chunk_size,
+    temperature: chatSetting.temperature,
     context: 0,
+    top_K: chatSetting.top_k,
+    top_P: chatSetting.top_p,
+    capabilities: {
+      onlySearch: chatSetting.only_need_search_results,
+      mixedSearch: chatSetting.hybrid_search,
+      networkSearch: chatSetting.networking,
+      rerank: chatSetting.rerank,
+    },
+    active: true,
   };
 });
 
@@ -417,7 +432,7 @@ const mentionOptions = ref<string[]>([]);
 const getMentionOptions = async () => {
   const res: any = await resultControl(
     await urlResquest.getTags({
-      kb_ids: props.botInfo.bot_config.kb_ids,
+      kb_ids: props.botInfo.kb_ids,
     })
   );
   mentionOptions.value = res.tags;
@@ -462,19 +477,28 @@ const send = async () => {
   showLoading.value = true;
   ctrl = new AbortController();
 
-  const sendData = buildLocalDocChatPayload(
-    {
-      user_id: props.virtualUserId,
-      user_info: userInfo.phoneNumber,
-      bot_id: props.botInfo.bot_id,
-      question: q,
-      history: history.value,
-      streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
-      product_source: 'saas',
-    },
-    chatSettingFormActive.value,
-    props.botInfo.bot_config,
-  );
+  const sendData = {
+    user_id: props.virtualUserId,
+    user_info: userInfo.phoneNumber,
+    bot_id: props.botInfo.bot_id,
+    history: history.value,
+    question: q,
+    streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
+    networking: chatSettingFormActive.value.capabilities.networkSearch,
+    product_source: 'saas',
+    rerank: chatSettingFormActive.value.capabilities.rerank,
+    only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
+    hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
+    max_token: chatSettingFormActive.value.maxToken,
+    api_base: chatSettingFormActive.value.apiBase,
+    api_key: chatSettingFormActive.value.apiKey,
+    model: chatSettingFormActive.value.apiModelName,
+    api_context_length: chatSettingFormActive.value.apiContextLength,
+    chunk_size: chatSettingFormActive.value.chunkSize,
+    top_p: chatSettingFormActive.value.top_P,
+    top_k: chatSettingFormActive.value.top_K,
+    temperature: chatSettingFormActive.value.temperature,
+  };
 
   // 如果是仅检索
   if (chatSettingFormActive.value.capabilities.onlySearch) {

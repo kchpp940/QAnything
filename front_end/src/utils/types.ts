@@ -7,6 +7,8 @@
  * @Description:
  */
 
+import type { ProcessStateDisplay } from '@/utils/fileProcessState';
+
 export interface IKnowledgeItem {
   kb_id: string;
   kb_name: string;
@@ -103,6 +105,7 @@ export interface IFileListItem {
   text?: string;
   order?: number;
   bytes: number;
+  processState?: ProcessStateDisplay | null;
 }
 
 // 模型设置
@@ -153,83 +156,3 @@ export interface IChatSetting {
 // 第一个对象类型，第二个参数联合类型，把联合类型里面的参数设定为可选
 // MakePartial<IChatSetting, 'modelType'>
 export type MakePartial<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
-
-export interface IBotLLMSetting {
-  api_key: string;
-  api_base: string;
-  model: string;
-  api_context_length: number;
-  max_token: number | null;
-  chunk_size: number;
-  temperature: number;
-  top_k: number;
-  top_p: number;
-  rerank: boolean;
-  hybrid_search: boolean;
-  networking: boolean;
-  only_need_search_results: boolean;
-}
-
-export interface IBotBasicConfig {
-  bot_name: string;
-  description: string;
-  head_image: string;
-  prompt_setting: string;
-  welcome_message: string;
-}
-
-export interface IBotConfig {
-  basic: IBotBasicConfig;
-  llm_setting: Partial<IBotLLMSetting>;
-  kb_ids: string[];
-}
-
-// 后端 get_bot_info 返回的规范化结构（同时包含兼容字段和结构化 bot_config）
-// 注意：组件层应只消费 bot_config.*，根级字段（bot_name/description/.../llm_setting/kb_ids）
-//       仅作为兼容层保留，新代码不应再直接访问。
-export interface IBotApiResponse {
-  bot_id: string;
-  user_id: string;
-  /** @deprecated 请从 bot_config.basic.bot_name 读取 */
-  bot_name: string;
-  /** @deprecated 请从 bot_config.basic.description 读取 */
-  description: string;
-  /** @deprecated 请从 bot_config.basic.head_image 读取 */
-  head_image: string;
-  /** @deprecated 请从 bot_config.basic.prompt_setting 读取 */
-  prompt_setting: string;
-  /** @deprecated 请从 bot_config.basic.welcome_message 读取 */
-  welcome_message: string;
-  /** @deprecated 请从 bot_config.kb_ids 读取 */
-  kb_ids: string[];
-  kb_names: string[];
-  update_time: string;
-  /** @deprecated 请从 bot_config.llm_setting 读取 */
-  llm_setting: IBotLLMSetting;
-  // 结构化 bot_config（新契约字段）
-  bot_config: IBotConfig;
-}
-
-// 创建 Bot 的请求参数
-export interface ICreateBotRequest {
-  bot_config: Partial<IBotConfig>;
-}
-
-// 更新 Bot 的请求参数
-export interface IUpdateBotRequest {
-  bot_id: string;
-  bot_config: Partial<IBotConfig>;
-}
-
-// 聊天入口请求（local_doc_chat）
-export interface ILocalDocChatRequest {
-  bot_id?: string;
-  question: string;
-  streaming?: boolean;
-  history?: any[];
-  // 可选项：通过 bot_config 覆盖配置
-  bot_config?: Partial<IBotConfig>;
-}
-
-// store 中 curBot 的类型（就是规范化后的 API 响应）
-export type ICurBot = IBotApiResponse;

@@ -7,7 +7,7 @@
       <div v-else>
         <div class="header">
           <img src="@/assets/bots/bot-avatar.png" alt="avatar" />
-          <div class="name">{{ curBot?.bot_config?.basic?.bot_name }}</div>
+          <div class="name">{{ curBot?.bot_name }}</div>
           <div class="tabs">
             <div
               v-for="item in tabList"
@@ -15,7 +15,7 @@
               :class="[
                 'tab-item',
                 tabIndex === item.value ? 'tab-active' : '',
-                (!curBot.bot_config.kb_ids || !curBot.bot_config.kb_ids.length) && item.value === 1 ? 'tab-disable' : '',
+                (!curBot.kb_ids || !curBot.kb_ids.length) && item.value === 1 ? 'tab-disable' : '',
               ]"
               @click="changeEditTab(item.value)"
             >
@@ -39,7 +39,7 @@ import { getLanguage } from '@/language/index';
 
 const { getCurrentRoute, changePage } = routeController();
 const { tabIndex, curBot } = storeToRefs(useBots());
-const { setTabIndex, setKnowledgeList, fetchBotInfo } = useBots();
+const { setTabIndex, setCurBot, setKnowledgeList } = useBots();
 
 const bots = getLanguage().bots;
 
@@ -72,6 +72,7 @@ const getKbList = async kbIds => {
     console.log('kbs', kbs, kbIds);
     if (kbIds && kbIds.length) {
       kbs = kbs.map(kb => {
+        // state: 0 未绑定 1 绑定
         if (kbIds.some(item => item === kb.kb_id)) {
           kb.state = 1;
         } else {
@@ -92,10 +93,11 @@ const getKbList = async kbIds => {
   }
 };
 
-const getBotInfo = async botIdParam => {
+const getBotInfo = async botId => {
   try {
-    const bot = await fetchBotInfo(botIdParam);
-    getKbList(bot.kb_ids);
+    const res: any = await resultControl(await urlResquest.queryBotInfo({ bot_id: botId }));
+    setCurBot(res[0]);
+    getKbList(res[0].kb_ids);
     isLoading.value = false;
   } catch (e) {
     message.error(e.msg || '获取Bot信息失败');
@@ -111,7 +113,7 @@ function init() {
 }
 
 function changeEditTab(value) {
-  if (value === 1 && (!curBot.value.bot_config.kb_ids || !curBot.value.bot_config.kb_ids.length)) {
+  if (value === 1 && (!curBot.value.kb_ids || !curBot.value.kb_ids.length)) {
     return;
   }
   if (tabIndex.value === value) {

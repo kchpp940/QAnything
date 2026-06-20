@@ -43,25 +43,42 @@
 <script lang="ts" setup>
 import { useBots } from '@/store/useBots';
 import { useHeader } from '@/store/useHeader';
+import urlResquest from '@/services/urlConfig';
+import { resultControl } from '@/utils/utils';
 import routeController from '@/controller/router';
 import { message } from 'ant-design-vue';
 import { getLanguage } from '@/language/index';
 
 const { changePage } = routeController();
 const { selectKnowledgeVisible, knowledgeList, curBot } = storeToRefs(useBots());
-const { updateBotKbIds, fetchBotInfo } = useBots();
+const { setCurBot } = useBots();
 const { setNavIndex } = useHeader();
 const knowledge = ref('');
 const bots = getLanguage().bots;
 const common = getLanguage().common;
 const regex = computed(() => new RegExp(knowledge.value, 'i'));
 
+const getBotInfo = async botId => {
+  try {
+    const res: any = await resultControl(await urlResquest.queryBotInfo({ bot_id: botId }));
+    setCurBot(res[0]);
+  } catch (e) {
+    message.error(e.msg || '获取Bot信息失败');
+  }
+};
+
 const bindKb = async data => {
-  const kbIds = curBot.value.bot_config.kb_ids;
+  const kbIds = curBot.value.kb_ids;
   kbIds.push(data.kb_id);
   console.log('kbIds', kbIds);
   try {
-    await updateBotKbIds(curBot.value.bot_id, kbIds);
+    await resultControl(
+      await urlResquest.updateBot({
+        bot_id: curBot.value.bot_id,
+        kb_ids: kbIds,
+      })
+    );
+    getBotInfo(curBot.value.bot_id);
     knowledgeList.value = knowledgeList.value.map(item => {
       if (item.kb_id === data.kb_id) {
         item.state = item.state === 0 ? 1 : 0;
@@ -74,11 +91,17 @@ const bindKb = async data => {
 };
 
 const removeKb = async data => {
-  let kbIds = curBot.value.bot_config.kb_ids;
+  let kbIds = curBot.value.kb_ids;
   console.log('removeKb', data, kbIds);
   kbIds = kbIds.filter(item => item != data.kb_id);
   try {
-    await updateBotKbIds(curBot.value.bot_id, kbIds);
+    await resultControl(
+      await urlResquest.updateBot({
+        bot_id: curBot.value.bot_id,
+        kb_ids: kbIds,
+      })
+    );
+    getBotInfo(curBot.value.bot_id);
     knowledgeList.value = knowledgeList.value.map(item => {
       if (item.kb_id === data.kb_id) {
         item.state = item.state === 0 ? 1 : 0;

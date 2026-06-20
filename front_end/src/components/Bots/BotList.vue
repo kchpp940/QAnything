@@ -6,10 +6,10 @@
         <div class="new-bot-text">{{ bots.createBot }}</div>
       </div>
     </div>
-    <div class="bot-item" v-for="item in botList" :key="item.bot_id" @click="botEdit(item)">
+    <div class="bot-item" v-for="item in botList" :key="item.id" @click="botEdit(item)">
       <div class="top-info">
         <img class="avator" src="@/assets/bots/bot-avatar.png" alt="avator" />
-        <span class="name">{{ item.bot_config.basic.bot_name }}</span>
+        <span class="name">{{ item.bot_name }}</span>
         <a-dropdown
           @click.stop
           :trigger="['click']"
@@ -31,9 +31,9 @@
           </template>
         </a-dropdown>
       </div>
-      <div class="intro">{{ item.bot_config.basic.description }}</div>
+      <div class="intro">{{ item.description }}</div>
       <div class="time">
-        {{ bots.recentlyEdited }} {{ moment(item.update_time).format('YYYY-MM-DD') }}
+        {{ bots.recentlyEdited }} {{ moment(item.updateTime).format('YYYY-MM-DD') }}
       </div>
     </div>
   </div>
@@ -49,7 +49,7 @@ import moment from 'moment';
 import { getLanguage } from '@/language/index';
 
 const { botList } = storeToRefs(useBots());
-const { setNewBotsVisible, setTabIndex } = useBots();
+const { setNewBotsVisible, setTabIndex, setCurBot } = useBots();
 const { setQaList } = useBotsChat();
 const { changePage } = routeController();
 
@@ -59,6 +59,7 @@ const bots = getLanguage().bots;
 const botEdit = item => {
   console.log('botEdit', item);
   setTabIndex(0);
+  setCurBot(item);
   setQaList([]);
   changePage(`/bots/${item.bot_id}/edit`);
 };

@@ -112,7 +112,7 @@
               </template>
               <template v-else-if="column.key === 'fileTag'">
                 <Tags
-                  v-if="record.status === 'green'"
+                  v-if="record.status === 'green' || record.processState?.is_completed"
                   :tags="record.fileTag"
                   @update:tags="
                     newTags => {
@@ -130,16 +130,19 @@
                 <div class="status-box">
                   <span class="icon-file-status">
                     <LoadingImg
-                      v-if="record.status === 'gray' || record.status === 'yellow'"
+                      v-if="record.processState?.is_processing || record.processState?.is_pending || record.status === 'gray' || record.status === 'yellow'"
                       class="file-status"
                     />
                     <SvgIcon
                       v-else
                       class="file-status"
-                      :name="record.status === 'green' ? 'success' : 'error'"
+                      :name="record.processState?.is_completed || record.status === 'green' ? 'success' : 'error'"
                     />
                   </span>
-                  <span> {{ parseStatus(record.status) }}</span>
+                  <span> {{ parseStatus(record.status, record.processState) }}</span>
+                  <span v-if="record.processState?.is_processing" class="progress-text">
+                    ({{ record.processState.progress_percent }}%)
+                  </span>
                 </div>
               </template>
               <template v-else-if="column.key === 'remark'">
@@ -167,7 +170,7 @@
                 <a-button
                   type="text"
                   class="view-item"
-                  :disabled="!(record.status === 'green')"
+                  :disabled="!(record.status === 'green' || record.processState?.is_completed)"
                   @click="viewItem(record)"
                 >
                   {{ common.view }}
@@ -244,6 +247,7 @@ import { pageStatus } from '@/utils/enum';
 import { resultControl } from '@/utils/utils';
 import { message, Modal } from 'ant-design-vue';
 import { getLanguage } from '@/language';
+import { ProcessStateDisplay, getStateLabel, getStageLabel } from '@/utils/fileProcessState';
 import LoadingImg from '@/components/LoadingImg.vue';
 import UploadProgress from '@/components/UploadProgress.vue';
 import ChunkViewDialog from '@/components/ChunkViewDialog.vue';
@@ -574,7 +578,19 @@ const clearUpload = () => {
   });
 };
 
-const parseStatus = status => {
+const parseStatus = (status, processState?: ProcessStateDisplay | null) => {
+  if (processState) {
+    if (processState.is_completed) {
+      return common.succeeded;
+    }
+    if (processState.is_failed) {
+      return common.failed;
+    }
+    if (processState.state === 'retrying') {
+      return `重试中(${processState.retry_count})`;
+    }
+    return getStageLabel(processState.current_stage as any) || common.parsing;
+  }
   let str: string;
   switch (status) {
     case 'gray':
@@ -918,6 +934,7 @@ onBeforeUnmount(() => {
   .status-box {
     display: flex;
     align-items: center;
+    gap: 4px;
 
     .icon-file-status {
       display: flex;
@@ -927,12 +944,16 @@ onBeforeUnmount(() => {
     span {
       display: block;
 
-      margin-right: 8px;
-
       svg {
         width: 16px;
         height: 16px;
       }
+    }
+
+    .progress-text {
+      color: #5a47e5;
+      font-size: 12px;
+      font-weight: 500;
     }
   }
 

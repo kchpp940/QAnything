@@ -73,13 +73,15 @@
 <script lang="ts" setup>
 import { useBots } from '@/store/useBots';
 import { useBotsChat } from '@/store/useBotsChat';
+import urlResquest from '@/services/urlConfig';
+import { resultControl } from '@/utils/utils';
 import { message } from 'ant-design-vue';
 import routeController from '@/controller/router';
 import { getLanguage } from '@/language/index';
 
 const { changePage } = routeController();
 const { newBotsVisible } = storeToRefs(useBots());
-const { setNewBotsVisible, setTabIndex, createBot, fetchBotInfo } = useBots();
+const { setNewBotsVisible, setCurBot, setTabIndex } = useBots();
 const { setQaList } = useBotsChat();
 const bots = getLanguage().bots;
 const common = getLanguage().common;
@@ -96,21 +98,32 @@ const formState = reactive<FormState>({
   introduction: '',
 });
 
+const getBotInfo = async botId => {
+  try {
+    const res: any = await resultControl(await urlResquest.queryBotInfo({ bot_id: botId }));
+    setCurBot(res[0]);
+  } catch (e) {
+    message.error(e.msg || '获取Bot信息失败');
+  }
+};
+
 const onFinish = async (values: any) => {
   console.log('Success:', values);
   try {
-    const botId = await createBot({
-      bot_name: values.name,
-      description: values.introduction,
-    });
-    await fetchBotInfo(botId);
+    const res: any = await resultControl(
+      await urlResquest.createBot({
+        bot_name: values.name,
+        description: values.introduction,
+      })
+    );
+    await getBotInfo(res.bot_id);
     message.success(bots.creationSuccessful);
     setTabIndex(0);
     setQaList([]);
     formState.name = '';
     formState.introduction = '';
     selectedPrebot.value = null;
-    changePage(`/bots/${botId}/edit`);
+    changePage(`/bots/${res.bot_id}/edit`);
   } catch (e) {
     message.error(e.msg || '创建失败');
   }
