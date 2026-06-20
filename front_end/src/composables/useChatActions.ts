@@ -8,8 +8,6 @@ const common = getLanguage().common;
 export function useChatActions(options?: { onReAnswer?: (question: string) => void }) {
   const { copy } = useClipboard();
 
-  const showSourceIdxs = ref<number[]>([]);
-
   const like = (item: IChatItem, e: MouseEvent) => {
     item.like = !item.like;
     item.unlike = false;
@@ -49,31 +47,10 @@ export function useChatActions(options?: { onReAnswer?: (question: string) => vo
     options?.onReAnswer?.(item.question);
   };
 
-  const showDetail = (item: IChatItem, index: number) => {
-    item.source[index].showDetailDataSource = !item.source[index].showDetailDataSource;
-  };
-
-  const hideDetail = (item: IChatItem, index: number) => {
-    item.source[index].showDetailDataSource = false;
-  };
-
-  const showSourceList = (index: number) => {
-    showSourceIdxs.value.push(index);
-  };
-
-  const hideSourceList = (index: number) => {
-    showSourceIdxs.value = showSourceIdxs.value.filter(item => item !== index);
-  };
-
   return {
-    showSourceIdxs,
     like,
     unlike,
     myCopy,
     reAnswer,
-    showDetail,
-    hideDetail,
-    showSourceList,
-    hideSourceList,
   };
 }

@@ -36,77 +36,12 @@
                       :chat-item-info="item.itemInfo"
                     />
                   </p>
-                  <template v-if="item.source.length">
-                    <div
-                      :class="[
-                        'source-total',
-                        !showSourceIdxs.includes(index) ? 'source-total-last' : '',
-                      ]"
-                    >
-                      <span v-if="language === 'zh'">
-                        找到了{{ item.source.length }}个信息来源：
-                      </span>
-                      <span v-else> Found {{ item.source.length }} source of information </span>
-                      <SvgIcon
-                        v-show="!showSourceIdxs.includes(index)"
-                        name="down"
-                        @click="showSourceList(index)"
-                      />
-                      <SvgIcon
-                        v-show="showSourceIdxs.includes(index)"
-                        name="up"
-                        @click="hideSourceList(index)"
-                      />
-                    </div>
-                    <div v-show="showSourceIdxs.includes(index)" class="source-list">
-                      <div
-                        v-for="(sourceItem, sourceIndex) in item.source"
-                        :key="sourceIndex"
-                        class="data-source"
-                      >
-                        <p v-show="sourceItem.file_name" class="control">
-                          <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
-                          <a
-                            v-if="sourceItem.file_url.startsWith('http')"
-                            :href="sourceItem.file_url"
-                            target="_blank"
-                          >
-                            {{ sourceItem.file_name }}
-                          </a>
-                          <span
-                            v-else
-                            :class="[
-                              'file',
-                              checkFileType(sourceItem.file_name) ? 'filename-active' : '',
-                            ]"
-                            @click="handleChatSource(sourceItem)"
-                          >
-                            {{ sourceItem.file_name }}
-                          </span>
-                          <SvgIcon
-                            v-show="sourceItem.showDetailDataSource"
-                            name="iconup"
-                            @click="hideDetail(item, sourceIndex)"
-                          />
-                          <SvgIcon
-                            v-show="!sourceItem.showDetailDataSource"
-                            name="icondown"
-                            @click="showDetail(item, sourceIndex)"
-                          />
-                        </p>
-                        <Transition name="sourceitem">
-                          <div v-show="sourceItem.showDetailDataSource" class="source-content">
-                            <!--                            <p v-html="sourceItem.content?.replaceAll('\n', '<br/>')"></p>-->
-                            <HighLightMarkDown :content="sourceItem.content" />
-                            <p class="score">
-                              <span class="tips">{{ common.correlation }}</span>
-                              {{ sourceItem.score }}
-                            </p>
-                          </div>
-                        </Transition>
-                      </div>
-                    </div>
-                  </template>
+                  <SourcePanel
+                    v-if="item.source.length"
+                    :sources="item.source"
+                    variant="home"
+                    content-mode="markdown"
+                  />
                   <div v-if="item.showTools" class="feed-back">
                     <div class="reload-box" @click="reAnswer(item)">
                       <SvgIcon name="reload"></SvgIcon>
@@ -220,7 +155,6 @@ import { useChat } from '@/store/useChat';
 import DefaultModal from './DefaultModal.vue';
 import urlResquest, { formatTimestamp, resultControl } from '@/services/urlConfig';
 import { getLanguage } from '@/language';
-import { useLanguage } from '@/store/useLanguage';
 import ChatSettingDialog from '@/components/ChatSettingDialog.vue';
 import HistoryChat from '@/components/Home/HistoryChat.vue';
 import { useHomeChat } from '@/store/useHomeChat';
@@ -231,8 +165,8 @@ import CopyUrlDialog from '@/components/Bots/CopyUrlDialog.vue';
 import ChatTextarea from '@/components/ChatTextarea.vue';
 import { useChatSession } from '@/composables/useChatSession';
 import { useChatActions } from '@/composables/useChatActions';
-import { useChatSourceFile } from '@/composables/useChatSourceFile';
 import { useDownloadChat } from '@/composables/useDownloadChat';
+import SourcePanel from '@/components/SourcePanel.vue';
 
 const common = getLanguage().common;
 
@@ -241,7 +175,6 @@ const { QA_List, chatId, pageId, qaPageId, historyList } = storeToRefs(useHomeCh
 const { chatSettingFormActive } = storeToRefs(useChatSetting());
 const { addHistoryList, updateHistoryList, addChatList, clearChatList } = useHomeChat();
 const { setCopyUrlVisible, setWebUrl } = useBots();
-const { language } = storeToRefs(useLanguage());
 declare module _czc {
   const push: (array: any) => void;
 }
@@ -294,8 +227,6 @@ onBeforeUnmount(() => {
   }
 });
 
-const { handleChatSource, checkFileType } = useChatSourceFile();
-
 const chatSettingForDialogRef = ref<InstanceType<typeof ChatSettingDialog>>();
 const checkChatSetting = () => {
   return chatSettingForDialogRef.value.handleOk();
@@ -332,15 +263,10 @@ const {
 });
 
 const {
-  showSourceIdxs,
   like: chatLike,
   unlike,
   myCopy,
   reAnswer,
-  showDetail,
-  hideDetail,
-  showSourceList,
-  hideSourceList,
 } = useChatActions({
   onReAnswer: (q: string) => {
     question.value = q;
@@ -626,87 +552,6 @@ $avatar-width: 96px;
       }
     }
 
-    .source-total {
-      padding: 10px 20px;
-      background: #fff;
-      display: flex;
-      align-items: center;
-
-      span {
-        margin-right: 5px;
-      }
-
-      svg {
-        width: 16px !important;
-        height: 16px !important;
-        cursor: pointer !important;
-      }
-    }
-
-    .source-total-last {
-      border-radius: 0px 0 12px 12px;
-    }
-
-    .source-list {
-      background: #fff;
-      border-radius: 0px 12px 12px 12px;
-    }
-
-    .data-source {
-      padding: 13px 20px;
-      font-size: 14px;
-      line-height: 22px;
-      color: $title1;
-
-      .control {
-        display: flex;
-        align-items: center;
-      }
-
-      .score {
-        margin-top: 26px;
-      }
-
-      .source-content {
-        margin-top: 26px;
-      }
-
-      .tips {
-        min-width: 78px;
-        height: 22px;
-        line-height: 22px;
-        color: $title2;
-        margin-right: 8px;
-      }
-
-      .file {
-        color: $baseColor;
-        margin-right: 8px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .filename-active {
-        color: #5a47e5;
-        text-decoration: underline;
-        cursor: pointer;
-      }
-
-      svg {
-        width: 14px;
-        height: 14px;
-        color: $baseColor;
-        cursor: pointer;
-      }
-
-      a {
-        color: #5a47e5;
-        text-decoration: underline;
-        cursor: pointer;
-      }
-    }
-
     .feed-back {
       display: flex;
       height: 20px;
@@ -916,21 +761,6 @@ $avatar-width: 96px;
     height: 20px;
     margin-top: 5px;
   }
-}
-
-.sourceitem-leave, // 离开前,进入后透明度是1
-.sourceitem-enter-to {
-  opacity: 1;
-}
-
-.sourceitem-leave-active,
-.sourceitem-enter-active {
-  transition: opacity 0.5s; //过度是.5s秒
-}
-
-.sourceitem-leave-to,
-.sourceitem-enter {
-  opacity: 0;
 }
 </style>
 <style lang="scss">
