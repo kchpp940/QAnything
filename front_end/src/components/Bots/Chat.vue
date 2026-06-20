@@ -3,14 +3,14 @@
     <div class="my-page">
       <div class="header">
         <img src="@/assets/bots/bot-avatar.png" alt="avatar" />
-        {{ botInfo.bot_name }}
+        {{ botInfo.bot_config.basic.bot_name }}
       </div>
       <div id="chat" class="chat">
         <ul id="chat-ul" ref="scrollDom">
           <div class="ai">
             <div class="content">
               <img class="avatar" src="@/assets/home/ai-avatar.png" alt="头像" />
-              <p class="question-text" v-html="botInfo.welcome_message"></p>
+              <p class="question-text" v-html="botInfo.bot_config.basic.welcome_message"></p>
             </div>
           </div>
           <li v-for="(item, index) in QA_List" :key="index">
@@ -207,7 +207,7 @@
         </div>
       </div>
     </div>
-    <div v-if="!botInfo.kb_ids || !botInfo.kb_ids.length" class="mask">
+    <div v-if="!botInfo.bot_config.kb_ids || !botInfo.bot_config.kb_ids.length" class="mask">
       <img src="@/assets/bots/lock.png" alt="icon" />
       <p>{{ bots.bindKbtoPreview }}</p>
     </div>
@@ -365,7 +365,7 @@ const mentionOptions = ref<string[]>([]);
 const getMentionOptions = async () => {
   const res: any = await resultControl(
     await urlResquest.getTags({
-      kb_ids: props.botInfo.kb_ids,
+      kb_ids: props.botInfo.bot_config.kb_ids,
     })
   );
   mentionOptions.value = res.tags;

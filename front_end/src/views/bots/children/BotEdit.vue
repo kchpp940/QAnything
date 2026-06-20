@@ -7,7 +7,7 @@
       <div v-else>
         <div class="header">
           <img src="@/assets/bots/bot-avatar.png" alt="avatar" />
-          <div class="name">{{ curBot?.bot_name }}</div>
+          <div class="name">{{ curBot?.bot_config?.basic?.bot_name }}</div>
           <div class="tabs">
             <div
               v-for="item in tabList"
@@ -15,7 +15,7 @@
               :class="[
                 'tab-item',
                 tabIndex === item.value ? 'tab-active' : '',
-                (!curBot.kb_ids || !curBot.kb_ids.length) && item.value === 1 ? 'tab-disable' : '',
+                (!curBot.bot_config.kb_ids || !curBot.bot_config.kb_ids.length) && item.value === 1 ? 'tab-disable' : '',
               ]"
               @click="changeEditTab(item.value)"
             >
@@ -111,7 +111,7 @@ function init() {
 }
 
 function changeEditTab(value) {
-  if (value === 1 && (!curBot.value.kb_ids || !curBot.value.kb_ids.length)) {
+  if (value === 1 && (!curBot.value.bot_config.kb_ids || !curBot.value.bot_config.kb_ids.length)) {
     return;
   }
   if (tabIndex.value === value) {

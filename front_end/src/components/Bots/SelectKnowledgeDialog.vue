@@ -57,7 +57,7 @@ const common = getLanguage().common;
 const regex = computed(() => new RegExp(knowledge.value, 'i'));
 
 const bindKb = async data => {
-  const kbIds = curBot.value.kb_ids;
+  const kbIds = curBot.value.bot_config.kb_ids;
   kbIds.push(data.kb_id);
   console.log('kbIds', kbIds);
   try {
@@ -74,7 +74,7 @@ const bindKb = async data => {
 };
 
 const removeKb = async data => {
-  let kbIds = curBot.value.kb_ids;
+  let kbIds = curBot.value.bot_config.kb_ids;
   console.log('removeKb', data, kbIds);
   kbIds = kbIds.filter(item => item != data.kb_id);
   try {

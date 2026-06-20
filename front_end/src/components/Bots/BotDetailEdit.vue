@@ -25,7 +25,7 @@
       :rows="6"
     />
     <div class="title">{{ bots.associatedKb }}<span>*</span></div>
-    <div v-for="(item, index) in curBot.kb_ids" :key="item" class="knowedge-item knowledge-info">
+    <div v-for="(item, index) in curBot.bot_config.kb_ids" :key="item" class="knowedge-item knowledge-info">
       <img class="knowledge-icon" src="@/assets/bots/knowledge.png" alt="knowledge" />
       <div class="kb-name">{{ curBot.kb_names[index] }}</div>
       <img
@@ -80,10 +80,11 @@ const matches: any = computed(() => roleSetting.value.match(/[^a-zA-Z\s]|\p{P}|\
 
 onMounted(() => {
   console.log('curBot', curBot.value);
-  name.value = curBot.value.bot_name;
-  welcomeMessage.value = curBot.value.welcome_message;
-  roleSetting.value = curBot.value.prompt_setting;
-  if (curBot.value.llm_setting) {
+  const cfg = curBot.value.bot_config;
+  name.value = cfg.basic.bot_name;
+  welcomeMessage.value = cfg.basic.welcome_message;
+  roleSetting.value = cfg.basic.prompt_setting;
+  if (cfg.llm_setting) {
     const existing = chatSettingConfigured.value[2];
     const chatSetting = getChatSettingFromBot({
       modelType: existing.modelType,
@@ -117,7 +118,7 @@ const saveBotInfo = async () => {
 };
 
 const removeKb = async data => {
-  let kbIds = curBot.value.kb_ids;
+  let kbIds = curBot.value.bot_config.kb_ids;
   console.log('removeKb', data, kbIds);
   kbIds = kbIds.filter(item => item != data);
   try {

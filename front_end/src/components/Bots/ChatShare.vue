@@ -3,7 +3,7 @@
     <div class="bots-chat-container">
       <div class="header">
         <img src="@/assets/bots/bot-avatar.png" alt="avatar" />
-        {{ botInfo.bot_name }}
+        {{ botInfo.bot_config.basic.bot_name }}
       </div>
       <div class="my-page">
         <div id="chat" ref="chatContainer" class="chat showSider">
@@ -12,7 +12,7 @@
               <img class="avatar" src="@/assets/home/ai-avatar.png" alt="头像" />
               <div class="ai-content">
                 <div class="ai-right">
-                  <p class="question-text welcome" v-html="botInfo.welcome_message"></p>
+                  <p class="question-text welcome" v-html="botInfo.bot_config.basic.welcome_message"></p>
                 </div>
               </div>
             </li>
@@ -200,7 +200,7 @@
           </div>
         </div>
 
-        <div v-if="!botInfo.kb_ids || !botInfo.kb_ids.length" class="mask">
+        <div v-if="!botInfo.bot_config.kb_ids || !botInfo.bot_config.kb_ids.length" class="mask">
           <img src="@/assets/bots/lock.png" alt="icon" />
           <p>{{ bots.bindKbtoPreview }}</p>
         </div>
@@ -239,6 +239,7 @@ import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
 import ChatTextarea from '@/components/ChatTextarea.vue';
 import { useUser } from '@/store/useUser';
+import { llmSettingToChatSetting } from '@/utils/botConfig';
 
 const props = defineProps({
   chatType: {
@@ -279,30 +280,14 @@ const question = ref('');
 
 // 格式化 chatSetting
 type ShareSettingType = MakePartial<IChatSetting, 'modelType'>;
-// eslint-disable-next-line vue/no-setup-props-destructure
-const { llm_setting } = props.botInfo;
-const chatSetting = JSON.parse(llm_setting);
 const chatSettingFormActive = ref<ShareSettingType>();
-// 初始化 chatSetting 为自己的格式
+// 初始化 chatSetting：从 normalized bot_config.llm_setting 通过 adapter 转换
 onMounted(() => {
+  const llm_setting = props.botInfo.bot_config.llm_setting;
+  const chatSetting = llmSettingToChatSetting(llm_setting);
   chatSettingFormActive.value = {
-    apiKey: chatSetting.api_key,
-    apiBase: chatSetting.api_base,
-    apiModelName: chatSetting.model,
-    apiContextLength: chatSetting.api_context_length,
-    maxToken: chatSetting.max_token,
-    chunkSize: chatSetting.chunk_size,
-    temperature: chatSetting.temperature,
+    ...chatSetting,
     context: 0,
-    top_K: chatSetting.top_k,
-    top_P: chatSetting.top_p,
-    capabilities: {
-      onlySearch: chatSetting.only_need_search_results,
-      mixedSearch: chatSetting.hybrid_search,
-      networkSearch: chatSetting.networking,
-      rerank: chatSetting.rerank,
-    },
-    active: true,
   };
 });
 
@@ -432,7 +417,7 @@ const mentionOptions = ref<string[]>([]);
 const getMentionOptions = async () => {
   const res: any = await resultControl(
     await urlResquest.getTags({
-      kb_ids: props.botInfo.kb_ids,
+      kb_ids: props.botInfo.bot_config.kb_ids,
     })
   );
   mentionOptions.value = res.tags;

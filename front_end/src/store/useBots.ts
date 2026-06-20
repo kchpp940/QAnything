@@ -159,7 +159,6 @@ export const useBots = defineStore('useBots', () => {
     defaultBotList,
     setDefaultBotList,
     curBot,
-    setCurBot,
     QA_List,
     setQaList,
     // ========== 统一契约 Action ==========
