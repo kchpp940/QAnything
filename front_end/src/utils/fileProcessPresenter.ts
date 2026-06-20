@@ -38,6 +38,9 @@ export interface FileProcessPresentation {
   isCompleted: boolean;
   isFailed: boolean;
   isPending: boolean;
+  isClaimed: boolean;
+  workerId: string | null;
+  claimTime: number | null;
   completedStages: ProcessStage[];
   allStages: ProcessStage[];
 }
@@ -64,6 +67,9 @@ const DEFAULT_PRESENTATION: FileProcessPresentation = {
   isCompleted: false,
   isFailed: false,
   isPending: true,
+  isClaimed: false,
+  workerId: null,
+  claimTime: null,
   completedStages: [],
   allStages: [...STAGE_ORDER],
 };
@@ -125,6 +131,9 @@ export function createFileProcessPresentation(
     isCompleted: !!processState.is_completed,
     isFailed: !!processState.is_failed,
     isPending: !!processState.is_pending,
+    isClaimed: !!processState.is_claimed,
+    workerId: processState.worker_id || null,
+    claimTime: processState.claim_time || null,
     completedStages: (processState.completed_stages || []) as ProcessStage[],
     allStages: [...STAGE_ORDER],
   };
@@ -140,6 +149,10 @@ function resolveIconType(ps: ProcessStateDisplay): StatusIconType {
 function resolveStatusText(ps: ProcessStateDisplay): string {
   if (ps.state === FileProcessState.RETRYING) {
     return `重试中(${ps.retry_count})`;
+  }
+  if (ps.state === FileProcessState.CLAIMED || ps.state === FileProcessState.RETRYING_CLAIMED) {
+    const stageLabel = getStageLabel(ps.current_stage as any);
+    return `${stageLabel}中(${ps.worker_id || 'worker'})`;
   }
   if (ps.is_processing) {
     const stageLabel = getStageLabel(ps.current_stage as any);

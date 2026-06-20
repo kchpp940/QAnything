@@ -240,7 +240,7 @@ async def process_data(retriever, milvus_kb, mysql_client, pool, file_info, time
     return context, content_length, chunks_number
 
 
-async def get_pending_file(pool, worker_id):
+async def get_pending_file(pool, mysql_client, worker_id):
     minutes = int(int(time.strftime("%M", time.localtime())) / INSERT_WORKERS)
     dynamic_worker_id = (worker_id + minutes) % INSERT_WORKERS
 
@@ -248,24 +248,36 @@ async def get_pending_file(pool, worker_id):
         async with conn.cursor() as cur:
             query = """
                 SELECT id, timestamp, file_id, file_name, status, process_context FROM File
-                WHERE (status = 'gray' OR (process_context IS NOT NULL AND JSON_EXTRACT(process_context, '$.state') IN ('pending', 'retrying')))
+                WHERE (
+                    status = 'gray'
+                    OR (process_context IS NOT NULL AND JSON_EXTRACT(process_context, '$.state') IN ('pending', 'retrying'))
+                )
                 AND MOD(id, %s) = %s AND deleted = 0
-                ORDER BY timestamp ASC LIMIT 1;
+                ORDER BY timestamp ASC LIMIT 10;
             """
             await cur.execute(query, (INSERT_WORKERS, dynamic_worker_id))
-            file_to_update = await cur.fetchone()
+            candidate_files = await cur.fetchall()
 
-            if file_to_update:
-                id_val, timestamp, file_id, file_name, status, process_context_json = file_to_update
-                await cur.execute("UPDATE File SET status='yellow' WHERE id=%s", (id_val,))
-                await conn.commit()
-                insert_logger.info(f"UPDATE FILE: {timestamp}, {file_id}, {file_name}, yellow")
-
-                await cur.execute(
-                    "SELECT id, file_id, user_id, file_name, kb_id, file_location, file_size, file_url, "
-                    "chunk_size, process_context FROM File WHERE id=%s", (id_val,))
-                file_info = await cur.fetchone()
-                return file_info
+            for file_row in candidate_files:
+                id_val, timestamp, file_id, file_name, status, process_context_json = file_row
+                claimed_context, claim_error = await asyncio.to_thread(
+                    mysql_client.claim_file_process_task,
+                    file_id, f"worker_{worker_id}"
+                )
+                if claimed_context:
+                    insert_logger.info(f"CLAIMED FILE: {timestamp}, {file_id}, {file_name}, worker_{worker_id}")
+                    await cur.execute(
+                        "SELECT id, file_id, user_id, file_name, kb_id, file_location, file_size, file_url, "
+                        "chunk_size, process_context FROM File WHERE id=%s", (id_val,))
+                    file_info = await cur.fetchone()
+                    if file_info and len(file_info) == 10:
+                        file_info = list(file_info)
+                        file_info[-1] = claimed_context.to_json()
+                        file_info = tuple(file_info)
+                    return file_info
+                else:
+                    insert_logger.warning(f"Skip {file_id}: {claim_error}")
+                    continue
     return None
 
 
@@ -285,9 +297,13 @@ async def check_and_process(pool):
         file_id = None
         id_val = None
         try:
-            file_info = await get_pending_file(pool, worker_id)
+            file_info = await get_pending_file(pool, mysql_client, worker_id)
             if file_info:
-                id_val, file_id, user_id, file_name, kb_id, file_location, file_size, file_url, chunk_size = file_info
+                if len(file_info) == 10:
+                    id_val, file_id, user_id, file_name, kb_id, file_location, file_size, file_url, chunk_size, process_context_json = file_info
+                else:
+                    id_val, file_id, user_id, file_name, kb_id, file_location, file_size, file_url, chunk_size = file_info
+                    process_context_json = None
                 time_record = {}
 
                 context, content_length, chunks_number = await process_data(

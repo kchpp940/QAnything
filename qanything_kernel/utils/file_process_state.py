@@ -7,6 +7,7 @@ import time
 
 class FileProcessState(str, Enum):
     PENDING = "pending"
+    CLAIMED = "claimed"
     PARSING = "parsing"
     SPLITTING = "splitting"
     EMBEDDING = "embedding"
@@ -14,6 +15,7 @@ class FileProcessState(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     RETRYING = "retrying"
+    RETRYING_CLAIMED = "retrying_claimed"
 
 
 class ProcessStage(str, Enum):
@@ -41,6 +43,19 @@ STAGE_TO_STATE_MAP = {
     ProcessStage.EMBED: FileProcessState.EMBEDDING,
     ProcessStage.INDEX: FileProcessState.INDEXING,
     ProcessStage.COMPLETE: FileProcessState.COMPLETED,
+}
+
+STATE_TO_LEGACY_MAP = {
+    FileProcessState.PENDING: "gray",
+    FileProcessState.CLAIMED: "yellow",
+    FileProcessState.PARSING: "yellow",
+    FileProcessState.SPLITTING: "yellow",
+    FileProcessState.EMBEDDING: "yellow",
+    FileProcessState.INDEXING: "yellow",
+    FileProcessState.COMPLETED: "green",
+    FileProcessState.FAILED: "red",
+    FileProcessState.RETRYING: "yellow",
+    FileProcessState.RETRYING_CLAIMED: "yellow",
 }
 
 
@@ -210,6 +225,52 @@ class FileProcessContext:
             self.error_history[-1].retry_count += 1
             self.retry_count += 1
             self.state = FileProcessState.RETRYING
+        self._clear_claim_info()
+
+    def _clear_claim_info(self) -> None:
+        self.metadata.pop("worker_id", None)
+        self.metadata.pop("claim_time", None)
+        self.metadata.pop("claim_expire_time", None)
+
+    def claim(self, worker_id: str, claim_ttl_seconds: int = 600) -> bool:
+        if self.state not in [FileProcessState.PENDING, FileProcessState.RETRYING]:
+            return False
+        now = time.time()
+        existing_worker = self.metadata.get("worker_id")
+        existing_expire = self.metadata.get("claim_expire_time", 0)
+        if existing_worker and existing_expire > now:
+            return False
+        if self.state == FileProcessState.PENDING:
+            self.state = FileProcessState.CLAIMED
+        elif self.state == FileProcessState.RETRYING:
+            self.state = FileProcessState.RETRYING_CLAIMED
+        self.metadata["worker_id"] = worker_id
+        self.metadata["claim_time"] = now
+        self.metadata["claim_expire_time"] = now + claim_ttl_seconds
+        self.stage_events.append(StageEvent(
+            stage=self.current_stage,
+            progress=self.progress,
+            message=f"Worker {worker_id} 领取任务",
+        ))
+        return True
+
+    def release_claim(self, success: bool = True, message: str = "") -> None:
+        if success and self.state == FileProcessState.CLAIMED:
+            self.state = FileProcessState.PARSING
+        elif success and self.state == FileProcessState.RETRYING_CLAIMED:
+            self.state = FileProcessState.PARSING
+        elif not success and self.state == FileProcessState.CLAIMED:
+            self.state = FileProcessState.PENDING
+            self._clear_claim_info()
+        elif not success and self.state == FileProcessState.RETRYING_CLAIMED:
+            self.state = FileProcessState.RETRYING
+            self._clear_claim_info()
+        if message:
+            self.stage_events.append(StageEvent(
+                stage=self.current_stage,
+                progress=self.progress,
+                message=message,
+            ))
 
     def get_retry_stage(self) -> ProcessStage:
         if not self.error_history:
@@ -293,6 +354,9 @@ class FileProcessContext:
         return cls.from_dict(json.loads(json_str))
 
     def get_display_status(self) -> Dict[str, Any]:
+        now = time.time()
+        is_claimed = self.state in [FileProcessState.CLAIMED, FileProcessState.RETRYING_CLAIMED]
+        claim_expired = is_claimed and self.metadata.get("claim_expire_time", 0) < now
         return {
             "state": self.state.value,
             "current_stage": self.current_stage.value,
@@ -301,14 +365,20 @@ class FileProcessContext:
             "is_completed": self.state == FileProcessState.COMPLETED,
             "is_failed": self.state == FileProcessState.FAILED,
             "is_processing": self.state in [
+                FileProcessState.CLAIMED,
                 FileProcessState.PARSING,
                 FileProcessState.SPLITTING,
                 FileProcessState.EMBEDDING,
                 FileProcessState.INDEXING,
                 FileProcessState.RETRYING,
+                FileProcessState.RETRYING_CLAIMED,
             ],
             "is_pending": self.state == FileProcessState.PENDING,
             "is_retrying": self.state == FileProcessState.RETRYING,
+            "is_claimed": is_claimed,
+            "claim_expired": claim_expired,
+            "worker_id": self.metadata.get("worker_id"),
+            "claim_time": self.metadata.get("claim_time"),
             "can_retry": self.can_retry(),
             "retry_count": self.retry_count,
             "retry_stage": self.get_retry_stage().value if self.error_history else None,

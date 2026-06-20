@@ -987,6 +987,93 @@ class KnowledgeBaseManager:
         result = self.execute_query_(query, (file_id,), fetch=True)
         return result[0] if result else None
 
+    def claim_file_process_task(self, file_id, worker_id, claim_ttl_seconds=600):
+        from qanything_kernel.utils.file_process_state import FileProcessState, FileProcessContext
+
+        try:
+            with self._get_connection() as conn:
+                conn.autocommit = False
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id, process_context FROM File WHERE file_id = %s FOR UPDATE", (file_id,))
+                    row = cur.fetchone()
+                    if not row:
+                        conn.rollback()
+                        return None, "file_not_found"
+
+                    _, process_context_json = row
+                    context = None
+                    if process_context_json:
+                        try:
+                            context = FileProcessContext.from_json(process_context_json)
+                        except Exception as e:
+                            insert_logger.warning(f"Failed to parse process_context for claim {file_id}: {e}")
+
+                    if not context:
+                        context = FileProcessContext(file_id=file_id)
+                        current_state = FileProcessState.PENDING
+                    else:
+                        current_state = context.state
+
+                    if current_state not in [FileProcessState.PENDING, FileProcessState.RETRYING]:
+                        conn.rollback()
+                        return None, f"invalid_state_{current_state.value}"
+
+                    now = time.time()
+                    existing_worker = context.metadata.get("worker_id")
+                    existing_expire = context.metadata.get("claim_expire_time", 0)
+                    if existing_worker and existing_expire > now:
+                        conn.rollback()
+                        return None, f"locked_by_{existing_worker}"
+
+                    success = context.claim(worker_id, claim_ttl_seconds)
+                    if not success:
+                        conn.rollback()
+                        return None, "claim_failed"
+
+                    new_context_json = context.to_json()
+                    cur.execute(
+                        "UPDATE File SET process_context = %s, status = %s WHERE file_id = %s",
+                        (new_context_json, "yellow", file_id)
+                    )
+                    conn.commit()
+                    return context, None
+        except Exception as e:
+            insert_logger.error(f"claim_file_process_task error for {file_id}: {e}\n{traceback.format_exc()}")
+            return None, f"error_{str(e)}"
+
+    def release_file_process_task(self, file_id, success=True, message=""):
+        from qanything_kernel.utils.file_process_state import FileProcessContext
+
+        try:
+            with self._get_connection() as conn:
+                conn.autocommit = False
+                with conn.cursor() as cur:
+                    cur.execute("SELECT id, process_context FROM File WHERE file_id = %s FOR UPDATE", (file_id,))
+                    row = cur.fetchone()
+                    if not row or not row[1]:
+                        conn.rollback()
+                        return None
+
+                    _, process_context_json = row
+                    try:
+                        context = FileProcessContext.from_json(process_context_json)
+                    except Exception as e:
+                        insert_logger.warning(f"Failed to parse process_context for release {file_id}: {e}")
+                        conn.rollback()
+                        return None
+
+                    context.release_claim(success, message)
+                    new_context_json = context.to_json()
+                    cur.execute(
+                        "UPDATE File SET process_context = %s WHERE file_id = %s",
+                        (new_context_json, file_id)
+                    )
+                    conn.commit()
+                    return context
+        except Exception as e:
+            insert_logger.error(f"release_file_process_task error for {file_id}: {e}\n{traceback.format_exc()}")
+            return None
+
     def get_files_by_process_state(self, states, kb_ids=None, limit=100):
         if isinstance(states, (FileProcessState, str)):
             states = [states]

@@ -1,5 +1,6 @@
 export enum FileProcessState {
   PENDING = 'pending',
+  CLAIMED = 'claimed',
   PARSING = 'parsing',
   SPLITTING = 'splitting',
   EMBEDDING = 'embedding',
@@ -7,6 +8,7 @@ export enum FileProcessState {
   COMPLETED = 'completed',
   FAILED = 'failed',
   RETRYING = 'retrying',
+  RETRYING_CLAIMED = 'retrying_claimed',
 }
 
 export enum ProcessStage {
@@ -66,6 +68,10 @@ export interface ProcessStateDisplay {
   is_processing: boolean;
   is_pending: boolean;
   is_retrying: boolean;
+  is_claimed: boolean;
+  claim_expired: boolean;
+  worker_id: string | null;
+  claim_time: number | null;
   can_retry: boolean;
   retry_count: number;
   retry_stage: ProcessStage | null;
@@ -97,6 +103,7 @@ export const STAGE_LABEL_MAP: Record<ProcessStage, string> = {
 
 export const STATE_LABEL_MAP: Record<FileProcessState, string> = {
   [FileProcessState.PENDING]: '等待处理',
+  [FileProcessState.CLAIMED]: '已领取',
   [FileProcessState.PARSING]: '解析中',
   [FileProcessState.SPLITTING]: '切分中',
   [FileProcessState.EMBEDDING]: '向量化中',
@@ -104,6 +111,7 @@ export const STATE_LABEL_MAP: Record<FileProcessState, string> = {
   [FileProcessState.COMPLETED]: '处理完成',
   [FileProcessState.FAILED]: '处理失败',
   [FileProcessState.RETRYING]: '重试中',
+  [FileProcessState.RETRYING_CLAIMED]: '重试处理中',
 };
 
 export const ERROR_CATEGORY_LABEL_MAP: Record<ErrorCategory, string> = {
@@ -121,11 +129,13 @@ export const ERROR_CATEGORY_LABEL_MAP: Record<ErrorCategory, string> = {
 
 export function isProcessingState(state: FileProcessState): boolean {
   return [
+    FileProcessState.CLAIMED,
     FileProcessState.PARSING,
     FileProcessState.SPLITTING,
     FileProcessState.EMBEDDING,
     FileProcessState.INDEXING,
     FileProcessState.RETRYING,
+    FileProcessState.RETRYING_CLAIMED,
   ].includes(state);
 }
 
@@ -161,11 +171,15 @@ export function getDisplayStatusText(processState: ProcessStateDisplay | null | 
   if (!processState) {
     return '';
   }
-  if (processState.is_retrying) {
+  if (processState.is_retrying || processState.state === FileProcessState.RETRYING_CLAIMED) {
     return `重试中(${processState.retry_count})`;
   }
+  if (processState.is_claimed || processState.state === FileProcessState.CLAIMED) {
+    const stageLabel = getStageLabel(processState.current_stage as any);
+    return `${stageLabel}中(${processState.worker_id || 'worker'})`;
+  }
   if (processState.is_processing) {
-    return getStageLabel(processState.current_stage) + '中';
+    return getStageLabel(processState.current_stage as any) + '中';
   }
   return getStateLabel(processState.state);
 }
