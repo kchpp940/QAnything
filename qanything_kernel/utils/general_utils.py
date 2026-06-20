@@ -74,6 +74,17 @@ def format_source_documents(ori_source_documents):
     return source_documents
 
 
+def format_retrieval_trace(retrieval_trace):
+    from qanything_kernel.core.retriever.candidate import RetrievalTrace
+    if retrieval_trace is None:
+        return None
+    if isinstance(retrieval_trace, RetrievalTrace):
+        return retrieval_trace.to_dict()
+    if isinstance(retrieval_trace, dict):
+        return retrieval_trace
+    return None
+
+
 def format_time_record(time_record):
     token_usage = {}
     time_usage = {}

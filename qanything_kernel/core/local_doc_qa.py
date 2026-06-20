@@ -16,7 +16,7 @@ from qanything_kernel.connector.database.mysql.mysql_client import KnowledgeBase
 from qanything_kernel.core.retriever.vectorstore import VectorStoreMilvusClient
 from qanything_kernel.core.retriever.elasticsearchstore import StoreElasticSearchClient
 from qanything_kernel.core.retriever.parent_retriever import ParentRetriever
-from qanything_kernel.core.retriever.candidate import CandidateDocument, RetrievalStageResult, RetrievalSource, CandidateStage
+from qanything_kernel.core.retriever.candidate import CandidateDocument, RetrievalStageResult, RetrievalSource, CandidateStage, RetrievalTrace
 from qanything_kernel.utils.general_utils import (get_time, clear_string, get_time_async, num_tokens,
                                                   cosine_similarity, clear_string_is_equal, num_tokens_embed,
                                                   num_tokens_rerank, deduplicate_documents, replace_image_references)
@@ -510,7 +510,8 @@ class LocalDocQA:
     @staticmethod
     async def generate_response(query, res, condense_question, source_candidates: List[CandidateDocument],
                                 retrieval_candidates: List[CandidateDocument],
-                                time_record, chat_history, streaming, prompt):
+                                time_record, chat_history, streaming, prompt,
+                                retrieval_trace: Optional[RetrievalTrace] = None):
         history = chat_history + [[query, res]]
 
         if streaming:
@@ -522,8 +523,10 @@ class LocalDocQA:
             "result": res,
             "condense_question": condense_question,
             "retrieval_documents": retrieval_candidates,
-            "source_documents": source_candidates
+            "source_documents": source_candidates,
         }
+        if retrieval_trace is not None:
+            response["retrieval_trace"] = retrieval_trace
 
         if 'llm_completed' not in time_record:
             time_record['llm_completed'] = 0.0
@@ -596,13 +599,16 @@ class LocalDocQA:
 
         # === Stage 1: Retrieval ===
         stage_results: List[RetrievalStageResult] = []
+        retrieval_trace = RetrievalTrace()
         if kb_ids:
             retrieval_result = await self._retrieve_candidates(retrieval_query, retriever, kb_ids, time_record,
                                                                 hybrid_search, top_k)
             stage_results.append(retrieval_result)
             all_candidates = list(retrieval_result.active_candidates)
+            retrieval_trace.retrieval_candidates = list(retrieval_result.candidates)
         else:
             all_candidates = []
+            retrieval_trace.retrieval_candidates = []
 
         # === Web search integration ===
         if need_web_search:
@@ -653,15 +659,18 @@ class LocalDocQA:
         rerank_result = await self._rerank_candidates(all_candidates, condense_question, time_record, rerank)
         stage_results.append(rerank_result)
         all_candidates = rerank_result.candidates
+        retrieval_trace.rerank_candidates = list(rerank_result.candidates)
 
         # === Stage 4: Filter ===
         filter_result = self._filter_candidates(all_candidates, top_k)
         stage_results.append(filter_result)
         active_candidates = [c for c in filter_result.candidates if not c.is_filtered]
+        retrieval_trace.filter_candidates = list(filter_result.candidates)
 
         # === Build retrieval diagnostics ===
         retrieval_diagnostics = self._build_retrieval_diagnostics(stage_results)
         time_record['retrieval_diagnostics'] = retrieval_diagnostics
+        retrieval_trace.diagnostics = retrieval_diagnostics
         debug_logger.info(f"retrieval_diagnostics: {retrieval_diagnostics}")
 
         # Strip headers after rerank
@@ -683,9 +692,13 @@ class LocalDocQA:
                     yield active_candidates, None
                     return
                 res = candidate.document.metadata['faq_dict']['answer']
+                retrieval_trace.selected_candidates = list(active_candidates)
+                for c in retrieval_trace.selected_candidates:
+                    c.stage = CandidateStage.SELECTED
                 async for response, history in self.generate_response(query, res, condense_question,
                                                                       active_candidates, active_candidates,
-                                                                      time_record, chat_history, streaming, 'MATCH_FAQ'):
+                                                                      time_record, chat_history, streaming, 'MATCH_FAQ',
+                                                                      retrieval_trace=retrieval_trace):
                     yield response, history
                 return
 
@@ -718,10 +731,14 @@ class LocalDocQA:
                         f"抱歉，由于留给相关文档使用的token数量不足(docs_available_token_nums: {limited_token_nums} < 文本分片大小: {web_chunk_size})，"
                         f"\n无法保证回答质量，请在模型配置中提高【总Token数量】或减少【输出Tokens数量】或减少【上下文消息数量】再继续提问。"
                         f"\n计算方式：{tokens_msg}")
+                    retrieval_trace.selected_candidates = list(active_candidates)
+                    for c in retrieval_trace.selected_candidates:
+                        c.stage = CandidateStage.SELECTED
                     async for response, history in self.generate_response(query, res, condense_question,
                                                                           active_candidates, active_candidates,
                                                                           time_record, chat_history, streaming,
-                                                                          'TOKENS_NOT_ENOUGH'):
+                                                                          'TOKENS_NOT_ENOUGH',
+                                                                          retrieval_trace=retrieval_trace):
                         yield response, history
                     return
 
@@ -735,6 +752,10 @@ class LocalDocQA:
                                                                                        retrieval_candidates,
                                                                                        limited_token_nums,
                                                                                        rerank)
+
+            retrieval_trace.selected_candidates = list(source_candidates)
+            for c in retrieval_trace.selected_candidates:
+                c.stage = CandidateStage.SELECTED
 
             for candidate in source_candidates:
                 if candidate.document.metadata.get('images', []):
@@ -783,7 +804,8 @@ class LocalDocQA:
                         "result": resp,
                         "condense_question": condense_question,
                         "retrieval_documents": retrieval_candidates,
-                        "source_documents": source_candidates}
+                        "source_documents": source_candidates,
+                        "retrieval_trace": retrieval_trace}
             time_record['prompt_tokens'] = prompt_tokens if prompt_tokens != 0 else est_prompt_tokens
             time_record['completion_tokens'] = completion_tokens if completion_tokens != 0 else num_tokens(acc_resp)
             time_record['total_tokens'] = total_tokens if total_tokens != 0 else time_record['prompt_tokens'] + \
@@ -799,7 +821,8 @@ class LocalDocQA:
                                 "result": f"data: {json.dumps({'answer': extra_msg}, ensure_ascii=False)}",
                                 "condense_question": condense_question,
                                 "retrieval_documents": retrieval_candidates,
-                                "source_documents": source_candidates}
+                                "source_documents": source_candidates,
+                                "retrieval_trace": retrieval_trace}
                     yield msg_response, history
                 last_return_time = time.perf_counter()
                 time_record['llm_completed'] = round(last_return_time - t1, 2) - time_record['llm_first_return']

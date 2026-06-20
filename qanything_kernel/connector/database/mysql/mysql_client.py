@@ -671,7 +671,7 @@ class KnowledgeBaseManager:
         debug_logger.info(f"delete_faqs count: {total_deleted}")
 
     def add_qalog(self, user_id, bot_id, kb_ids, query, model, product_source, time_record, history, condense_question,
-                  prompt, result, retrieval_documents, source_documents):
+                  prompt, result, retrieval_documents, source_documents, retrieval_trace=None):
         debug_logger.info("add_qalog: {}".format(query))
         qa_id = uuid.uuid4().hex
         kb_ids = json.dumps(kb_ids, ensure_ascii=False)
@@ -679,13 +679,19 @@ class KnowledgeBaseManager:
         source_documents = json.dumps(source_documents, ensure_ascii=False)
         history = json.dumps(history, ensure_ascii=False)
         time_record = json.dumps(time_record, ensure_ascii=False)
+        if retrieval_trace is not None:
+            if hasattr(retrieval_trace, 'to_dict'):
+                retrieval_trace = retrieval_trace.to_dict()
+            retrieval_trace = json.dumps(retrieval_trace, ensure_ascii=False)
+        else:
+            retrieval_trace = None
         insert_query = (
             "INSERT INTO QaLogs (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record, "
-            "history, condense_question, prompt, result, retrieval_documents, source_documents) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            "history, condense_question, prompt, result, retrieval_documents, source_documents, retrieval_trace) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
         self.execute_query_(insert_query, (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record,
                                            history, condense_question, prompt, result, retrieval_documents,
-                                           source_documents), commit=True)
+                                           source_documents, retrieval_trace), commit=True)
 
     def get_qalog_by_filter(self, need_info, user_id=None, query=None, bot_id=None, time_range=None, any_kb_id=None, qa_ids=None):
         # 判断哪些条件不是None，构建搜索query

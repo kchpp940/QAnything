@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from langchain.schema import Document
+import time
 
 
 class RetrievalSource:
@@ -67,6 +68,28 @@ class CandidateDocument:
     def update_score(self, score_type: str, score: float):
         self.scores[score_type] = score
 
+    def to_trace_candidate(self) -> dict:
+        return {
+            'doc_id': self.doc_id,
+            'file_id': self.file_id,
+            'file_name': self.file_name,
+            'retrieval_source': self.retrieval_source,
+            'retrieval_query': self.retrieval_query,
+            'embed_version': self.embed_version,
+            'stage': self.stage,
+            'is_filtered': self.is_filtered,
+            'filter_reasons': list(self.filter_reasons),
+            'scores': dict(self.scores),
+            'current_score': self.current_score,
+            'content': self.page_content,
+            'metadata': {
+                'file_url': self.document.metadata.get('file_url', ''),
+                'nos_keys': self.document.metadata.get('nos_keys', ''),
+                'headers': self.document.metadata.get('headers', {}),
+                'page_id': self.document.metadata.get('page_id', 0),
+            }
+        }
+
     def to_source_dict(self) -> dict:
         return {
             'file_id': self.file_id,
@@ -118,3 +141,32 @@ class RetrievalStageResult:
 
     def get_documents(self) -> List[Document]:
         return [c.document for c in self.active_candidates]
+
+
+@dataclass
+class RetrievalTrace:
+    retrieval_candidates: List[CandidateDocument] = field(default_factory=list)
+    rerank_candidates: List[CandidateDocument] = field(default_factory=list)
+    filter_candidates: List[CandidateDocument] = field(default_factory=list)
+    selected_candidates: List[CandidateDocument] = field(default_factory=list)
+    diagnostics: Dict = field(default_factory=dict)
+    created_at: float = field(default_factory=lambda: time.time())
+
+    def to_dict(self) -> dict:
+        return {
+            'retrieval_candidates': [c.to_trace_candidate() for c in self.retrieval_candidates],
+            'rerank_candidates': [c.to_trace_candidate() for c in self.rerank_candidates],
+            'filter_candidates': [c.to_trace_candidate() for c in self.filter_candidates],
+            'selected_candidates': [c.to_trace_candidate() for c in self.selected_candidates],
+            'diagnostics': self.diagnostics,
+            'created_at': self.created_at
+        }
+
+    def get_active_by_stage(self, stage: str) -> List[CandidateDocument]:
+        stage_map = {
+            'retrieval': self.retrieval_candidates,
+            'rerank': self.rerank_candidates,
+            'filter': self.filter_candidates,
+            'selected': self.selected_candidates
+        }
+        return [c for c in stage_map.get(stage, []) if not c.is_filtered]
