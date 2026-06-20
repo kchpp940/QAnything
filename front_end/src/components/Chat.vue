@@ -215,7 +215,12 @@
 import { apiBase } from '@/services';
 import { IChatItem, IChatSetting, ILLMSetting } from '@/utils/types';
 import { throttle, formatTimestamp, resultControl } from '@/utils/utils';
-import { toAIChatItem, toUserChatItem, adaptChatResponse } from '@/utils/responseAdapter';
+import {
+  toAIChatItem,
+  toUserChatItem,
+  adaptChatResponse,
+  createChatStreamHandlers,
+} from '@/utils/responseAdapter';
 import { useClipboard } from '@vueuse/core';
 import { message } from 'ant-design-vue';
 import SvgIcon from './SvgIcon.vue';
@@ -606,35 +611,28 @@ const send = async () => {
           typewriter.add('Error 请检查模型是否配置正确');
         }
       },
-      onmessage(msg: { data: string }) {
-        console.log('message', msg);
-        const rawRes = JSON.parse(msg.data);
-        const chatResponse = adaptChatResponse(rawRes);
-
-        if (chatResponse.code === 200 && chatResponse.response && rawRes.msg === 'success') {
-          typewriter.add(chatResponse.response);
-          scrollBottom();
-        }
-
-        if (chatResponse.sourceDocuments?.length) {
-          QA_List.value[QA_List.value.length - 1].source = chatResponse.sourceDocuments;
-        }
-
-        if (chatResponse.showImages?.length) {
-          chatResponse.showImages.map(item => {
+      ...createChatStreamHandlers({
+        appendResponse: (text) => {
+          typewriter.add(text);
+        },
+        setSource: (docs) => {
+          QA_List.value[QA_List.value.length - 1].source = docs;
+        },
+        setShowImages: (imgs) => {
+          imgs.map((item) => {
             typewriter.add(item);
             console.log(QA_List.value.at(-1)?.answer);
           });
-        }
-
-        if (chatResponse.code === 200 && rawRes.msg !== 'success') {
+        },
+        setItemInfo: (itemInfo) => {
           const lastItem = QA_List.value.at(-1);
           if (lastItem) {
-            const chatSetting = getChatSetting();
-            lastItem.itemInfo = toAIChatItem(chatResponse, chatSetting).itemInfo;
+            lastItem.itemInfo = itemInfo;
           }
-        }
-      },
+        },
+        getChatSetting: () => getChatSetting(),
+        onScroll: () => scrollBottom(),
+      }),
       onclose(e: any) {
         console.log('close', e);
         typewriter.done();

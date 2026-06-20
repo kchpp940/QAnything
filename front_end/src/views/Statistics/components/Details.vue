@@ -92,8 +92,7 @@
 import { h } from 'vue';
 import urlResquest from '@/services/urlConfig';
 import { downLoad, getContentDispositionByHeader, resultControl } from '@/utils/utils';
-import { adaptQARecords } from '@/utils/responseAdapter';
-import type { IQARecord } from '@/utils/types';
+import type { IQARecord, IPaginatedResponse } from '@/utils/types';
 import { getLanguage } from '@/language';
 import { SearchOutlined } from '@ant-design/icons-vue';
 import message from 'ant-design-vue/es/message';
@@ -222,26 +221,18 @@ const searchHandle = () => {
 const getQADetail = async (...args) => {
   loading.value = true;
   try {
-    const res: any = await resultControl(
+    const res = (await resultControl(
       await urlResquest.getQAInfo({
         page_id: paginationConfig.value.current,
         page_limit: paginationConfig.value.pageSize,
         ...args[0],
       })
-    );
+    )) as IPaginatedResponse<IQARecord> & { qaInfos: IQARecord[] };
+
     dataSource.value = [];
-    paginationConfig.value.total = res.total || res.total_count;
-    
-    let qaRecords: IQARecord[] = [];
-    if (res.qaInfos) {
-      qaRecords = res.qaInfos;
-    } else if (res.details) {
-      qaRecords = res.details;
-    } else if (res.qa_infos) {
-      qaRecords = adaptQARecords(res.qa_infos);
-    }
-    
-    qaRecords.map(item => {
+    paginationConfig.value.total = res.total;
+
+    res.qaInfos.forEach((item: IQARecord) => {
       dataSource.value.push({
         key: item.qaId,
         kbIds: item.kbIds.toString().replaceAll(',', `\n`),

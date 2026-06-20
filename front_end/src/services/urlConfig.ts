@@ -269,11 +269,21 @@ const urlConfig: IUrlConfig = {
       user_info: userPhone,
     },
     adapter: (res: any) => {
-      const result = adaptPaginatedResponse<any>(res.data, adaptQARecord);
-      if (res.data && res.data.qa_infos) {
-        result.qaInfos = adaptQARecords(res.data.qa_infos);
-      }
-      return result;
+      const rawData = res.data || res;
+      const paginated = adaptPaginatedResponse<IQARecord>(rawData, adaptQARecord);
+
+      const rawQaList =
+        rawData.qaInfos || rawData.qa_infos || paginated.details || [];
+      paginated.qaInfos = Array.isArray(rawQaList) ? adaptQARecords(rawQaList) : [];
+
+      paginated.total =
+        rawData.total !== undefined
+          ? rawData.total
+          : rawData.total_count !== undefined
+            ? rawData.total_count
+            : paginated.total;
+
+      return paginated as IPaginatedResponse<IQARecord> & { qaInfos: IQARecord[] };
     },
   },
   // 获取所有知识库状态

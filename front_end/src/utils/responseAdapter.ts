@@ -520,3 +520,66 @@ export const adaptLegacyQARecord = (raw: any): IQARecord => {
 
   return adaptQARecord(normalized);
 };
+
+// ============================================
+// 流式聊天统一处理器（所有聊天入口必须共用）
+// fetchEventSource 不走 services 的普通 request 包装，
+// 因此必须每个 onmessage 都显式走这一套，禁止在组件里手动 parse
+// ============================================
+
+export interface IStreamChatCallbacks {
+  appendResponse: (text: string) => void;
+  setSource: (docs: ISourceDocument[]) => void;
+  setShowImages: (imgs: string[]) => void;
+  setItemInfo: (itemInfo: IChatItemInfo) => void;
+  getChatSetting: () => IChatSetting;
+  onScroll?: () => void;
+}
+
+export interface IChatStreamHandlers {
+  onmessage: (msg: { data: string }) => void;
+}
+
+export const handleChatStreamEvent = (
+  raw: any,
+  callbacks: IStreamChatCallbacks
+): { isIntermediate: boolean; isFinal: boolean } => {
+  const chatResponse = adaptChatResponse(raw);
+
+  const isIntermediate =
+    chatResponse.code === 200 && !!chatResponse.response && raw.msg === 'success';
+
+  const isFinal = chatResponse.code === 200 && raw.msg !== 'success';
+
+  if (isIntermediate) {
+    callbacks.appendResponse(chatResponse.response);
+    callbacks.onScroll?.();
+  }
+
+  if (chatResponse.sourceDocuments?.length) {
+    callbacks.setSource(chatResponse.sourceDocuments);
+  }
+
+  if (chatResponse.showImages?.length) {
+    callbacks.setShowImages(chatResponse.showImages);
+  }
+
+  if (isFinal) {
+    const chatSetting = callbacks.getChatSetting();
+    const itemInfo = toChatItemInfo(chatResponse.timeRecord, chatSetting);
+    callbacks.setItemInfo(itemInfo);
+  }
+
+  return { isIntermediate, isFinal };
+};
+
+export const createChatStreamHandlers = (
+  callbacks: IStreamChatCallbacks
+): IChatStreamHandlers => {
+  return {
+    onmessage: (msg: { data: string }) => {
+      const raw = JSON.parse(msg.data);
+      handleChatStreamEvent(raw, callbacks);
+    },
+  };
+};
