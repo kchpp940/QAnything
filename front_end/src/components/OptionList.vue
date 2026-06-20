@@ -127,10 +127,7 @@
                 />
               </template>
               <template v-else-if="column.key === 'status'">
-                <div
-                  class="status-detail-box"
-                  :data-presentation-hint="'use getPresentationForRecord'"
-                >
+                <div class="status-detail-box">
                   <div class="status-main">
                     <span class="icon-file-status">
                       <LoadingImg
@@ -237,13 +234,13 @@
                 <div class="status-box">
                   <span class="icon-file-status">
                     <LoadingImg
-                      v-if="record.status === 'gray' || record.status === 'yellow'"
+                      v-if="createFileProcessPresentation(null, record.status).iconType === 'loading' || createFileProcessPresentation(null, record.status).iconType === 'pending'"
                       class="file-status"
                     />
                     <SvgIcon
                       v-else
                       class="file-status"
-                      :name="record.status === 'green' ? 'success' : 'error'"
+                      :name="createFileProcessPresentation(null, record.status).iconType === 'success' ? 'success' : 'error'"
                     />
                   </span>
                   <span> {{ parseFaqStatus(record.status) }}</span>
@@ -254,7 +251,7 @@
                   <a-button
                     class="edit-item"
                     type="link"
-                    :disabled="record.status !== 'green'"
+                    :disabled="!createFileProcessPresentation(null, record.status).canView"
                     @click="editQaItem(record)"
                   >
                     {{ bots.edit }}

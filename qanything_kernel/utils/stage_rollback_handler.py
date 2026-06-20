@@ -256,4 +256,6 @@ class StageRollbackHandler:
         extra: Optional[Dict[str, Any]] = None,
     ) -> StageRollbackResult:
         retry_stage = context.get_retry_stage()
-        return self.rollback_to_stage(file_id, retry_stage, context, extra)
+        rollback_result = self.rollback_to_stage(file_id, retry_stage, context, extra)
+        context.reset_for_retry(rollback_result=rollback_result.to_dict())
+        return rollback_result

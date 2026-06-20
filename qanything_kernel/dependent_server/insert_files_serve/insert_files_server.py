@@ -76,6 +76,8 @@ async def rollback_stage_data_async(milvus_kb, es_client, mysql_client, file_id,
         mysql_client=mysql_client,
     )
     result = rollback_handler.rollback_to_stage(file_id, to_stage, context, extra)
+    if context:
+        context.rollback_to(to_stage, rollback_result=result.to_dict())
     return result
 
 

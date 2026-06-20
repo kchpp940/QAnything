@@ -148,7 +148,7 @@ export const useOptiionList = defineStore(
         if (presentation.hasError) {
           return presentation.errorMessage || msg;
         }
-        if (status !== 'green') return msg;
+        if (!presentation.isCompleted) return msg;
         try {
           return JSON.parse(msg.toString());
         } catch {
@@ -169,7 +169,7 @@ export const useOptiionList = defineStore(
           bytes: formatFileSize(item?.bytes || 0),
           contentLength: item?.content_length,
           createtime: formatDate(item?.timestamp),
-          remark: item?.status === 'gray' && !processState ? '' : computedRemark(item?.msg, item?.status, processState),
+          remark: !processState && createFileProcessPresentation(null, item?.status).isPending ? '' : computedRemark(item?.msg, item?.status, processState),
           processState: processState,
         });
       });
@@ -211,7 +211,10 @@ export const useOptiionList = defineStore(
         // 设置一共几个文件
         setKbTotal(res.total);
 
-        if (totalStatus.value.gray === 0 && totalStatus.value.yellow === 0) {
+        if (totalStatus.value.gray === 0 && totalStatus.value.yellow === 0 &&
+            (!processStateCount.value.pending && !processStateCount.value.parsing &&
+             !processStateCount.value.splitting && !processStateCount.value.embedding &&
+             !processStateCount.value.indexing && !processStateCount.value.retrying)) {
           clearInterval(timer);
         }
       }, 5000);
@@ -277,7 +280,8 @@ export const useOptiionList = defineStore(
         }
 
         const flag = res?.details.some(item => {
-          return item.status === 'gray' || item.status === 'yellow';
+          const presentation = createFileProcessPresentation(item?.process_state, item.status);
+          return isFileProcessing(presentation, item.status);
         });
         if (flag) {
           console.log('有解析中的  5s后再次请求');

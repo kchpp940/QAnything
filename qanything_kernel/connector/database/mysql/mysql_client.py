@@ -968,10 +968,6 @@ class KnowledgeBaseManager:
         if not context.can_retry():
             return None, None
 
-        success = context.reset_for_retry()
-        if not success:
-            return None, None
-
         rollback_handler = StageRollbackHandler(
             milvus_client=milvus_client,
             es_client=es_client,

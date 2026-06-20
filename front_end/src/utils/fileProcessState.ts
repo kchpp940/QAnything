@@ -36,6 +36,14 @@ export interface StageEvent {
   timestamp: number;
   progress: number;
   message: string;
+  rollback_result?: RollbackResult | null;
+}
+
+export interface RollbackResult {
+  file_id: string;
+  success_actions: string[];
+  errors: Record<string, string>;
+  has_errors: boolean;
 }
 
 export interface ErrorInfo {

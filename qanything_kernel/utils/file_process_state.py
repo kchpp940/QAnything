@@ -94,14 +94,18 @@ class StageEvent:
     timestamp: float = field(default_factory=time.time)
     progress: float = 0.0
     message: str = ""
+    rollback_result: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "stage": self.stage.value,
             "timestamp": self.timestamp,
             "progress": self.progress,
             "message": self.message,
         }
+        if self.rollback_result is not None:
+            d["rollback_result"] = self.rollback_result
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "StageEvent":
@@ -110,6 +114,7 @@ class StageEvent:
             timestamp=data.get("timestamp", time.time()),
             progress=data.get("progress", 0.0),
             message=data.get("message", ""),
+            rollback_result=data.get("rollback_result"),
         )
 
 
@@ -216,21 +221,35 @@ class FileProcessContext:
             return STAGE_ORDER[stage_index - 1]
         return ProcessStage.UPLOAD
 
-    def rollback_to(self, stage: ProcessStage, message: str = "") -> None:
+    def rollback_to(self, stage: ProcessStage, message: str = "", rollback_result: Optional[Dict[str, Any]] = None) -> StageEvent:
         if stage not in STAGE_ORDER:
             raise ValueError(f"Invalid stage: {stage}")
         self.current_stage = stage
         self.state = STAGE_TO_STATE_MAP.get(stage, FileProcessState.PENDING)
         self.progress = STAGE_PROGRESS_MAP.get(stage, 0.0)
-        event = StageEvent(stage=stage, progress=self.progress, message=message or f"回滚到 {stage.value} 阶段")
+        event = StageEvent(
+            stage=stage,
+            progress=self.progress,
+            message=message or f"回滚到 {stage.value} 阶段",
+            rollback_result=rollback_result,
+        )
         self.stage_events.append(event)
+        if rollback_result is not None:
+            if "rollback_results" not in self.metadata:
+                self.metadata["rollback_results"] = []
+            self.metadata["rollback_results"].append({
+                "rollback_to_stage": stage.value,
+                "timestamp": event.timestamp,
+                **rollback_result,
+            })
+        return event
 
-    def reset_for_retry(self, policy: Optional[RetryPolicy] = None) -> bool:
+    def reset_for_retry(self, policy: Optional[RetryPolicy] = None, rollback_result: Optional[Dict[str, Any]] = None) -> bool:
         if not self.can_retry(policy):
             return False
         retry_stage = self.get_retry_stage()
         self.mark_for_retry()
-        self.rollback_to(retry_stage, f"准备第 {self.retry_count} 次重试")
+        self.rollback_to(retry_stage, f"准备第 {self.retry_count} 次重试", rollback_result=rollback_result)
         return True
 
     def get_completed_stages(self) -> List[ProcessStage]:
