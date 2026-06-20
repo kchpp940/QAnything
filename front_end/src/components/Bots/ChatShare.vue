@@ -3,7 +3,7 @@
     <div class="bots-chat-container">
       <div class="header">
         <img src="@/assets/bots/bot-avatar.png" alt="avatar" />
-        {{ botInfo.bot_name }}
+        {{ adaptedBotInfo.botName }}
       </div>
       <div class="my-page">
         <div id="chat" ref="chatContainer" class="chat showSider">
@@ -12,7 +12,7 @@
               <img class="avatar" src="@/assets/home/ai-avatar.png" alt="头像" />
               <div class="ai-content">
                 <div class="ai-right">
-                  <p class="question-text welcome" v-html="botInfo.welcome_message"></p>
+                  <p class="question-text welcome" v-html="adaptedBotInfo.welcomeMessage"></p>
                 </div>
               </div>
             </li>
@@ -66,24 +66,24 @@
                           :key="sourceIndex"
                           class="data-source"
                         >
-                          <p v-show="sourceItem.file_name" class="control">
+                          <p v-show="sourceItem.fileName" class="control">
                             <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
                             <a
-                              v-if="sourceItem.file_url.startsWith('http')"
-                              :href="sourceItem.file_url"
+                              v-if="sourceItem.fileUrl.startsWith('http')"
+                              :href="sourceItem.fileUrl"
                               target="_blank"
                             >
-                              {{ sourceItem.file_name }}
+                              {{ sourceItem.fileName }}
                             </a>
                             <span
                               v-else
                               :class="[
                                 'file',
-                                checkFileType(sourceItem.file_name) ? 'filename-active' : '',
+                                checkFileType(sourceItem.fileName) ? 'filename-active' : '',
                               ]"
                               @click="handleChatSource(sourceItem)"
                             >
-                              {{ sourceItem.file_name }}
+                              {{ sourceItem.fileName }}
                             </span>
                             <SvgIcon
                               v-show="sourceItem.showDetailDataSource"
@@ -200,7 +200,7 @@
           </div>
         </div>
 
-        <div v-if="!botInfo.kb_ids || !botInfo.kb_ids.length" class="mask">
+        <div v-if="!adaptedBotInfo.kbIds || !adaptedBotInfo.kbIds.length" class="mask">
           <img src="@/assets/bots/lock.png" alt="icon" />
           <p>{{ bots.bindKbtoPreview }}</p>
         </div>
@@ -221,6 +221,13 @@
 <script lang="ts" setup>
 import { apiBase } from '@/services';
 import { IChatItem, IChatSetting, MakePartial } from '@/utils/types';
+import {
+  toAIChatItem,
+  toUserChatItem,
+  adaptChatResponse,
+  adaptBotInfo,
+  adaptLLMSetting,
+} from '@/utils/responseAdapter';
 import { useThrottleFn, useClipboard } from '@vueuse/core';
 import { message } from 'ant-design-vue';
 import SvgIcon from '../SvgIcon.vue';
@@ -234,7 +241,7 @@ import html2canvas from 'html2canvas';
 import { getLanguage } from '@/language/index';
 import { useLanguage } from '@/store/useLanguage';
 import urlResquest from '@/services/urlConfig';
-import { ChatInfoClass, resultControl } from '@/utils/utils';
+import { resultControl } from '@/utils/utils';
 import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
 import ChatTextarea from '@/components/ChatTextarea.vue';
@@ -258,6 +265,8 @@ const props = defineProps({
 const common = getLanguage().common;
 const bots = getLanguage().bots;
 
+const adaptedBotInfo = computed(() => adaptBotInfo(props.botInfo));
+
 const typewriter = new Typewriter((str: string) => {
   if (str) {
     QA_List.value[QA_List.value.length - 1].answer += str || '';
@@ -279,31 +288,45 @@ const question = ref('');
 
 // 格式化 chatSetting
 type ShareSettingType = MakePartial<IChatSetting, 'modelType'>;
-// eslint-disable-next-line vue/no-setup-props-destructure
-const { llm_setting } = props.botInfo;
-const chatSetting = JSON.parse(llm_setting);
 const chatSettingFormActive = ref<ShareSettingType>();
+
 // 初始化 chatSetting 为自己的格式
-onMounted(() => {
+const initChatSetting = () => {
+  const llmSetting = adaptedBotInfo.value.llmSetting;
   chatSettingFormActive.value = {
-    apiKey: chatSetting.api_key,
-    apiBase: chatSetting.api_base,
-    apiModelName: chatSetting.model,
-    apiContextLength: chatSetting.api_context_length,
-    maxToken: chatSetting.max_token,
-    chunkSize: chatSetting.chunk_size,
-    temperature: chatSetting.temperature,
+    apiKey: llmSetting.apiKey,
+    apiBase: llmSetting.apiBase,
+    apiModelName: llmSetting.model,
+    apiContextLength: llmSetting.apiContextLength,
+    maxToken: llmSetting.maxToken,
+    chunkSize: llmSetting.chunkSize,
+    temperature: llmSetting.temperature,
     context: 0,
-    top_K: chatSetting.top_k,
-    top_P: chatSetting.top_p,
+    top_K: llmSetting.topK,
+    top_P: llmSetting.topP,
     capabilities: {
-      onlySearch: chatSetting.only_need_search_results,
-      mixedSearch: chatSetting.hybrid_search,
-      networkSearch: chatSetting.networking,
-      rerank: chatSetting.rerank,
+      onlySearch: llmSetting.onlyNeedSearchResults,
+      mixedSearch: llmSetting.hybridSearch,
+      networkSearch: llmSetting.networking,
+      rerank: llmSetting.rerank,
     },
     active: true,
   };
+};
+
+const getChatSetting = (): IChatSetting => {
+  const { capabilities, ...rest } = chatSettingFormActive.value as ShareSettingType;
+  return {
+    ...rest,
+    rerank: capabilities.rerank,
+    hybridSearch: capabilities.mixedSearch,
+    networking: capabilities.networkSearch,
+    onlyNeedSearchResults: capabilities.onlySearch,
+  } as IChatSetting;
+};
+
+onMounted(() => {
+  initChatSetting();
 });
 
 // 上下文条数，无限制tooltip
@@ -383,28 +406,29 @@ const myCopy = (item: IChatItem) => {
 };
 
 const addQuestion = q => {
-  QA_List.value.push({
-    question: q,
-    type: 'user',
-  });
+  QA_List.value.push(toUserChatItem(q));
   scrollBottom();
 };
 
 const addAnswer = (question: string) => {
-  QA_List.value.push({
-    answer: '',
+  const emptyChatResponse = {
     question,
-    onlySearch: chatSettingFormActive.value.capabilities.onlySearch,
-    type: 'ai',
-    copied: false,
-    like: false,
-    unlike: false,
-    source: [],
-    showTools: false,
-  });
+    response: '',
+    source_documents: [],
+    llm_setting: {
+      only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
+    },
+    time_record: {
+      time_usage: {},
+      token_usage: {},
+    },
+    show_images: [],
+  };
+  const chatSetting = getChatSetting();
+  const aiItem = toAIChatItem(adaptChatResponse(emptyChatResponse), chatSetting);
+  aiItem.showTools = false;
+  QA_List.value.push(aiItem);
 };
-
-const chatInfoClass = new ChatInfoClass<ShareSettingType>();
 
 const stopChat = () => {
   if (ctrl) {
@@ -432,7 +456,7 @@ const mentionOptions = ref<string[]>([]);
 const getMentionOptions = async () => {
   const res: any = await resultControl(
     await urlResquest.getTags({
-      kb_ids: props.botInfo.kb_ids,
+      kb_ids: adaptedBotInfo.value.kbIds,
     })
   );
   mentionOptions.value = res.tags;
@@ -480,7 +504,7 @@ const send = async () => {
   const sendData = {
     user_id: props.virtualUserId,
     user_info: userInfo.phoneNumber,
-    bot_id: props.botInfo.bot_id,
+    bot_id: adaptedBotInfo.value.botId,
     history: history.value,
     question: q,
     streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
@@ -502,22 +526,20 @@ const send = async () => {
 
   // 如果是仅检索
   if (chatSettingFormActive.value.capabilities.onlySearch) {
-    // 模型配置添加进去
-    chatInfoClass.addChatSetting(chatSettingFormActive.value);
     addAnswer(q);
     try {
-      const res: any = await resultControl(
+      const chatResponse = (await resultControl(
         await urlResquest.sendQuestion(sendData, { signal: ctrl.signal })
-      );
-      if (res.code === 200) {
-        QA_List.value[QA_List.value.length - 1].answer = res?.source_documents.length
+      )) as any;
+      if (chatResponse.code === 200) {
+        const lastItem = QA_List.value[QA_List.value.length - 1];
+        lastItem.answer = chatResponse.sourceDocuments?.length
           ? common.searchCompleted
           : common.searchNotFound;
-        QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+        lastItem.source = chatResponse.sourceDocuments;
       }
     } catch (e) {
       console.log('出错', e);
-      // message.error(e.msg || '出错了');
       QA_List.value[QA_List.value.length - 1].answer = e.msg || 'error';
     }
     // 无论成不成功,结束后的操作
@@ -542,8 +564,6 @@ const send = async () => {
         console.log('open', e);
         addAnswer(q);
         if (e.ok && e.headers.get('content-type') === 'text/event-stream') {
-          // 模型配置添加进去
-          chatInfoClass.addChatSetting(chatSettingFormActive.value);
           typewriter.start();
         } else if (e.headers.get('content-type') === 'application/json') {
           typewriter.add('Error 请检查模型是否配置正确');
@@ -551,31 +571,30 @@ const send = async () => {
       },
       onmessage(msg: { data: string }) {
         console.log('message', msg);
-        const res: any = JSON.parse(msg.data);
-        if (res?.code == 200 && res?.response && res.msg === 'success') {
-          // 中间的回答
-          // QA_List.value[QA_List.value.length - 1].answer += res.result.response;
-          // typewriter.add(res?.response.replaceAll('\n', '<br/>'));
-          typewriter.add(res?.response);
+        const rawRes = JSON.parse(msg.data);
+        const chatResponse = adaptChatResponse(rawRes);
+        if (chatResponse.code === 200 && chatResponse.response && rawRes.msg === 'success') {
+          typewriter.add(chatResponse.response);
           scrollBottom();
-        } else {
-          // 最后一次回答
-          const timeObj = res.time_record.time_usage;
-          delete timeObj['retriever_search_by_milvus'];
-          chatInfoClass.addTime(res.time_record.time_usage);
-          chatInfoClass.addToken(res.time_record.token_usage);
-          chatInfoClass.addDate(Date.now());
         }
 
-        if (res?.source_documents?.length) {
-          QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+        if (chatResponse.sourceDocuments?.length) {
+          QA_List.value[QA_List.value.length - 1].source = chatResponse.sourceDocuments;
         }
 
-        if (res?.show_images?.length) {
-          res?.show_images.map(item => {
+        if (chatResponse.showImages?.length) {
+          chatResponse.showImages.map(item => {
             typewriter.add(item);
-            console.log(QA_List.value.at(-1).answer);
+            console.log(QA_List.value.at(-1)?.answer);
           });
+        }
+
+        if (chatResponse.code === 200 && rawRes.msg !== 'success') {
+          const lastItem = QA_List.value.at(-1);
+          if (lastItem) {
+            const chatSetting = getChatSetting();
+            lastItem.itemInfo = toAIChatItem(chatResponse, chatSetting).itemInfo;
+          }
         }
       },
       onclose(e: any) {
@@ -584,8 +603,6 @@ const send = async () => {
         ctrl.abort();
         showLoading.value = false;
         QA_List.value[QA_List.value.length - 1].showTools = true;
-        // 将chat info添加进回答中
-        QA_List.value.at(-1).itemInfo = chatInfoClass.getChatInfo();
         nextTick(() => {
           scrollBottom();
         });
@@ -714,7 +731,7 @@ const checkFileType = filename => {
 
 const handleChatSource = file => {
   console.log('handleChatSource', file);
-  const isSupport = checkFileType(file.file_name);
+  const isSupport = checkFileType(file.fileName);
   if (isSupport) {
     queryFile(file);
   }
@@ -723,9 +740,9 @@ const handleChatSource = file => {
 async function queryFile(file) {
   try {
     setSourceUrl(null);
-    const res: any = await resultControl(await urlResquest.getFile({ file_id: file.file_id }));
+    const res: any = await resultControl(await urlResquest.getFile({ file_id: file.fileId }));
     console.log('queryFile', res);
-    const suffix = file.file_name.split('.').pop();
+    const suffix = file.fileName.split('.').pop();
     const b64Type = getB64Type(suffix);
     console.log('b64Type', b64Type);
     setSourceType(suffix);

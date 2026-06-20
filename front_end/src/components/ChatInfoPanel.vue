@@ -50,16 +50,16 @@ const {
 // 需要展示的time信息
 const TIMEINFO = new Set([
   'preprocess',
-  'condense_q_chain',
-  'retriever_search',
-  'web_search',
+  'condenseQChain',
+  'retrieverSearch',
+  'webSearch',
   'rerank',
   'reprocess',
-  'llm_first_return',
-  'first_return',
-  'llm_completed',
-  'obtain_images_time',
-  'chat_completed',
+  'llmFirstReturn',
+  'firstReturn',
+  'llmCompleted',
+  'obtainImagesTime',
+  'chatCompleted',
 ]);
 
 // 需要展示的模型信息
@@ -76,11 +76,11 @@ const MODELINFO = new Set([
 
 // 外层展示的所有信息
 const OUTERINFO = new Set([
-  'first_return',
-  'chat_completed',
-  'total_tokens',
-  'prompt_tokens',
-  'completion_tokens',
+  'firstReturn',
+  'chatCompleted',
+  'totalTokens',
+  'promptTokens',
+  'completionTokens',
   'Model name',
   '模型名称',
   'date',
@@ -166,10 +166,10 @@ const openInfoModal = () => {
         () => `${common.note}：${formatTimeInfo(
           timeInfo.value,
           [...TIMEINFO.values()].slice(0, 7)
-        )} = first_return: ${timeInfo.value['first_return']}
-        + llm_completed：${timeInfo.value['llm_completed']}
-        + obtain_images_time: ${timeInfo.value['obtain_images_time'] || '0.00s'}
-        = chat_completed：${timeInfo.value['chat_completed']}`
+        )} = firstReturn: ${timeInfo.value['firstReturn']}
+        + llmCompleted：${timeInfo.value['llmCompleted']}
+        + obtainImagesTime: ${timeInfo.value['obtainImagesTime'] || '0.00s'}
+        = chatCompleted：${timeInfo.value['chatCompleted']}`
       ),
       h(TypographyParagraph, {}, () => `${common.modelInfoToken}: ${formatInfo(tokenInfo.value)}`),
       h(TypographyParagraph, {}, () => [

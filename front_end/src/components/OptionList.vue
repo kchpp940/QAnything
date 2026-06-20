@@ -112,7 +112,7 @@
               </template>
               <template v-else-if="column.key === 'fileTag'">
                 <Tags
-                  v-if="getPresentationForRecord(record).canView"
+                  v-if="record.status === 'green'"
                   :tags="record.fileTag"
                   @update:tags="
                     newTags => {
@@ -127,50 +127,19 @@
                 />
               </template>
               <template v-else-if="column.key === 'status'">
-                <div class="status-detail-box">
-                  <div class="status-main">
-                    <span class="icon-file-status">
-                      <LoadingImg
-                        v-if="getPresentationForRecord(record).iconType === 'loading' || getPresentationForRecord(record).iconType === 'pending'"
-                        class="file-status"
-                      />
-                      <SvgIcon
-                        v-else
-                        class="file-status"
-                        :name="getPresentationForRecord(record).iconType === 'success' ? 'success' : 'error'"
-                      />
-                    </span>
-                    <span class="status-text">{{ getPresentationForRecord(record).statusText }}</span>
-                  </div>
-                  <div v-if="getPresentationForRecord(record).showProgress" class="progress-section">
-                    <div class="progress-bar-wrap">
-                      <div
-                        class="progress-bar-fill"
-                        :style="{ width: getPresentationForRecord(record).progressPercent + '%' }"
-                      ></div>
-                    </div>
-                    <span class="progress-percent">{{ getPresentationForRecord(record).progressPercent }}%</span>
-                  </div>
-                  <div v-if="getPresentationForRecord(record).showEvents" class="stage-timeline">
-                    <div
-                      v-for="(event, idx) in getPresentationForRecord(record).recentEvents"
-                      :key="idx"
-                      class="stage-item"
-                    >
-                      <span class="stage-dot"></span>
-                      <span class="stage-name">{{ getStageLabel(event.stage as any) }}</span>
-                      <span v-if="event.message" class="stage-msg">{{ event.message }}</span>
-                    </div>
-                  </div>
-                  <div v-if="getPresentationForRecord(record).hasError" class="error-info">
-                    <span class="error-category">
-                      错误类型：{{ getPresentationForRecord(record).errorCategoryText }}
-                    </span>
-                    <span class="error-message" :title="getPresentationForRecord(record).errorMessage">
-                      {{ getPresentationForRecord(record).errorMessage }}
-                    </span>
-                    <span v-if="getPresentationForRecord(record).isRetryable" class="retry-hint">可重试</span>
-                  </div>
+                <div class="status-box">
+                  <span class="icon-file-status">
+                    <LoadingImg
+                      v-if="record.status === 'gray' || record.status === 'yellow'"
+                      class="file-status"
+                    />
+                    <SvgIcon
+                      v-else
+                      class="file-status"
+                      :name="record.status === 'green' ? 'success' : 'error'"
+                    />
+                  </span>
+                  <span> {{ parseStatus(record.status) }}</span>
                 </div>
               </template>
               <template v-else-if="column.key === 'remark'">
@@ -182,41 +151,27 @@
                 </div>
               </template>
               <template v-else-if="column.key === 'options'">
-                <div class="options-btns">
-                  <a-popconfirm
-                    overlay-class-name="del-pop"
-                    placement="topRight"
-                    :title="common.deleteTitle"
-                    :ok-text="common.confirm"
-                    :cancel-text="common.cancel"
-                    @confirm="confirm"
-                  >
-                    <a-button type="text" class="delete-item" @click="deleteItem(record)">
-                      {{ common.delete }}
-                    </a-button>
-                  </a-popconfirm>
-                  <a-tooltip
-                    v-if="getRetryForRecord(record).visible"
-                    :title="getRetryForRecord(record).tooltip"
-                  >
-                    <a-button
-                      type="text"
-                      class="retry-item"
-                      :disabled="getRetryForRecord(record).disabled"
-                      @click="retryItem(record)"
-                    >
-                      {{ getRetryForRecord(record).btnText }}
-                    </a-button>
-                  </a-tooltip>
-                  <a-button
-                    type="text"
-                    class="view-item"
-                    :disabled="!getPresentationForRecord(record).canView"
-                    @click="viewItem(record)"
-                  >
-                    {{ common.view }}
+                <a-popconfirm
+                  overlay-class-name="del-pop"
+                  placement="topRight"
+                  :title="common.deleteTitle"
+                  :ok-text="common.confirm"
+                  :cancel-text="common.cancel"
+                  @confirm="confirm"
+                >
+                  <!-- :disabled="record.status == 'gray' || record.status === 'yellow'" -->
+                  <a-button type="text" class="delete-item" @click="deleteItem(record)">
+                    {{ common.delete }}
                   </a-button>
-                </div>
+                </a-popconfirm>
+                <a-button
+                  type="text"
+                  class="view-item"
+                  :disabled="!(record.status === 'green')"
+                  @click="viewItem(record)"
+                >
+                  {{ common.view }}
+                </a-button>
               </template>
             </template>
           </a-table>
@@ -234,13 +189,13 @@
                 <div class="status-box">
                   <span class="icon-file-status">
                     <LoadingImg
-                      v-if="createFileProcessPresentation(null, record.status).iconType === 'loading' || createFileProcessPresentation(null, record.status).iconType === 'pending'"
+                      v-if="record.status === 'gray' || record.status === 'yellow'"
                       class="file-status"
                     />
                     <SvgIcon
                       v-else
                       class="file-status"
-                      :name="createFileProcessPresentation(null, record.status).iconType === 'success' ? 'success' : 'error'"
+                      :name="record.status === 'green' ? 'success' : 'error'"
                     />
                   </span>
                   <span> {{ parseFaqStatus(record.status) }}</span>
@@ -251,7 +206,7 @@
                   <a-button
                     class="edit-item"
                     type="link"
-                    :disabled="!createFileProcessPresentation(null, record.status).canView"
+                    :disabled="record.status !== 'green'"
                     @click="editQaItem(record)"
                   >
                     {{ bots.edit }}
@@ -289,13 +244,6 @@ import { pageStatus } from '@/utils/enum';
 import { resultControl } from '@/utils/utils';
 import { message, Modal } from 'ant-design-vue';
 import { getLanguage } from '@/language';
-import { ProcessStateDisplay, getStageLabel, getErrorCategoryLabel } from '@/utils/fileProcessState';
-import {
-  createFileProcessPresentation,
-  getRetryPresentation,
-  type FileProcessPresentation,
-  type RetryPresentation,
-} from '@/utils/fileProcessPresenter';
 import LoadingImg from '@/components/LoadingImg.vue';
 import UploadProgress from '@/components/UploadProgress.vue';
 import ChunkViewDialog from '@/components/ChunkViewDialog.vue';
@@ -626,18 +574,23 @@ const clearUpload = () => {
   });
 };
 
-const parseStatus = (status, processState?: ProcessStateDisplay | null) => {
-  const p = createFileProcessPresentation(processState, status);
-  return p.statusText;
-};
-
-const getPresentationForRecord = (record: any): FileProcessPresentation => {
-  return createFileProcessPresentation(record.processState, record.status);
-};
-
-const getRetryForRecord = (record: any): RetryPresentation => {
-  const presentation = getPresentationForRecord(record);
-  return getRetryPresentation(presentation);
+const parseStatus = status => {
+  let str: string;
+  switch (status) {
+    case 'gray':
+      str = common.inLine;
+      break;
+    case 'yellow':
+      str = common.parsing;
+      break;
+    case 'green':
+      str = common.succeeded;
+      break;
+    default:
+      str = common.failed;
+      break;
+  }
+  return str;
 };
 
 const parseFaqStatus = status => {
@@ -656,25 +609,6 @@ const parseFaqStatus = status => {
       break;
   }
   return str;
-};
-
-const retryItem = async record => {
-  try {
-    const res: any = await resultControl(
-      await urlResquest.retryFileProcess({
-        kb_id: currentId.value,
-        file_ids: [record.fileId],
-      })
-    );
-    if (res?.retried_files?.length) {
-      message.success(`文件 ${record.fileIdName} 已提交重试`);
-      getDetails();
-    } else {
-      message.warning('重试失败，文件可能不支持重试');
-    }
-  } catch (error: any) {
-    message.error(error.msg || '重试失败');
-  }
 };
 
 // const checkKbIsCreate = async () => {
@@ -981,142 +915,24 @@ onBeforeUnmount(() => {
     height: 16px;
   }
 
-  .status-detail-box {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-width: 200px;
-
-    .status-main {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-
-      .icon-file-status {
-        display: flex;
-        align-items: center;
-
-        svg {
-          width: 16px;
-          height: 16px;
-        }
-      }
-
-      .status-text {
-        font-size: 14px;
-        font-weight: 500;
-        color: #333;
-      }
-    }
-
-    .progress-section {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-
-      .progress-bar-wrap {
-        flex: 1;
-        height: 6px;
-        background: #f0f0f0;
-        border-radius: 3px;
-        overflow: hidden;
-
-        .progress-bar-fill {
-          height: 100%;
-          background: linear-gradient(90deg, #5a47e5, #7b68ee);
-          border-radius: 3px;
-          transition: width 0.3s ease;
-        }
-      }
-
-      .progress-percent {
-        font-size: 12px;
-        color: #5a47e5;
-        font-weight: 500;
-        min-width: 40px;
-        text-align: right;
-      }
-    }
-
-    .stage-timeline {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      margin-top: 4px;
-
-      .stage-item {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 12px;
-        color: #666;
-
-        .stage-dot {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          background: #5a47e5;
-          flex-shrink: 0;
-        }
-
-        .stage-name {
-          color: #333;
-          font-weight: 500;
-        }
-
-        .stage-msg {
-          color: #999;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-      }
-    }
-
-    .error-info {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      padding: 6px 8px;
-      background: #fff2f0;
-      border: 1px solid #ffccc7;
-      border-radius: 4px;
-      font-size: 12px;
-
-      .error-category {
-        color: #cf1322;
-        font-weight: 500;
-      }
-
-      .error-message {
-        color: #666;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        display: -webkit-box;
-        -webkit-line-clamp: 2;
-        -webkit-box-orient: vertical;
-        word-break: break-all;
-      }
-
-      .retry-hint {
-        color: #52c41a;
-        font-weight: 500;
-      }
-    }
-  }
-
-  .options-btns {
+  .status-box {
     display: flex;
     align-items: center;
-    gap: 4px;
 
-    .retry-item {
-      padding: 2px;
-      font-size: 14px;
-      font-weight: normal;
-      line-height: 22px;
-      margin-right: 5px;
-      color: #52c41a;
+    .icon-file-status {
+      display: flex;
+      align-items: center;
+    }
+
+    span {
+      display: block;
+
+      margin-right: 8px;
+
+      svg {
+        width: 16px;
+        height: 16px;
+      }
     }
   }
 

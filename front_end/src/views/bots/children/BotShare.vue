@@ -13,6 +13,8 @@ import ChatSourceDialog from '@/components/ChatSourceDialog.vue';
 import FingerprintJS from '@fingerprintjs/fingerprintjs';
 import urlResquest from '@/services/urlConfig';
 import { resultControl } from '@/utils/utils';
+import { adaptBotInfo } from '@/utils/responseAdapter';
+import type { IBotInfo } from '@/utils/types';
 import { message } from 'ant-design-vue';
 import routeController from '@/controller/router';
 import { LoadingOutlined } from '@ant-design/icons-vue';
@@ -53,8 +55,10 @@ const getBotInfo = async botId => {
   try {
     console.log('zj-botId', botId);
     const res: any = await resultControl(await urlResquest.queryBotInfo({ bot_id: botId }));
-    botInfo.value = res[0];
-    document.title = `Qanything-${res[0].bot_name}`;
+    const botList = Array.isArray(res) ? res : [res];
+    const adaptedBot = adaptBotInfo(botList[0]);
+    botInfo.value = adaptedBot;
+    document.title = `Qanything-${adaptedBot.botName}`;
     isLoading.value = false;
   } catch (e) {
     message.error(e.msg || '获取Bot信息失败');

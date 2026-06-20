@@ -7,6 +7,15 @@
  * @Description:
  */
 import { useUser } from '@/store/useUser';
+import {
+  adaptPaginatedResponse,
+  adaptKnowledgeFile,
+  adaptBotInfos,
+  adaptQARecords,
+  adaptBotInfo,
+  adaptChatResponse,
+} from '@/utils/responseAdapter';
+import type { IKnowledgeFile, IBotInfo, IQARecord, IChatResponse, IPaginatedResponse } from '@/utils/types';
 
 const { userInfo: localUserInfo } = useUser();
 enum EUrlType {
@@ -22,7 +31,6 @@ enum EUrlKey {
   uploadFile = 'uploadFile',
   deleteKB = 'deleteKB',
   deleteFile = 'deleteFile',
-  retryFileProcess = 'retryFileProcess',
   uploadUrl = 'uploadUrl',
   kbConfig = 'kbConfig',
   fileList = 'fileList',
@@ -47,10 +55,10 @@ interface IUrlValueConfig {
   url: string;
   showLoading?: boolean;
   loadingId?: string;
-  // errorToast?: boolean;//默认开启
   cancelRepeat?: boolean;
-  sign?: boolean; // 是否开启签名
+  sign?: boolean;
   param?: any;
+  adapter?: (data: any) => any;
 
   [key: string]: any;
 }
@@ -62,7 +70,6 @@ import services from '.';
 export const userId = 'user';
 export const userPhone = localUserInfo.phoneNumber;
 
-//ajax请求接口
 const urlConfig: IUrlConfig = {
   checkLogin: {
     type: EUrlType.GET,
@@ -122,18 +129,6 @@ const urlConfig: IUrlConfig = {
       file_ids: [],
     },
   },
-  // 重试文件处理
-  retryFileProcess: {
-    type: EUrlType.POST,
-    url: '/local_doc_qa/retry_file_process',
-    showLoading: true,
-    param: {
-      user_id: userId,
-      user_info: userPhone,
-      kb_id: '',
-      file_ids: [],
-    },
-  },
   // 上传网页文件
   uploadUrl: {
     type: EUrlType.POST,
@@ -163,6 +158,7 @@ const urlConfig: IUrlConfig = {
       user_info: userPhone,
       kb_id: '',
     },
+    adapter: (res: any) => adaptPaginatedResponse<IKnowledgeFile>(res.data, adaptKnowledgeFile),
   },
   // 创建Bot
   createBot: {
@@ -189,6 +185,15 @@ const urlConfig: IUrlConfig = {
     param: {
       user_id: userId,
       user_info: userPhone,
+    },
+    adapter: (res: any) => {
+      if (res && res.data) {
+        if (Array.isArray(res.data)) {
+          return adaptBotInfos(res.data);
+        }
+        return adaptBotInfo(res.data);
+      }
+      return adaptBotInfo(res);
     },
   },
   //删除Bot
@@ -253,6 +258,7 @@ const urlConfig: IUrlConfig = {
       user_id: userId,
       user_info: userPhone,
     },
+    adapter: (res: any) => adaptChatResponse(res.data || res),
   },
   // 检索qa日志
   getQAInfo: {
@@ -261,6 +267,13 @@ const urlConfig: IUrlConfig = {
     param: {
       user_id: userId,
       user_info: userPhone,
+    },
+    adapter: (res: any) => {
+      const result = adaptPaginatedResponse<any>(res.data, adaptQARecord);
+      if (res.data && res.data.qa_infos) {
+        result.qaInfos = adaptQARecords(res.data.qa_infos);
+      }
+      return result;
     },
   },
   // 获取所有知识库状态

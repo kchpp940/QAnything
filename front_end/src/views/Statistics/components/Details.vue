@@ -92,6 +92,8 @@
 import { h } from 'vue';
 import urlResquest from '@/services/urlConfig';
 import { downLoad, getContentDispositionByHeader, resultControl } from '@/utils/utils';
+import { adaptQARecords } from '@/utils/responseAdapter';
+import type { IQARecord } from '@/utils/types';
 import { getLanguage } from '@/language';
 import { SearchOutlined } from '@ant-design/icons-vue';
 import message from 'ant-design-vue/es/message';
@@ -228,13 +230,22 @@ const getQADetail = async (...args) => {
       })
     );
     dataSource.value = [];
-    paginationConfig.value.total = res.total_count;
-    const { qa_infos } = res;
-    qa_infos.map(item => {
+    paginationConfig.value.total = res.total || res.total_count;
+    
+    let qaRecords: IQARecord[] = [];
+    if (res.qaInfos) {
+      qaRecords = res.qaInfos;
+    } else if (res.details) {
+      qaRecords = res.details;
+    } else if (res.qa_infos) {
+      qaRecords = adaptQARecords(res.qa_infos);
+    }
+    
+    qaRecords.map(item => {
       dataSource.value.push({
-        key: item.qa_id,
-        kbIds: item.kb_ids.toString().replaceAll(',', `\n`),
-        question: item.condense_question,
+        key: item.qaId,
+        kbIds: item.kbIds.toString().replaceAll(',', `\n`),
+        question: item.condenseQuestion,
         answer: item.result,
         date: item.timestamp,
       });

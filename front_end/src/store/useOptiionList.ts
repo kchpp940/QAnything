@@ -11,8 +11,6 @@ import urlResquest from '@/services/urlConfig';
 import { formatDate, formatFileSize, resultControl } from '@/utils/utils';
 import { message } from 'ant-design-vue';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
-import { ProcessStateDisplay } from '@/utils/fileProcessState';
-import { createFileProcessPresentation, mergeLegacyAndPresentation, isFileProcessing } from '@/utils/fileProcessPresenter';
 
 const { currentId } = storeToRefs(useKnowledgeBase());
 
@@ -29,7 +27,6 @@ interface IDataSource {
   status: Status;
   createtime: string;
   remark: { [key: string]: string } | string;
-  processState?: ProcessStateDisplay | null;
 }
 
 export const useOptiionList = defineStore(
@@ -45,17 +42,6 @@ export const useOptiionList = defineStore(
       gray: 0,
       yellow: 0,
       red: 0,
-    });
-
-    const processStateCount = ref<Record<string, number>>({
-      pending: 0,
-      parsing: 0,
-      splitting: 0,
-      embedding: 0,
-      indexing: 0,
-      completed: 0,
-      failed: 0,
-      retrying: 0,
     });
 
     // 知识库文件总数
@@ -117,10 +103,12 @@ export const useOptiionList = defineStore(
     const timer = ref(null);
 
     const getDetails = async () => {
+      // try {
       if (timer.value) {
         clearTimeout(timer.value);
       }
       const res: any = await resultControl(
+        // 接口的page_id为页码，page_limit为一页几个
         await urlResquest.fileList({
           kb_id: currentId.value,
           page_id: kbPageNum.value,
@@ -128,57 +116,46 @@ export const useOptiionList = defineStore(
         })
       );
 
+      // 初始化状态计数
       Object.keys(totalStatus.value).forEach(key => {
         totalStatus.value[key] = 0;
       });
+
+      // 更新状态计数
       Object.assign(totalStatus.value, res.status_count);
 
-      if (res.process_state_count) {
-        Object.keys(processStateCount.value).forEach(key => {
-          processStateCount.value[key] = 0;
-        });
-        Object.assign(processStateCount.value, res.process_state_count);
-      }
-
       setDataSource([]);
+
+      // 设置一共几个文件
       setKbTotal(res.total);
 
-      const computedRemark = (msg: string = '', status: string = 'green', processState?: ProcessStateDisplay | null) => {
-        const presentation = createFileProcessPresentation(processState, status);
-        if (presentation.hasError) {
-          return presentation.errorMessage || msg;
-        }
-        if (!presentation.isCompleted) return msg;
-        try {
-          return JSON.parse(msg.toString());
-        } catch {
-          return msg;
-        }
+      // 格式化success
+      const computedRemark = (msg: string = '', status: string = 'green') => {
+        if (status !== 'green') return msg;
+        // stringify转不了, 只能toString()
+        return JSON.parse(msg.toString());
       };
 
       res?.details.forEach((item: any, index) => {
-        const processState = item?.process_state || null;
-        const { legacyStatus: displayStatus } = mergeLegacyAndPresentation(processState, item?.status);
         dataSource.value.push({
           key: item?.file_id,
           id: 10000 + index,
           fileId: item?.file_id,
           fileIdName: item?.file_name,
           fileTag: item?.tags,
-          status: displayStatus,
+          status: item?.status,
           bytes: formatFileSize(item?.bytes || 0),
           contentLength: item?.content_length,
           createtime: formatDate(item?.timestamp),
-          remark: !processState && createFileProcessPresentation(null, item?.status).isPending ? '' : computedRemark(item?.msg, item?.status, processState),
-          processState: processState,
+          remark: item?.status === 'gray' ? '' : computedRemark(item?.msg, item?.status),
         });
       });
 
-      const hasProcessing = res?.details.some((item: any) => {
-        const presentation = createFileProcessPresentation(item?.process_state, item?.status);
-        return isFileProcessing(presentation, item?.status);
+      const flag = res?.details.some(item => {
+        return item.status === 'gray' || item.status === 'yellow';
       });
-      if (hasProcessing) {
+      if (flag) {
+        //有解析中的
         timer.value = setTimeout(() => {
           clearTimeout(timer.value);
           getDetails();
@@ -211,10 +188,7 @@ export const useOptiionList = defineStore(
         // 设置一共几个文件
         setKbTotal(res.total);
 
-        if (totalStatus.value.gray === 0 && totalStatus.value.yellow === 0 &&
-            (!processStateCount.value.pending && !processStateCount.value.parsing &&
-             !processStateCount.value.splitting && !processStateCount.value.embedding &&
-             !processStateCount.value.indexing && !processStateCount.value.retrying)) {
+        if (totalStatus.value.gray === 0 && totalStatus.value.yellow === 0) {
           clearInterval(timer);
         }
       }, 5000);
@@ -280,8 +254,7 @@ export const useOptiionList = defineStore(
         }
 
         const flag = res?.details.some(item => {
-          const presentation = createFileProcessPresentation(item?.process_state, item.status);
-          return isFileProcessing(presentation, item.status);
+          return item.status === 'gray' || item.status === 'yellow';
         });
         if (flag) {
           console.log('有解析中的  5s后再次请求');
@@ -343,7 +316,6 @@ export const useOptiionList = defineStore(
       loading,
       setLoading,
       totalStatus,
-      processStateCount,
       kbTotal,
       kbPageSize,
       kbPageNum,

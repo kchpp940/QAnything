@@ -7,7 +7,11 @@ from qanything_kernel.configs.model_config import (BOT_DESC, BOT_IMAGE, BOT_PROM
                                                    DEFAULT_PARENT_CHUNK_SIZE, MAX_CHARS, VECTOR_SEARCH_TOP_K,
                                                    UPLOAD_ROOT_PATH, IMAGES_ROOT_PATH)
 from qanything_kernel.utils.general_utils import *
-from qanything_kernel.utils.file_process_state import FileProcessState, ProcessStage, FileProcessContext
+from qanything_kernel.utils.serializers import (
+    ChatResponseSerializer, BotInfoSerializer, KnowledgeFileSerializer,
+    QARecordSerializer, PaginatedResponseSerializer, ApiResponseSerializer,
+    SourceDocumentSerializer, TimeRecordSerializer, LLMSettingSerializer
+)
 from langchain.schema import Document
 from sanic.response import ResponseStream
 from sanic.response import json as sanic_json
@@ -166,13 +170,12 @@ async def upload_weblink(req: request):
         file_id = local_file.file_id
         file_size = len(local_file.file_content)
         file_location = local_file.file_location
-        local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
+        msg = local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
                                                    chunk_size, timestamp, url)
-        context = local_doc_qa.milvus_summary.init_file_process_context(file_id)
-        debug_logger.info(f"{url}, {file_name}, {file_id}, process context initialized")
-        display_status = context.get_display_status()
+        debug_logger.info(f"{url}, {file_name}, {file_id}, {msg}")
         data.append({"file_id": file_id, "file_name": file_name, "file_url": url, "status": "gray", "bytes": 0,
-                     "timestamp": timestamp, "process_state": display_status})
+                     "timestamp": timestamp})
+        # asyncio.create_task(local_doc_qa.insert_files_to_milvus(user_id, kb_id, [local_file]))
     if exist_file_names:
         msg = f'warning，当前的mode是soft，无法上传同名文件{exist_file_names}，如果想强制上传同名文件，请设置mode：strong'
     else:
@@ -254,20 +257,19 @@ async def upload_files(req: request):
         debug_logger.info(f"{file_name} char_size: {chars}")
         if chars and chars > MAX_CHARS:
             debug_logger.warning(f"fail, file {file_name} chars is {chars}, max length is {MAX_CHARS}.")
+            # return sanic_json({"code": 2003, "msg": f"fail, file {file_name} chars is too much, max length is {MAX_CHARS}."})
             failed_files.append(file_name)
             continue
         file_id = local_file.file_id
         file_size = len(local_file.file_content)
         file_location = local_file.file_location
         local_files.append(local_file)
-        local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
+        msg = local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
                                                    chunk_size, timestamp)
-        context = local_doc_qa.milvus_summary.init_file_process_context(file_id)
-        debug_logger.info(f"{file_name}, {file_id}, process context initialized")
-        display_status = context.get_display_status()
+        debug_logger.info(f"{file_name}, {file_id}, {msg}")
         data.append(
             {"file_id": file_id, "file_name": file_name, "status": "gray", "bytes": len(local_file.file_content),
-             "timestamp": timestamp, "estimated_chars": chars, "process_state": display_status})
+             "timestamp": timestamp, "estimated_chars": chars})
 
     # asyncio.create_task(local_doc_qa.insert_files_to_milvus(user_id, kb_id, local_files))
     if exist_file_names:
@@ -358,11 +360,10 @@ async def upload_faqs(req: request):
         local_doc_qa.milvus_summary.add_faq(file_id, user_id, kb_id, faq['question'], faq['answer'], faq.get('nos_keys', ''))
         local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
                                              chunk_size, timestamp)
-        context = local_doc_qa.milvus_summary.init_file_process_context(file_id)
-        display_status = context.get_display_status()
+        # debug_logger.info(f"{file_name}, {file_id}, {msg}, {faq}")
         data.append(
             {"file_id": file_id, "file_name": file_name, "status": "gray", "length": file_size,
-             "timestamp": timestamp, "process_state": display_status})
+             "timestamp": timestamp})
     debug_logger.info(f"end insert {len(faqs)} faqs to mysql, user_id: {user_id}, kb_id: {kb_id}")
 
     msg = "success，后台正在飞速上传文件，请耐心等待"
@@ -405,73 +406,49 @@ async def list_docs(req: request):
     page_limit = safe_get(req, 'page_limit', 10)  # 默认每页显示10条记录
     data = []
     if file_id is None:
-        file_infos = local_doc_qa.milvus_summary.get_files_with_status_info(user_id, kb_id)
+        file_infos = local_doc_qa.milvus_summary.get_files(user_id, kb_id)
     else:
-        file_infos = local_doc_qa.milvus_summary.get_files_with_status_info(user_id, kb_id, file_id)
+        file_infos = local_doc_qa.milvus_summary.get_files(user_id, kb_id, file_id)
     status_count = {}
-    process_state_count = {}
     for file_info in file_infos:
-        status = file_info['status']
+        status = file_info[2] if len(file_info) > 2 else 'gray'
         if status not in status_count:
             status_count[status] = 1
         else:
             status_count[status] += 1
+        serialized_file = KnowledgeFileSerializer.serialize(file_info)
+        if file_info[1].endswith('.faq') and len(file_info) > 1:
+            faq_info = local_doc_qa.milvus_summary.get_faq(file_info[0])
+            if faq_info and len(faq_info) >= 5:
+                _, _, question, answer, _ = faq_info
+                serialized_file['question'] = question
+                serialized_file['answer'] = answer
+        data.append(serialized_file)
 
-        process_state = file_info.get('process_state')
-        if process_state:
-            state_name = process_state['state']
-            if state_name not in process_state_count:
-                process_state_count[state_name] = 1
-            else:
-                process_state_count[state_name] += 1
+    data = sorted(data, key=lambda x: int(x['timestamp']) if x['timestamp'].isdigit() else 0, reverse=True)
 
-        data.append({
-            "file_id": file_info['file_id'],
-            "file_name": file_info['file_name'],
-            "status": file_info['status'],
-            "bytes": file_info['bytes'],
-            "content_length": file_info['content_length'],
-            "timestamp": file_info['timestamp'],
-            "file_location": file_info['file_location'],
-            "file_url": file_info['file_url'],
-            "chunks_number": file_info['chunks_number'],
-            "msg": file_info['msg'],
-            "process_state": process_state,
-        })
-        if file_info['file_name'].endswith('.faq'):
-            faq_info = local_doc_qa.milvus_summary.get_faq(file_info['file_id'])
-            user_id_val, kb_id_val, question, answer, nos_keys = faq_info
-            data[-1]['question'] = question
-            data[-1]['answer'] = answer
-
-    # data根据timestamp排序，时间越新的越靠前
-    data = sorted(data, key=lambda x: int(x['timestamp']), reverse=True)
-
-    # 计算总记录数
     total_count = len(data)
-    # 计算总页数
     total_pages = (total_count + page_limit - 1) // page_limit
     if page_id > total_pages and total_count != 0:
-        return sanic_json({"code": 2002, "msg": f'输入非法！page_id超过最大值，page_id: {page_id}，最大值：{total_pages}，请检查！'})
-    # 计算当前页的起始和结束索引
+        return sanic_json(ApiResponseSerializer.error(
+            msg=f'输入非法！page_id超过最大值，page_id: {page_id}，最大值：{total_pages}，请检查！',
+            code=2002
+        ))
     start_index = (page_id - 1) * page_limit
     end_index = start_index + page_limit
-    # 截取当前页的数据
     current_page_data = data[start_index:end_index]
 
-    return sanic_json({
-        "code": 200,
-        "msg": "success",
-        "data": {
-            'total_page': total_pages,
-            "total": total_count,
-            "status_count": status_count,
-            "process_state_count": process_state_count,
-            "details": current_page_data,
-            "page_id": page_id,
-            "page_limit": page_limit
-        }
-    })
+    paginated_data = PaginatedResponseSerializer.serialize(
+        {},
+        item_serializer=KnowledgeFileSerializer,
+        total=total_count,
+        total_page=total_pages,
+        page_id=page_id,
+        page_limit=page_limit,
+        status_count=status_count,
+        details=current_page_data
+    )
+    return sanic_json(ApiResponseSerializer.success(data=paginated_data, msg="success"))
 
 
 @get_time_async
@@ -591,52 +568,6 @@ async def delete_docs(req: request):
 
 
 @get_time_async
-async def retry_file_process(req: request):
-    local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
-    user_id = safe_get(req, 'user_id')
-    user_info = safe_get(req, 'user_info', "1234")
-    passed, msg = check_user_id_and_user_info(user_id, user_info)
-    if not passed:
-        return sanic_json({"code": 2001, "msg": msg})
-    user_id = user_id + '__' + user_info
-    debug_logger.info("retry_file_process %s", user_id)
-    kb_id = safe_get(req, 'kb_id')
-    kb_id = correct_kb_id(kb_id)
-    file_ids = safe_get(req, "file_ids")
-    not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, [kb_id])
-    if not_exist_kb_ids:
-        return sanic_json({"code": 2003, "msg": "fail, knowledge Base {} not found".format(not_exist_kb_ids[0])})
-    valid_file_infos = local_doc_qa.milvus_summary.check_file_exist(user_id, kb_id, file_ids)
-    if len(valid_file_infos) == 0:
-        return sanic_json({"code": 2004, "msg": "fail, files {} not found".format(file_ids)})
-    valid_file_ids = [file_info[0] for file_info in valid_file_infos]
-    debug_logger.info("retry_file_process valid_file_ids %s", valid_file_ids)
-
-    retried_files = []
-    failed_files = []
-    rollback_results = {}
-    for file_id in valid_file_ids:
-        context, rollback_result = local_doc_qa.milvus_summary.reset_file_for_retry_with_rollback(
-            file_id,
-            milvus_client=local_doc_qa.milvus_kb,
-            es_client=local_doc_qa.es_client,
-        )
-        if context:
-            retried_files.append(file_id)
-            if rollback_result:
-                rollback_results[file_id] = rollback_result.to_dict()
-        else:
-            failed_files.append(file_id)
-
-    result = {
-        "retried_files": retried_files,
-        "failed_files": failed_files,
-        "rollback_results": rollback_results,
-    }
-    return sanic_json({"code": 200, "msg": "success", "data": result})
-
-
-@get_time_async
 async def get_total_status(req: request):
     local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
     user_id = safe_get(req, 'user_id')
@@ -724,29 +655,32 @@ async def local_doc_chat(req: request):
     bot_id = safe_get(req, 'bot_id')
     if bot_id:
         if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id):
-            return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
+            return sanic_json(ApiResponseSerializer.error(
+                msg="fail, Bot {} not found".format(bot_id), code=2003))
         bot_info = local_doc_qa.milvus_summary.get_bot(None, bot_id)[0]
-        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting = bot_info
+        bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting_str = bot_info
         kb_ids = kb_ids_str.split(',')
         if not kb_ids:
-            return sanic_json({"code": 2003, "msg": "fail, Bot {} unbound knowledge base.".format(bot_id)})
+            return sanic_json(ApiResponseSerializer.error(
+                msg="fail, Bot {} unbound knowledge base.".format(bot_id), code=2003))
         custom_prompt = prompt
-        if not llm_setting:
-            return sanic_json({"code": 2003, "msg": "fail, Bot {} llm_setting is empty.".format(bot_id)})
-        llm_setting = json.loads(llm_setting)
-        rerank = llm_setting.get('rerank', True)
-        only_need_search_results = llm_setting.get('only_need_search_results', False)
-        need_web_search = llm_setting.get('networking', False)
-        api_base = llm_setting.get('api_base', '')
-        api_key = llm_setting.get('api_key', 'ollama')
-        api_context_length = llm_setting.get('api_context_length', 4096)
-        top_p = llm_setting.get('top_p', 0.99)
-        temperature = llm_setting.get('temperature', 0.5)
-        top_k = llm_setting.get('top_k', VECTOR_SEARCH_TOP_K)
-        model = llm_setting.get('model', 'gpt-4o-mini')
-        max_token = llm_setting.get('max_token')
-        hybrid_search = llm_setting.get('hybrid_search', False)
-        chunk_size = llm_setting.get('chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
+        if not llm_setting_str:
+            return sanic_json(ApiResponseSerializer.error(
+                msg="fail, Bot {} llm_setting is empty.".format(bot_id), code=2003))
+        llm_setting = LLMSettingSerializer.serialize(llm_setting_str)
+        rerank = llm_setting['rerank']
+        only_need_search_results = llm_setting['only_need_search_results']
+        need_web_search = llm_setting['networking']
+        api_base = llm_setting['api_base']
+        api_key = llm_setting['api_key']
+        api_context_length = llm_setting['api_context_length']
+        top_p = llm_setting['top_p']
+        temperature = llm_setting['temperature']
+        top_k = llm_setting['top_k']
+        model = llm_setting['model']
+        max_token = llm_setting['max_token']
+        hybrid_search = llm_setting['hybrid_search']
+        chunk_size = llm_setting['chunk_size']
     else:
         kb_ids = safe_get(req, 'kb_ids')
         custom_prompt = safe_get(req, 'custom_prompt', None)
@@ -768,6 +702,22 @@ async def local_doc_chat(req: request):
 
         hybrid_search = safe_get(req, 'hybrid_search', False)
         chunk_size = safe_get(req, 'chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
+
+    llm_setting_dict = {
+        'model': model,
+        'api_base': api_base,
+        'api_key': api_key,
+        'api_context_length': api_context_length,
+        'max_token': max_token,
+        'temperature': temperature,
+        'top_p': top_p,
+        'top_k': top_k,
+        'chunk_size': chunk_size,
+        'rerank': rerank,
+        'hybrid_search': hybrid_search,
+        'networking': need_web_search,
+        'only_need_search_results': only_need_search_results
+    }
 
     debug_logger.info('rerank %s', rerank)
 
@@ -881,53 +831,61 @@ async def local_doc_chat(req: request):
                     continue
                 chunk_str = chunk_data[6:]
                 if chunk_str.startswith("[DONE]"):
-                    retrieval_documents = format_source_documents(resp["retrieval_documents"])
-                    source_documents = format_source_documents(resp["source_documents"])
                     result = next_history[-1][1]
-                    # result = resp['result']
                     time_record['chat_completed'] = round(time.perf_counter() - preprocess_start, 2)
                     if time_record.get('llm_completed', 0) > 0:
                         time_record['tokens_per_second'] = round(
                             len(result) / time_record['llm_completed'], 2)
-                    formatted_time_record = format_time_record(time_record)
+                    formatted_time_record = TimeRecordSerializer.serialize(time_record)
+                    source_docs = SourceDocumentSerializer.serialize_list(
+                        format_source_documents(resp["source_documents"]))
+                    retrieval_docs = SourceDocumentSerializer.serialize_list(
+                        format_source_documents(resp["retrieval_documents"]))
                     chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, "model": model,
                                  "product_source": request_source, 'time_record': formatted_time_record,
                                  'history': history,
                                  'condense_question': resp['condense_question'], 'prompt': resp['prompt'],
-                                 'result': result, 'retrieval_documents': retrieval_documents,
-                                 'source_documents': source_documents, 'bot_id': bot_id}
+                                 'result': result, 'retrieval_documents': retrieval_docs,
+                                 'source_documents': source_docs, 'bot_id': bot_id}
                     local_doc_qa.milvus_summary.add_qalog(**chat_data)
                     qa_logger.info("chat_data: %s", chat_data)
                     debug_logger.info("response: %s", chat_data['result'])
-                    stream_res = {
-                        "code": 200,
-                        "msg": "success stream chat",
-                        "question": question,
-                        "response": result,
-                        "model": model,
-                        "history": next_history,
-                        "condense_question": resp['condense_question'],
-                        "source_documents": source_documents,
-                        "retrieval_documents": retrieval_documents,
-                        "time_record": formatted_time_record,
-                        "show_images": resp.get('show_images', [])
-                    }
+                    final_response = ChatResponseSerializer.serialize(
+                        {},
+                        code=200,
+                        msg="success stream chat",
+                        question=question,
+                        response=result,
+                        model=model,
+                        history=next_history,
+                        condense_question=resp['condense_question'],
+                        source_documents=source_docs,
+                        retrieval_documents=retrieval_docs,
+                        time_record=time_record,
+                        llm_setting=llm_setting_dict,
+                        show_images=resp.get('show_images', []),
+                        bot_id=bot_id if bot_id else ''
+                    )
+                    stream_res = final_response
                 else:
                     time_record['rollback_length'] = resp.get('rollback_length', 0)
                     if 'first_return' not in time_record:
                         time_record['first_return'] = round(time.perf_counter() - preprocess_start, 2)
                     chunk_js = json.loads(chunk_str)
                     delta_answer = chunk_js["answer"]
-                    stream_res = {
-                        "code": 200,
-                        "msg": "success",
-                        "question": "",
-                        "response": delta_answer,
-                        "history": [],
-                        "source_documents": [],
-                        "retrieval_documents": [],
-                        "time_record": format_time_record(time_record),
-                    }
+                    formatted_time = TimeRecordSerializer.serialize(time_record)
+                    stream_res = ChatResponseSerializer.serialize(
+                        {},
+                        code=200,
+                        msg="success",
+                        question="",
+                        response=delta_answer,
+                        history=[],
+                        source_documents=[],
+                        retrieval_documents=[],
+                        time_record=time_record,
+                        llm_setting=llm_setting_dict
+                    )
                 await response.write(f"data: {json.dumps(stream_res, ensure_ascii=False)}\n\n")
                 if chunk_str.startswith("[DONE]"):
                     await response.eof()
@@ -959,24 +917,43 @@ async def local_doc_chat(req: request):
                                                                            ):
             pass
         if only_need_search_results:
-            return sanic_json(
-                {"code": 200, "question": question, "source_documents": format_source_documents(resp)})
-        retrieval_documents = format_source_documents(resp["retrieval_documents"])
-        source_documents = format_source_documents(resp["source_documents"])
-        formatted_time_record = format_time_record(time_record)
+            source_docs = SourceDocumentSerializer.serialize_list(format_source_documents(resp))
+            return sanic_json(ChatResponseSerializer.serialize(
+                {},
+                code=200,
+                question=question,
+                source_documents=source_docs,
+                llm_setting=llm_setting_dict
+            ))
+        source_docs = SourceDocumentSerializer.serialize_list(
+            format_source_documents(resp["source_documents"]))
+        retrieval_docs = SourceDocumentSerializer.serialize_list(
+            format_source_documents(resp["retrieval_documents"]))
+        formatted_time_record = TimeRecordSerializer.serialize(time_record)
         chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, 'time_record': formatted_time_record,
                      'history': history, "condense_question": resp['condense_question'], "model": model,
                      "product_source": request_source,
-                     'retrieval_documents': retrieval_documents, 'prompt': resp['prompt'], 'result': resp['result'],
-                     'source_documents': source_documents, 'bot_id': bot_id}
+                     'retrieval_documents': retrieval_docs, 'prompt': resp['prompt'], 'result': resp['result'],
+                     'source_documents': source_docs, 'bot_id': bot_id}
         local_doc_qa.milvus_summary.add_qalog(**chat_data)
         qa_logger.info("chat_data: %s", chat_data)
         debug_logger.info("response: %s", chat_data['result'])
-        return sanic_json({"code": 200, "msg": "success no stream chat", "question": question,
-                           "response": resp["result"], "model": model,
-                           "history": history, "condense_question": resp['condense_question'],
-                           "source_documents": source_documents, "retrieval_documents": retrieval_documents,
-                           "time_record": formatted_time_record})
+        final_response = ChatResponseSerializer.serialize(
+            {},
+            code=200,
+            msg="success no stream chat",
+            question=question,
+            response=resp["result"],
+            model=model,
+            history=history,
+            condense_question=resp['condense_question'],
+            source_documents=source_docs,
+            retrieval_documents=retrieval_docs,
+            time_record=time_record,
+            llm_setting=llm_setting_dict,
+            bot_id=bot_id if bot_id else ''
+        )
+        return sanic_json(final_response)
 
 
 @get_time_async
@@ -1152,36 +1129,33 @@ async def get_qa_info(req: request):
                                    mime_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                                    headers={'Content-Disposition': f'attachment; filename="{file_name}"'})
 
-    # 计算总记录数
     total_count = len(qa_infos)
-    # 计算总页数
     total_pages = (total_count + page_limit - 1) // page_limit
     if page_id > total_pages and total_count != 0:
-        return sanic_json(
-            {"code": 2002, "msg": f'输入非法！page_id超过最大值，page_id: {page_id}，最大值：{total_pages}，请检查！'})
-    # 计算当前页的起始和结束索引
+        return sanic_json(ApiResponseSerializer.error(
+            msg=f'输入非法！page_id超过最大值，page_id: {page_id}，最大值：{total_pages}，请检查！',
+            code=2002
+        ))
     start_index = (page_id - 1) * page_limit
     end_index = start_index + page_limit
-    # 截取当前页的数据
-    current_qa_infos = qa_infos[start_index:end_index]
-    msg = f"检测到的Log总数为{total_count}, 本次返回page_id为{page_id}的数据，每页显示{page_limit}条"
+    current_qa_infos_raw = qa_infos[start_index:end_index]
 
-    # if len(qa_infos) > 100:
-    #     pages = math.ceil(len(qa_infos) // 100)
-    #     if page_id is None:
-    #         msg = f"检索到的Log数超过100，需要分页返回，总数为{len(qa_infos)}, 请使用page_id参数获取某一页数据，参数范围：[0, {pages - 1}], 本次返回page_id为0的数据"
-    #         qa_infos = qa_infos[:100]
-    #         page_id = 0
-    #     elif page_id >= pages:
-    #         return sanic_json(
-    #             {"code": 2002, "msg": f'输入非法！page_id超过最大值，page_id: {page_id}，最大值：{pages - 1}，请检查！'})
-    #     else:
-    #         msg = f"检索到的Log数超过100，需要分页返回，总数为{len(qa_infos)}, page范围：[0, {pages - 1}], 本次返回page_id为{page_id}的数据"
-    #         qa_infos = qa_infos[page_id * 100:(page_id + 1) * 100]
-    # else:
-    #     msg = f"检索到的Log数为{len(qa_infos)}，一次返回所有数据"
-    #     page_id = 0
-    return sanic_json({"code": 200, "msg": msg, "page_id": page_id, "page_limit": page_limit, "qa_infos": current_qa_infos, "total_count": total_count})
+    serialized_qa_infos = QARecordSerializer.serialize_list(current_qa_infos_raw)
+
+    paginated_data = PaginatedResponseSerializer.serialize(
+        {},
+        total=total_count,
+        total_page=total_pages,
+        page_id=page_id,
+        page_limit=page_limit,
+        status_count={},
+        details=serialized_qa_infos
+    )
+    paginated_data['qa_infos'] = serialized_qa_infos
+    paginated_data['total_count'] = total_count
+
+    msg = f"检测到的Log总数为{total_count}, 本次返回page_id为{page_id}的数据，每页显示{page_limit}条"
+    return sanic_json(ApiResponseSerializer.success(data=paginated_data, msg=msg))
 
 
 @get_time_async
@@ -1327,8 +1301,9 @@ async def get_bot_info(req: request):
     bot_infos = local_doc_qa.milvus_summary.get_bot(user_id, bot_id)
     data = []
     for bot_info in bot_infos:
-        if bot_info[6] != "":
-            kb_ids = bot_info[6].split(',')
+        kb_ids_str = bot_info[6] if len(bot_info) > 6 else ''
+        if kb_ids_str:
+            kb_ids = [kid for kid in kb_ids_str.split(',') if kid]
             kb_infos = local_doc_qa.milvus_summary.get_knowledge_base_name(kb_ids)
             kb_names = []
             for kb_id in kb_ids:
@@ -1339,12 +1314,14 @@ async def get_bot_info(req: request):
         else:
             kb_ids = []
             kb_names = []
-        info = {"bot_id": bot_info[0], "user_id": user_id, "bot_name": bot_info[1], "description": bot_info[2],
-                "head_image": bot_info[3], "prompt_setting": bot_info[4], "welcome_message": bot_info[5],
-                "kb_ids": kb_ids, "kb_names": kb_names,
-                "update_time": bot_info[7].strftime("%Y-%m-%d %H:%M:%S"), "llm_setting": bot_info[9]}
-        data.append(info)
-    return sanic_json({"code": 200, "msg": "success", "data": data})
+        serialized = BotInfoSerializer.serialize(
+            bot_info,
+            user_id=user_id,
+            kb_ids=kb_ids,
+            kb_names=kb_names
+        )
+        data.append(serialized)
+    return sanic_json(ApiResponseSerializer.success(data=data, msg="success"))
 
 
 @get_time_async

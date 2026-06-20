@@ -4,57 +4,30 @@
  * @LastEditors: Ianarua 306781523@qq.com
  * @LastEditTime: 2024-08-05 16:36:28
  * @FilePath: front_end/src/utils/types.ts
- * @Description:
+ * @Description: 统一的类型定义，与后端 serializer 保持一致
  */
 
-import type { ProcessStateDisplay } from '@/utils/fileProcessState';
+// ============================================
+// 基础数据类型
+// ============================================
 
-export interface IKnowledgeItem {
-  kb_id: string;
-  kb_name: string;
-  isFaq?: boolean;
-  createTime?: any;
-  edit?: boolean;
+export interface ISourceDocument {
+  file_id: string;
+  file_name: string;
+  content: string;
+  score: string;
+  file_url: string;
+  retrieval_query: string;
+  embed_version: string;
+  doc_id: string;
+  retrieval_source: string;
+  headers: Record<string, any>;
+  page_id: number;
+  nos_keys: string;
+  detail_data_source: string;
 }
 
-export interface IDataSourceItem {
-  dataSource?: string; //数据来源
-  detailDataSource?: string; //详细来源信息
-  file_name: string | null; //文件名
-  content: string | null; //内容
-  score: number | null; // 相关性
-  file_id: string | null; // 来源文件id（知识库的文件）
-  file_url: string | null; // 来源网址（联网检索）
-  showDetailDataSource?: boolean; //是否展示详细来源信息
-}
-
-export interface IChatItem {
-  type: 'ai' | 'user'; //区别用户提问 和ai回复
-  question?: string; //问题
-  answer?: string; //问题 | 回复内容
-  like?: boolean; //点赞
-  unlike?: boolean; //点踩
-  copied?: boolean; //点拷贝置为true 提示拷贝成功 然后置为false  重置原因:点击拷贝后添加颜色提示拷贝过了 1s后置为普通颜色
-  onlySearch?: boolean; // 只检索知识库来源不回答
-
-  showTools?: boolean; //当期问答是否结束 结束展示复制等小工具和取消闪烁
-  source?: Array<IDataSourceItem>; // 数据来源
-
-  picList?: any; // 不知道是啥，用到了，不敢删
-  qaId?: any; // 同上
-
-  itemInfo?: IChatItemInfo; // 当前对话相关信息 token time chatSetting
-}
-
-// 历史记录
-export interface IHistoryList {
-  historyId: number;
-  title: string;
-  kbIds?: string[];
-}
-
-// 对话的耗时信息
-export interface ITimeInfo {
+export interface ITimeUsage {
   preprocess: number;
   condense_q_chain: number;
   retriever_search: number;
@@ -62,31 +35,207 @@ export interface ITimeInfo {
   rerank: number;
   reprocess: number;
   llm_first_return: number;
-  first_return: number; // 前7个加起来。外层显示
+  first_return: number;
   llm_completed: number;
-  chat_completed: number; // 后俩加起来。外层显示
-}
-
-// 对话的耗token信息
-export interface ITokenInfo {
-  total_tokens: number; // 外层显示
-  prompt_tokens: number; // 外层显示
-  completion_tokens: number; // 外层显示
+  chat_completed: number;
+  obtain_images_time: number;
+  rollback_length: number;
   tokens_per_second: number;
 }
 
-// 对话的信息：耗token、耗时、当时的模型信息、当时聊天的日期等
-export interface IChatItemInfo {
-  timeInfo: ITimeInfo; // 耗时相关
-  tokenInfo: ITokenInfo; // token相关
-  settingInfo: IChatSetting; // 模型配置相关
-  dateInfo: number; // 当时聊天的日期，时间戳
+export interface ITokenUsage {
+  total_tokens: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  rewrite_prompt_tokens: number;
+  rewrite_completion_tokens: number;
 }
 
-//url解析状态（前端展示）
+export interface ITimeRecord {
+  time_usage: ITimeUsage;
+  token_usage: ITokenUsage;
+}
+
+export interface ILLMSetting {
+  model: string;
+  api_base: string;
+  api_key: string;
+  api_context_length: number;
+  max_token: number;
+  temperature: number;
+  top_p: number;
+  top_k: number;
+  chunk_size: number;
+  rerank: boolean;
+  hybrid_search: boolean;
+  networking: boolean;
+  only_need_search_results: boolean;
+  prompt_template: string;
+}
+
+export interface IRetrievalTrace {
+  query: string;
+  retrieval_method: string;
+  total_results: number;
+  filtered_results: number;
+  stage: string;
+  timestamp: string;
+}
+
+export interface IWebSearchTrace {
+  query: string;
+  search_engine: string;
+  result_count: number;
+  selected_urls: string[];
+  timestamp: string;
+}
+
+// ============================================
+// 业务数据类型
+// ============================================
+
+export interface IKnowledgeItem {
+  kb_id: string;
+  kb_name: string;
+  isFaq?: boolean;
+  createTime?: string;
+  edit?: boolean;
+}
+
+export interface IKnowledgeFile {
+  file_id: string;
+  file_name: string;
+  status: 'gray' | 'green' | 'yellow' | 'red' | 'loading';
+  bytes: number;
+  content_length: number;
+  timestamp: string;
+  file_location: string;
+  file_url: string;
+  chunks_number: number;
+  msg: string;
+  question: string;
+  answer: string;
+  estimated_chars: number;
+}
+
+export interface IBotInfo {
+  bot_id: string;
+  bot_name: string;
+  description: string;
+  head_image: string;
+  prompt_setting: string;
+  welcome_message: string;
+  kb_ids: string[];
+  kb_names: string[];
+  update_time: string;
+  llm_setting: ILLMSetting;
+  user_id: string;
+}
+
+export interface IQARecord {
+  qa_id: string;
+  user_id: string;
+  bot_id: string;
+  kb_ids: string[];
+  query: string;
+  model: string;
+  product_source: string;
+  time_record: ITimeRecord;
+  history: Array<[string, string]>;
+  condense_question: string;
+  prompt: string;
+  result: string;
+  retrieval_documents: ISourceDocument[];
+  source_documents: ISourceDocument[];
+  timestamp: string;
+  retrieval_trace: IRetrievalTrace[];
+  web_search_trace: IWebSearchTrace[];
+  kb_names: string;
+}
+
+export interface IChatResponse {
+  code: number;
+  msg: string;
+  question: string;
+  response: string;
+  model: string;
+  history: Array<[string, string]>;
+  condense_question: string;
+  source_documents: ISourceDocument[];
+  retrieval_documents: ISourceDocument[];
+  time_record: ITimeRecord;
+  llm_setting: ILLMSetting;
+  retrieval_trace: IRetrievalTrace[];
+  web_search_trace: IWebSearchTrace[];
+  show_images: string[];
+  bot_id: string;
+  qa_id: string;
+  timestamp: string;
+}
+
+export interface IPaginatedResponse<T> {
+  total: number;
+  total_page: number;
+  page_id: number;
+  page_limit: number;
+  status_count: Record<string, number>;
+  details: T[];
+  qa_infos?: IQARecord[];
+  total_count?: number;
+}
+
+export interface IApiResponse<T = any> {
+  code: number;
+  msg: string;
+  data: T;
+}
+
+// ============================================
+// 前端业务类型
+// ============================================
+
+export interface IDataSourceItem extends ISourceDocument {
+  dataSource?: string;
+  detailDataSource?: string;
+  showDetailDataSource?: boolean;
+}
+
+export interface IChatItem {
+  type: 'ai' | 'user';
+  question?: string;
+  answer?: string;
+  like?: boolean;
+  unlike?: boolean;
+  copied?: boolean;
+  onlySearch?: boolean;
+  showTools?: boolean;
+  source?: IDataSourceItem[];
+  picList?: string[];
+  qaId?: string;
+  itemInfo?: IChatItemInfo;
+}
+
+export interface IHistoryList {
+  historyId: number;
+  title: string;
+  kbIds?: string[];
+}
+
+export interface IChatItemInfo {
+  timeInfo: ITimeUsage;
+  tokenInfo: ITokenInfo;
+  settingInfo: IChatSetting;
+  dateInfo: number;
+}
+
+export interface ITimeInfo extends ITimeUsage {}
+
+export interface ITokenInfo extends ITokenUsage {
+  tokens_per_second: number;
+}
+
 export type inputStatus = 'default' | 'inputing' | 'parsing' | 'success' | 'defeat' | 'hover';
 
-//url类型约束
 export interface IUrlListItem {
   status: inputStatus;
   text: string;
@@ -94,9 +243,8 @@ export interface IUrlListItem {
   borderRadius?: string;
 }
 
-//上传文件
 export interface IFileListItem {
-  file?: File; // 这个只有在上传时候加，接收没有这个
+  file?: File;
   file_name: string;
   status: string;
   file_id: string;
@@ -105,54 +253,31 @@ export interface IFileListItem {
   text?: string;
   order?: number;
   bytes: number;
-  processState?: ProcessStateDisplay | null;
 }
 
-// 模型设置
 type ICapabilities = {
-  /* 是否联网搜索 */
   networkSearch: boolean;
-  /* 是否混合搜索 */
   mixedSearch: boolean;
-  /* 是否仅检索 */
   onlySearch: boolean;
-  /* 是否增强检索 */
   rerank: boolean;
 };
 
 export interface IChatSetting {
-  /* 模型类型，string为自定义名称，不用传 */
   modelType: 'openAI' | 'ollama' | '自定义模型配置' | string;
-  /* 自定义模型id，如果不是自定义就没有，不用传 */
   customId?: number;
-  /* 自定义的模型名称，只有自定义时候用 */
   modelName?: string;
-  /* 秘钥，openAI用 */
   apiKey?: string;
-  /* api路径 */
   apiBase: string;
-  /* 模型名称 */
   apiModelName: string;
-  /* 上下文token数量 */
   apiContextLength: number;
-  /* 上下文的消息数量上限条数，不用传 */
   context: number;
-  /* 返回的最大token */
   maxToken: number;
-  /* 切片的token数 */
   chunkSize: number;
-  /* 联想与发散 0~1 */
   temperature: number;
-  /* top_P 0~1 */
   top_P: number;
-  /* 控制数据来源数量 1~100 */
   top_K: number;
-  /* 模型能力 */
   capabilities: ICapabilities;
-  /* 是否开启（只有一个） */
   active: boolean;
 }
 
-// 第一个对象类型，第二个参数联合类型，把联合类型里面的参数设定为可选
-// MakePartial<IChatSetting, 'modelType'>
 export type MakePartial<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;

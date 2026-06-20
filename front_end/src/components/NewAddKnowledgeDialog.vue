@@ -117,7 +117,6 @@ import urlResquest from '@/services/urlConfig';
 import { message } from 'ant-design-vue';
 import { getLanguage } from '@/language/index';
 import { useLanguage } from '@/store/useLanguage';
-import { createFileProcessPresentation } from '@/utils/fileProcessPresenter';
 
 const { language } = storeToRefs(useLanguage());
 const common = getLanguage().common;
@@ -154,10 +153,7 @@ const canSubmit = computed(() => {
 // });
 
 const showTips = () => {
-  return fileList.value.find(item => {
-    const p = createFileProcessPresentation(item.processState, item.status);
-    return p.isPending;
-  });
+  return fileList.value.find(item => item.status === 'gray');
 };
 
 //新建完成后的知识库id

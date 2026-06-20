@@ -8,7 +8,7 @@
  */
 
 import { useUser } from '@/store/useUser';
-import { IChatSetting, IFileListItem, ITimeInfo, ITokenInfo } from './types';
+import { IFileListItem } from './types';
 
 export function addWindowsAttr(name, value) {
   window[name] = value;
@@ -181,55 +181,7 @@ export const parseFileName = (filePath: string) => {
   };
 };
 
-/**
- * @description 保存ai回答的time token信息和当前ai的模型配置
- */
-export class ChatInfoClass<T = IChatSetting> {
-  private timeObj: ITimeInfo;
-  private tokenObj: ITokenInfo;
-  private settingObj: T;
-  private date: number;
 
-  constructor() {
-    this.timeObj = {
-      preprocess: 0,
-      condense_q_chain: 0,
-      retriever_search: 0,
-      web_search: 0,
-      rerank: 0,
-      reprocess: 0,
-      llm_first_return: 0,
-      first_return: 0,
-      llm_completed: 0,
-      chat_completed: 0,
-    };
-  }
-
-  addTime(timeInfo: ITimeInfo) {
-    this.timeObj = { ...this.timeObj, ...timeInfo };
-  }
-
-  addToken(tokenInfo: ITokenInfo) {
-    this.tokenObj = tokenInfo;
-  }
-
-  addChatSetting(chatSettingInfo: T) {
-    this.settingObj = chatSettingInfo;
-  }
-
-  addDate(date: number) {
-    this.date = date;
-  }
-
-  getChatInfo() {
-    return {
-      timeInfo: this.timeObj,
-      tokenInfo: this.tokenObj,
-      settingInfo: this.settingObj,
-      dateInfo: this.date,
-    };
-  }
-}
 
 /**
  * @description 将时间戳格式化为 2024/8/1 12:30:12 的格式

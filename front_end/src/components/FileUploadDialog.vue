@@ -110,8 +110,6 @@ import { userId, userPhone } from '@/services/urlConfig';
 import { getLanguage } from '@/language/index';
 import { useUploadFiles } from '@/store/useUploadFiles';
 import { useChatSetting } from '@/store/useChatSetting';
-import { ProcessStateDisplay, getDisplayStatusText, isProcessingState } from '@/utils/fileProcessState';
-import { createFileProcessPresentation, type FileProcessPresentation } from '@/utils/fileProcessPresenter';
 // import { useLanguage } from '@/store/useLanguage';
 
 // const { language } = storeToRefs(useLanguage());
@@ -289,7 +287,9 @@ const uplolad = async () => {
       // 在此处对接口返回的数据进行处理
       if (data.code === 200) {
         if (data.data.length === 0) {
+          // 上传相同文件
           message.warn(data.msg || '出错了');
+          // handleCancel();
           notification.close('upload');
           if (props.dialogType === 1) {
             list.forEach(item => {
@@ -302,17 +302,16 @@ const uplolad = async () => {
         openNotification(1);
         if (props.dialogType === 1) {
           list.forEach((item, index) => {
-            const fileData = data.data[index];
-            const processState = fileData.process_state as ProcessStateDisplay | undefined;
-            const presentation = createFileProcessPresentation(processState, fileData.status);
-            const status = presentation.isFailed ? 'error' : 'success';
+            let status = data.data[index].status;
+            if (status == 'green' || status == 'gray') {
+              status = 'success';
+            } else {
+              status = 'error';
+            }
             uploadFileList.value[item.order].status = status;
-            uploadFileList.value[item.order].file_id = fileData.file_id;
-            uploadFileList.value[item.order].bytes = fileData.bytes;
-            uploadFileList.value[item.order].processState = processState || null;
-            uploadFileList.value[item.order].errorText = presentation.isFailed
-              ? (presentation.errorMessage || common.upFailed)
-              : common.upSucceeded;
+            uploadFileList.value[item.order].file_id = data.data[index].file_id;
+            uploadFileList.value[item.order].bytes = data.data[index].bytes;
+            uploadFileList.value[item.order].errorText = common.upSucceeded;
           });
         }
       } else {

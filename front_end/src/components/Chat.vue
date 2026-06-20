@@ -60,29 +60,29 @@
                     </div>
                     <div v-show="showSourceIdxs.includes(index)" class="source-list">
                       <div
-                        v-for="(sourceItem, sourceIndex) in item.source"
-                        :key="sourceIndex"
-                        class="data-source"
-                      >
-                        <p v-show="sourceItem.file_name" class="control">
-                          <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
-                          <a
-                            v-if="sourceItem.file_url.startsWith('http')"
-                            :href="sourceItem.file_url"
-                            target="_blank"
-                          >
-                            {{ sourceItem.file_name }}
-                          </a>
-                          <span
-                            v-else
-                            :class="[
-                              'file',
-                              checkFileType(sourceItem.file_name) ? 'filename-active' : '',
-                            ]"
-                            @click="handleChatSource(sourceItem)"
-                          >
-                            {{ sourceItem.file_name }}
-                          </span>
+                      v-for="(sourceItem, sourceIndex) in item.source"
+                      :key="sourceIndex"
+                      class="data-source"
+                    >
+                      <p v-show="sourceItem.fileName" class="control">
+                        <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
+                        <a
+                          v-if="sourceItem.fileUrl.startsWith('http')"
+                          :href="sourceItem.fileUrl"
+                          target="_blank"
+                        >
+                          {{ sourceItem.fileName }}
+                        </a>
+                        <span
+                          v-else
+                          :class="[
+                            'file',
+                            checkFileType(sourceItem.fileName) ? 'filename-active' : '',
+                          ]"
+                          @click="handleChatSource(sourceItem)"
+                        >
+                          {{ sourceItem.fileName }}
+                        </span>
                           <SvgIcon
                             v-show="sourceItem.showDetailDataSource"
                             name="iconup"
@@ -213,8 +213,9 @@
 </template>
 <script lang="ts" setup>
 import { apiBase } from '@/services';
-import { IChatItem } from '@/utils/types';
-import { throttle } from '@/utils/utils';
+import { IChatItem, IChatSetting, ILLMSetting } from '@/utils/types';
+import { throttle, formatTimestamp, resultControl } from '@/utils/utils';
+import { toAIChatItem, toUserChatItem, adaptChatResponse } from '@/utils/responseAdapter';
 import { useClipboard } from '@vueuse/core';
 import { message } from 'ant-design-vue';
 import SvgIcon from './SvgIcon.vue';
@@ -228,7 +229,6 @@ import html2canvas from 'html2canvas';
 import urlResquest, { userId, userPhone } from '@/services/urlConfig';
 import { getLanguage } from '@/language';
 import { useLanguage } from '@/store/useLanguage';
-import { ChatInfoClass, formatTimestamp, resultControl } from '@/utils/utils';
 import ChatSettingDialog from '@/components/ChatSettingDialog.vue';
 import HistoryChat from '@/components/Home/HistoryChat.vue';
 import { useHomeChat } from '@/store/useHomeChat';
@@ -371,28 +371,40 @@ const myCopy = (item: IChatItem) => {
 };
 
 const addQuestion = q => {
-  QA_List.value.push({
-    question: q,
-    type: 'user',
-  });
+  QA_List.value.push(toUserChatItem(q));
   scrollBottom();
 };
 
 const addAnswer = (question: string) => {
-  QA_List.value.push({
-    answer: '',
+  const emptyChatResponse = {
     question,
-    onlySearch: chatSettingFormActive.value.capabilities.onlySearch,
-    type: 'ai',
-    copied: false,
-    like: false,
-    unlike: false,
-    source: [],
-    showTools: false,
-  });
+    response: '',
+    source_documents: [],
+    llm_setting: {
+      only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
+    },
+    time_record: {
+      time_usage: {},
+      token_usage: {},
+    },
+    show_images: [],
+  };
+  const chatSetting = getChatSetting();
+  const aiItem = toAIChatItem(adaptChatResponse(emptyChatResponse), chatSetting);
+  aiItem.showTools = false;
+  QA_List.value.push(aiItem);
 };
 
-const chatInfoClass = new ChatInfoClass();
+const getChatSetting = (): IChatSetting => {
+  const { capabilities, ...rest } = chatSettingFormActive.value;
+  return {
+    ...rest,
+    rerank: capabilities.rerank,
+    hybridSearch: capabilities.mixedSearch,
+    networking: capabilities.networkSearch,
+    onlyNeedSearchResults: capabilities.onlySearch,
+  };
+};
 
 const setObserveDom = value => {
   observeDom.value = value;
@@ -547,22 +559,20 @@ const send = async () => {
 
   // 如果是仅检索
   if (chatSettingFormActive.value.capabilities.onlySearch) {
-    // 模型配置添加进去
-    chatInfoClass.addChatSetting(chatSettingFormActive.value);
     addAnswer(q);
     try {
-      const res: any = await resultControl(
+      const chatResponse = (await resultControl(
         await urlResquest.sendQuestion(sendData, { signal: ctrl.signal })
-      );
-      if (res.code === 200) {
-        QA_List.value[QA_List.value.length - 1].answer = res?.source_documents.length
+      )) as any;
+      if (chatResponse.code === 200) {
+        const lastItem = QA_List.value[QA_List.value.length - 1];
+        lastItem.answer = chatResponse.sourceDocuments?.length
           ? common.searchCompleted
           : common.searchNotFound;
-        QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+        lastItem.source = chatResponse.sourceDocuments;
       }
     } catch (e) {
       console.log('出错', e);
-      // message.error(e.msg || '出错了');
       QA_List.value[QA_List.value.length - 1].answer = e.msg || 'error';
     }
     // 无论成不成功,结束后的操作
@@ -591,8 +601,6 @@ const send = async () => {
         console.log('open', e);
         addAnswer(q);
         if (e.ok && e.headers.get('content-type') === 'text/event-stream') {
-          // 模型配置添加进去
-          chatInfoClass.addChatSetting(chatSettingFormActive.value);
           typewriter.start();
         } else if (e.headers.get('content-type') === 'application/json') {
           typewriter.add('Error 请检查模型是否配置正确');
@@ -600,31 +608,31 @@ const send = async () => {
       },
       onmessage(msg: { data: string }) {
         console.log('message', msg);
-        const res: any = JSON.parse(msg.data);
-        if (res?.code == 200 && res?.response && res.msg === 'success') {
-          // 中间的回答
-          // QA_List.value[QA_List.value.length - 1].answer += res.result.response;
-          // typewriter.add(res?.response.replaceAll('\n', '<br/>'));
-          typewriter.add(res?.response);
+        const rawRes = JSON.parse(msg.data);
+        const chatResponse = adaptChatResponse(rawRes);
+
+        if (chatResponse.code === 200 && chatResponse.response && rawRes.msg === 'success') {
+          typewriter.add(chatResponse.response);
           scrollBottom();
-        } else {
-          // 最后一次回答
-          const timeObj = res.time_record.time_usage;
-          delete timeObj['retriever_search_by_milvus'];
-          chatInfoClass.addTime(res.time_record.time_usage);
-          chatInfoClass.addToken(res.time_record.token_usage);
-          chatInfoClass.addDate(Date.now());
         }
 
-        if (res?.source_documents?.length) {
-          QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+        if (chatResponse.sourceDocuments?.length) {
+          QA_List.value[QA_List.value.length - 1].source = chatResponse.sourceDocuments;
         }
 
-        if (res?.show_images?.length) {
-          res?.show_images.map(item => {
+        if (chatResponse.showImages?.length) {
+          chatResponse.showImages.map(item => {
             typewriter.add(item);
-            console.log(QA_List.value.at(-1).answer);
+            console.log(QA_List.value.at(-1)?.answer);
           });
+        }
+
+        if (chatResponse.code === 200 && rawRes.msg !== 'success') {
+          const lastItem = QA_List.value.at(-1);
+          if (lastItem) {
+            const chatSetting = getChatSetting();
+            lastItem.itemInfo = toAIChatItem(chatResponse, chatSetting).itemInfo;
+          }
         }
       },
       onclose(e: any) {
@@ -633,8 +641,6 @@ const send = async () => {
         ctrl.abort();
         showLoading.value = false;
         QA_List.value[QA_List.value.length - 1].showTools = true;
-        // 将chat info添加进回答中
-        QA_List.value.at(-1).itemInfo = chatInfoClass.getChatInfo();
         // 更新最大的chatList
         addChatList(chatId.value, QA_List.value);
         nextTick(() => {
@@ -829,7 +835,7 @@ const checkFileType = filename => {
 
 const handleChatSource = file => {
   console.log('handleChatSource', file);
-  const isSupport = checkFileType(file.file_name);
+  const isSupport = checkFileType(file.fileName);
   if (isSupport) {
     queryFile(file);
   }
@@ -838,9 +844,9 @@ const handleChatSource = file => {
 async function queryFile(file) {
   try {
     setSourceUrl(null);
-    const res: any = await resultControl(await urlResquest.getFile({ file_id: file.file_id }));
+    const res: any = await resultControl(await urlResquest.getFile({ file_id: file.fileId }));
     console.log('queryFile', res);
-    const suffix = file.file_name.split('.').pop();
+    const suffix = file.fileName.split('.').pop();
     const b64Type = getB64Type(suffix);
     console.log('b64Type', b64Type);
     setSourceType(suffix);
