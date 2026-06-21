@@ -5,7 +5,8 @@ from pymilvus import connections, FieldSchema, CollectionSchema, DataType, Colle
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 import copy
-from qanything_kernel.utils.custom_log import debug_logger
+from qanything_kernel.utils.custom_log import debug_logger, s_debug_logger
+from qanything_kernel.utils.request_context import Stage
 from qanything_kernel.utils.general_utils import get_time
 from qanything_kernel.configs.model_config import MILVUS_HOST_ONLINE, MILVUS_PORT, CHUNK_SIZE, VECTOR_SEARCH_TOP_K
 from langchain.docstore.document import Document
@@ -111,6 +112,10 @@ class MilvusClient:
             expand_res = self.expand_cand_docs(need_expand)
             new_cands = not_need_expand + expand_res
             new_result.append(new_cands)
+        docs_count = sum(len(docs) for docs in new_result)
+        s_debug_logger.stage_success(Stage.VECTOR_DB_OPERATION, "parse_batch_result success",
+                                     docs_count=docs_count,
+                                     batch_count=len(batch_result))
         return new_result
 
     @property
@@ -130,6 +135,14 @@ class MilvusClient:
             self.partitions = [Partition(self.sess, kb_id) for kb_id in self.kb_ids]
         except Exception as e:
             debug_logger.error(f'[{cur_func_name()}] [MilvusClient] traceback = {traceback.format_exc()}')
+            s_debug_logger.exception("MilvusClient init failed",
+                                     error=e,
+                                     stage=Stage.VECTOR_DB_OPERATION,
+                                     error_category="vector_db_error",
+                                     user_id=self.user_id,
+                                     kb_ids=self.kb_ids,
+                                     host=self.host,
+                                     port=self.port)
 
     def __search_emb_sync(self, embs, expr='', top_k=None, client_timeout=None):
         if not top_k:
@@ -146,6 +159,16 @@ class MilvusClient:
                 break
             except Exception as e:
                 debug_logger.error(e)
+                s_debug_logger.exception("Milvus search failed",
+                                         error=e,
+                                         stage=Stage.VECTOR_DB_OPERATION,
+                                         error_category="vector_db_error",
+                                         user_id=self.user_id,
+                                         kb_ids=self.kb_ids,
+                                         expr=expr,
+                                         top_k=top_k,
+                                         retry_count=retry_count,
+                                         max_retries=max_retries)
                 retry_count += 1  # 出错时增加重试计数
                 if retry_count > max_retries:
                     debug_logger.error("milvus搜索重试失败，停止尝试。")
@@ -156,6 +179,11 @@ class MilvusClient:
                         self.sess = self.__load_collection(self.user_id, _async=False)
                     except Exception as e:
                         debug_logger.error("重新加载 milvus 集合失败：" + str(e))
+                        s_debug_logger.exception("Milvus reload collection failed",
+                                                 error=e,
+                                                 stage=Stage.VECTOR_DB_OPERATION,
+                                                 error_category="vector_db_error",
+                                                 user_id=self.user_id)
                         return []
         return self.parse_batch_result(milvus_records)
 

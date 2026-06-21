@@ -11,7 +11,8 @@ sys.path.append(root_dir)
 print(root_dir)
 
 from sanic import Sanic, response
-from qanything_kernel.utils.custom_log import insert_logger
+from qanything_kernel.utils.custom_log import insert_logger, s_insert_logger
+from qanything_kernel.utils.request_context import (init_context, set_context, reset_context, Stage, generate_request_id)
 from qanything_kernel.utils.general_utils import get_time_async
 from qanything_kernel.core.retriever.general_document import LocalFileForInsert
 from qanything_kernel.core.retriever.vectorstore import VectorStoreMilvusClient
@@ -70,6 +71,7 @@ async def process_data(retriever, milvus_kb, mysql_client, file_info, time_recor
     chunks_number = 0
     mysql_client.update_file_msg(file_id, f'Processing:{random.randint(1, 5)}%')
     # 这里是把文件做向量化，然后写入Milvus的逻辑
+    s_insert_logger.stage_start(Stage.FILE_PARSE, "start file parse")
     start = time.perf_counter()
     try:
         await asyncio.wait_for(
@@ -78,54 +80,71 @@ async def process_data(retriever, milvus_kb, mysql_client, file_info, time_recor
         )
         content_length = sum([len(doc.page_content) for doc in local_file.docs])
         if content_length > MAX_CHARS:
+            duration_ms = (time.perf_counter() - start) * 1000
             status = 'red'
             msg = f"{file_name} content_length too large, {content_length} >= MaxLength({MAX_CHARS})"
+            s_insert_logger.stage_fail(Stage.FILE_PARSE, f"file parse failed: content_length too large", duration_ms=duration_ms)
             return status, content_length, chunks_number, msg
         elif content_length == 0:
+            duration_ms = (time.perf_counter() - start) * 1000
             status = 'red'
             msg = f"{file_name} content_length is 0, file content is empty or The URL exists anti-crawling or requires login."
+            s_insert_logger.stage_fail(Stage.FILE_PARSE, "file parse failed: content_length is 0", duration_ms=duration_ms)
             return status, content_length, chunks_number, msg
-    except asyncio.TimeoutError:
+    except asyncio.TimeoutError as te:
+        duration_ms = (time.perf_counter() - start) * 1000
         local_file.event.set()
         insert_logger.error(f'Timeout: split_file_to_docs took longer than {parse_timeout_seconds} seconds')
         status = 'red'
         msg = f"split_file_to_docs timeout: {parse_timeout_seconds}s"
+        s_insert_logger.stage_fail(Stage.FILE_PARSE, f"file parse timeout: {parse_timeout_seconds}s", error=te, duration_ms=duration_ms)
         return status, content_length, chunks_number, msg
     except Exception as e:
+        duration_ms = (time.perf_counter() - start) * 1000
         error_info = f'split_file_to_docs error: {traceback.format_exc()}'
         msg = error_info
         insert_logger.error(msg)
         status = 'red'
         msg = f"split_file_to_docs error"
+        s_insert_logger.stage_fail(Stage.FILE_PARSE, "file parse exception", error=e, duration_ms=duration_ms)
         return status, content_length, chunks_number, msg
     end = time.perf_counter()
+    duration_ms = (end - start) * 1000
     time_record['parse_time'] = round(end - start, 2)
     insert_logger.info(f'parse time: {end - start} {len(local_file.docs)}')
+    s_insert_logger.stage_success(Stage.FILE_PARSE, "file parse success", duration_ms=duration_ms)
     mysql_client.update_file_msg(file_id, f'Processing:{random.randint(5, 75)}%')
 
+    s_insert_logger.stage_start(Stage.FILE_INSERT, "start milvus insert")
     try:
         start = time.perf_counter()
         chunks_number, insert_time_record = await asyncio.wait_for(
             retriever.insert_documents(local_file.docs, chunk_size),
             timeout=insert_timeout_seconds)
         insert_time = time.perf_counter()
+        duration_ms = (insert_time - start) * 1000
         time_record.update(insert_time_record)
         insert_logger.info(f'insert time: {insert_time - start}')
         mysql_client.update_chunks_number(local_file.file_id, chunks_number)
-    except asyncio.TimeoutError:
+        s_insert_logger.stage_success(Stage.FILE_INSERT, "milvus insert success", duration_ms=duration_ms, chunks_number=chunks_number)
+    except asyncio.TimeoutError as te:
+        duration_ms = (time.perf_counter() - start) * 1000
         insert_logger.error(f'Timeout: milvus insert took longer than {insert_timeout_seconds} seconds')
         expr = f'file_id == \"{local_file.file_id}\"'
         milvus_kb.delete_expr(expr)
         status = 'red'
         time_record['insert_timeout'] = True
         msg = f"milvus insert timeout: {insert_timeout_seconds}s"
+        s_insert_logger.stage_fail(Stage.FILE_INSERT, f"milvus insert timeout: {insert_timeout_seconds}s", error=te, duration_ms=duration_ms, chunks_number=chunks_number)
         return status, content_length, chunks_number, msg
     except Exception as e:
+        duration_ms = (time.perf_counter() - start) * 1000
         error_info = f'milvus insert error: {traceback.format_exc()}'
         insert_logger.error(error_info)
         status = 'red'
         time_record['insert_error'] = True
         msg = f"milvus insert error"
+        s_insert_logger.stage_fail(Stage.FILE_INSERT, "milvus insert exception", error=e, duration_ms=duration_ms, chunks_number=chunks_number)
         return status, content_length, chunks_number, msg
 
     mysql_client.update_file_msg(file_id, f'Processing:{random.randint(75, 100)}%')
@@ -181,21 +200,37 @@ async def check_and_process(pool):
                             "SELECT id, file_id, user_id, file_name, kb_id, file_location, file_size, file_url, "
                             "chunk_size FROM File WHERE id=%s", (id,))
                         file_info = await cur.fetchone()
+                        _, file_id, user_id, file_name, kb_id, file_location, file_size, file_url, chunk_size = file_info
+                        init_context(request_id=generate_request_id(), user_id=user_id, kb_id=kb_id, file_id=file_id, file_name=file_name, api_name='insert_files_worker')
 
                         time_record = {}
-                        # 现在处理数据
-                        status, content_length, chunks_number, msg = await process_data(retriever, milvus_kb,
-                                                                                        mysql_client,
-                                                                                        file_info, time_record)
+                        process_start = time.perf_counter()
+                        try:
+                            # 现在处理数据
+                            status, content_length, chunks_number, msg = await process_data(retriever, milvus_kb,
+                                                                                            mysql_client,
+                                                                                            file_info, time_record)
 
-                        insert_logger.info('time_record: ' + json.dumps(time_record, ensure_ascii=False))
-                        # 更新文件处理后的状态和相关信息
-                        await cur.execute(
-                            "UPDATE File SET status=%s, content_length=%s, chunks_number=%s, msg=%s WHERE id=%s",
-                            (status, content_length, chunks_number, msg, file_info[0]))
-                        await conn.commit()
-                        insert_logger.info(f"UPDATE FILE: {timestamp}, {file_id}, {file_name}, {status}")
-                        sleep_time = 0.1
+                            duration_ms = (time.perf_counter() - process_start) * 1000
+                            if status == 'green':
+                                s_insert_logger.stage_success(Stage.FILE_UPLOAD, "file upload success", duration_ms=duration_ms)
+                            else:
+                                s_insert_logger.stage_fail(Stage.FILE_UPLOAD, f"file upload failed: {msg}", duration_ms=duration_ms)
+
+                            insert_logger.info('time_record: ' + json.dumps(time_record, ensure_ascii=False))
+                            # 更新文件处理后的状态和相关信息
+                            await cur.execute(
+                                "UPDATE File SET status=%s, content_length=%s, chunks_number=%s, msg=%s WHERE id=%s",
+                                (status, content_length, chunks_number, msg, file_info[0]))
+                            await conn.commit()
+                            insert_logger.info(f"UPDATE FILE: {timestamp}, {file_id}, {file_name}, {status}")
+                            sleep_time = 0.1
+                        except Exception as process_e:
+                            duration_ms = (time.perf_counter() - process_start) * 1000
+                            s_insert_logger.stage_fail(Stage.FILE_UPLOAD, f"file upload exception: {str(process_e)}", error=process_e, duration_ms=duration_ms)
+                            raise
+                        finally:
+                            reset_context()
                     else:
                         await conn.commit()
         except Exception as e:

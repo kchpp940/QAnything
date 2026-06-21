@@ -1,7 +1,8 @@
 from qanything_kernel.configs.model_config import (MYSQL_HOST_LOCAL, MYSQL_PORT_LOCAL, MYSQL_USER_LOCAL,
                                                    MYSQL_PASSWORD_LOCAL,
                                                    MYSQL_DATABASE_LOCAL, KB_SUFFIX, MILVUS_HOST_LOCAL)
-from qanything_kernel.utils.custom_log import debug_logger, insert_logger
+from qanything_kernel.utils.custom_log import debug_logger, insert_logger, s_debug_logger
+from qanything_kernel.utils.request_context import set_context, Stage
 import mysql.connector
 from mysql.connector import pooling
 import json
@@ -61,6 +62,7 @@ class KnowledgeBaseManager:
         cnx.close()
 
     def execute_query_(self, query, params, commit=False, fetch=False, check=False, user_dict=False):
+        set_context(stage=Stage.DB_OPERATION)
         try:
             conn = self.cnxpool.get_connection()
             self.used_cnx += 1
@@ -68,8 +70,19 @@ class KnowledgeBaseManager:
             if self.free_cnx < 4:
                 debug_logger.info("获取连接成功，当前连接池状态：空闲连接数 {}，已使用连接数 {}".format(
                     self.free_cnx, self.used_cnx))
+                s_debug_logger.warning("MySQL connection pool low",
+                                       stage=Stage.DB_OPERATION,
+                                       free_cnx=self.free_cnx,
+                                       used_cnx=self.used_cnx,
+                                       pool_size=self.cnxpool.pool_size)
         except MySQLError as err:
             debug_logger.error("从连接池获取连接失败：{}".format(err))
+            s_debug_logger.exception("MySQL get connection from pool failed",
+                                     error=err,
+                                     stage=Stage.DB_OPERATION,
+                                     error_category="db_error",
+                                     free_cnx=self.free_cnx,
+                                     used_cnx=self.used_cnx)
             return None
 
         result = None
@@ -93,6 +106,13 @@ class KnowledgeBaseManager:
                 debug_logger.info(f"Index already exists (this is okay): {query}")
             else:
                 debug_logger.error("执行数据库操作失败：{}，SQL：{}".format(err, query))
+            s_debug_logger.exception("MySQL query execution failed",
+                                     error=err,
+                                     stage=Stage.DB_OPERATION,
+                                     error_category="db_error",
+                                     mysql_errno=err.errno,
+                                     sql_query=query,
+                                     sql_params=params)
             if commit:
                 conn.rollback()
         finally:
@@ -104,6 +124,11 @@ class KnowledgeBaseManager:
             if self.free_cnx <= 4:
                 debug_logger.info("连接关闭，返回连接池。当前连接池状态：空闲连接数 {}，已使用连接数 {}".format(
                     self.free_cnx, self.used_cnx))
+                s_debug_logger.info("MySQL connection returned to pool",
+                                    stage=Stage.DB_OPERATION,
+                                    free_cnx=self.free_cnx,
+                                    used_cnx=self.used_cnx,
+                                    pool_size=self.cnxpool.pool_size)
 
         return result
 

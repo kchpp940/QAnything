@@ -2,7 +2,9 @@ import shutil
 
 from qanything_kernel.core.local_file import LocalFile
 from qanything_kernel.core.local_doc_qa import LocalDocQA
-from qanything_kernel.utils.custom_log import debug_logger, qa_logger
+from qanything_kernel.utils.custom_log import (debug_logger, qa_logger,
+                                              s_debug_logger, s_qa_logger)
+from qanything_kernel.utils.request_context import set_context, update_extra, Stage
 from qanything_kernel.configs.model_config import (BOT_DESC, BOT_IMAGE, BOT_PROMPT, BOT_WELCOME,
                                                    DEFAULT_PARENT_CHUNK_SIZE, MAX_CHARS, VECTOR_SEARCH_TOP_K,
                                                    UPLOAD_ROOT_PATH, IMAGES_ROOT_PATH)
@@ -62,11 +64,14 @@ def sync_function_with_args(arg1, arg2):
 
 @get_time_async
 async def new_knowledge_base(req: request):
+    s_debug_logger.stage_start(Stage.KB_OPERATION, "new_knowledge_base start")
     local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
     user_id = safe_get(req, 'user_id')
     user_info = safe_get(req, 'user_info', "1234")
     passed, msg = check_user_id_and_user_info(user_id, user_info)
     if not passed:
+        s_debug_logger.stage_fail(Stage.KB_OPERATION, "new_knowledge_base validation failed",
+                                  error=ValueError(msg), kb_name=safe_get(req, 'kb_name'))
         return sanic_json({"code": 2001, "msg": msg})
     user_id = user_id + '__' + user_info
     debug_logger.info("new_knowledge_base %s", user_id)
@@ -80,16 +85,24 @@ async def new_knowledge_base(req: request):
     if is_quick:
         kb_id += "_QUICK"
 
+    set_context(user_id=user_id, kb_id=kb_id, kb_name=kb_name, is_quick=is_quick)
+
     if kb_id[:2] != 'KB':
+        s_debug_logger.stage_fail(Stage.KB_OPERATION, "invalid kb_id prefix",
+                                  error=ValueError(f"kb_id must start with 'KB', got {kb_id}"))
         return sanic_json({"code": 2001, "msg": "fail, kb_id must start with 'KB'"})
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, [kb_id])
     if not not_exist_kb_ids:
+        s_debug_logger.stage_fail(Stage.KB_OPERATION, "kb already exists",
+                                  error=ValueError(f"kb {kb_id} already exist"))
         return sanic_json({"code": 2001, "msg": "fail, knowledge Base {} already exist".format(kb_id)})
 
     # local_doc_qa.create_milvus_collection(user_id, kb_id, kb_name)
     local_doc_qa.milvus_summary.new_milvus_base(kb_id, user_id, kb_name)
     now = datetime.now()
     timestamp = now.strftime("%Y%m%d%H%M")
+    s_debug_logger.stage_success(Stage.KB_OPERATION, "new_knowledge_base success",
+                                 kb_id=kb_id, kb_name=kb_name)
     return sanic_json({"code": 200, "msg": "success create knowledge base {}".format(kb_id),
                        "data": {"kb_id": kb_id, "kb_name": kb_name, "timestamp": timestamp}})
 
@@ -180,11 +193,14 @@ async def upload_weblink(req: request):
 
 @get_time_async
 async def upload_files(req: request):
+    s_debug_logger.stage_start(Stage.FILE_UPLOAD, "upload_files start")
     local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
     user_id = safe_get(req, 'user_id')
     user_info = safe_get(req, 'user_info', "1234")
     passed, msg = check_user_id_and_user_info(user_id, user_info)
     if not passed:
+        s_debug_logger.stage_fail(Stage.FILE_UPLOAD, "upload_files validation failed",
+                                  error=ValueError(msg))
         return sanic_json({"code": 2001, "msg": msg})
     user_id = user_id + '__' + user_info
     debug_logger.info("upload_files %s", user_id)
@@ -196,21 +212,32 @@ async def upload_files(req: request):
     debug_logger.info("mode: %s", mode)
     chunk_size = safe_get(req, 'chunk_size', default=DEFAULT_PARENT_CHUNK_SIZE)
     debug_logger.info("chunk_size: %s", chunk_size)
+
+    set_context(user_id=user_id, kb_id=kb_id, mode=mode, chunk_size=chunk_size)
+
     use_local_file = safe_get(req, 'use_local_file', 'false')
     if use_local_file == 'true':
         files = read_files_with_extensions()
     else:
         files = req.files.getlist('files')
-    debug_logger.info(f"{user_id} upload files number: {len(files)}")
+    total_files = len(files)
+    debug_logger.info(f"{user_id} upload files number: {total_files}")
+    update_extra(total_files=total_files)
     not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, [kb_id])
     if not_exist_kb_ids:
         msg = "invalid kb_id: {}, please check...".format(not_exist_kb_ids)
+        s_debug_logger.stage_fail(Stage.FILE_UPLOAD, msg,
+                                  error=ValueError(msg), kb_ids_invalid=not_exist_kb_ids)
         return sanic_json({"code": 2001, "msg": msg, "data": [{}]})
 
     exist_files = local_doc_qa.milvus_summary.get_files(user_id, kb_id)
     if len(exist_files) + len(files) > 10000:
-        return sanic_json({"code": 2002,
-                           "msg": f"fail, exist files is {len(exist_files)}, upload files is {len(files)}, total files is {len(exist_files) + len(files)}, max length is 10000."})
+        msg = (f"fail, exist files is {len(exist_files)}, upload files is {len(files)}, "
+               f"total files is {len(exist_files) + len(files)}, max length is 10000.")
+        s_debug_logger.stage_fail(Stage.FILE_UPLOAD, "too many files",
+                                  error=ValueError(msg),
+                                  exist_files=len(exist_files), new_files=len(files))
+        return sanic_json({"code": 2002, "msg": msg})
 
     data = []
     local_files = []
@@ -244,6 +271,7 @@ async def upload_files(req: request):
     timestamp = now.strftime("%Y%m%d%H%M")
 
     failed_files = []
+    file_ids_created = []
     for file, file_name in zip(files, file_names):
         if file_name in exist_file_names:
             continue
@@ -259,20 +287,28 @@ async def upload_files(req: request):
         file_size = len(local_file.file_content)
         file_location = local_file.file_location
         local_files.append(local_file)
-        msg = local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
-                                                   chunk_size, timestamp)
-        debug_logger.info(f"{file_name}, {file_id}, {msg}")
+        add_msg = local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
+                                                       chunk_size, timestamp)
+        debug_logger.info(f"{file_name}, {file_id}, {add_msg}")
+        file_ids_created.append(file_id)
         data.append(
             {"file_id": file_id, "file_name": file_name, "status": "gray", "bytes": len(local_file.file_content),
              "timestamp": timestamp, "estimated_chars": chars})
 
     # asyncio.create_task(local_doc_qa.insert_files_to_milvus(user_id, kb_id, local_files))
+    success_count = len(file_ids_created)
     if exist_file_names:
         msg = f'warning，当前的mode是soft，无法上传同名文件{exist_file_names}，如果想强制上传同名文件，请设置mode：strong'
     elif failed_files:
         msg = f"warning, {failed_files} chars is too much, max characters length is {MAX_CHARS}, skip upload."
     else:
         msg = "success，后台正在飞速上传文件，请耐心等待"
+    s_debug_logger.stage_success(Stage.FILE_UPLOAD, "upload_files submit success",
+                                 success_count=success_count,
+                                 skipped_count=len(exist_file_names),
+                                 failed_count=len(failed_files),
+                                 total_files=total_files,
+                                 file_ids=file_ids_created)
     return sanic_json({"code": 200, "msg": msg, "data": data})
 
 
@@ -642,12 +678,15 @@ async def clean_files_by_status(req: request):
 
 @get_time_async
 async def local_doc_chat(req: request):
+    s_debug_logger.stage_start(Stage.LLM_GENERATE if False else Stage.RETRIEVAL, "local_doc_chat start")
     preprocess_start = time.perf_counter()
     local_doc_qa: LocalDocQA = req.app.ctx.local_doc_qa
     user_id = safe_get(req, 'user_id')
     user_info = safe_get(req, 'user_info', "1234")
     passed, msg = check_user_id_and_user_info(user_id, user_info)
     if not passed:
+        s_debug_logger.stage_fail(Stage.RETRIEVAL, "local_doc_chat validation failed",
+                                  error=ValueError(msg))
         return sanic_json({"code": 2001, "msg": msg})
     # local_cluster = get_milvus_cluster_by_user_info(user_info)
     user_id = user_id + '__' + user_info
@@ -655,16 +694,23 @@ async def local_doc_chat(req: request):
     debug_logger.info('local_doc_chat %s', user_id)
     debug_logger.info('user_info %s', user_info)
     bot_id = safe_get(req, 'bot_id')
+    kb_ids_parsed = None
     if bot_id:
         if not local_doc_qa.milvus_summary.check_bot_is_exist(bot_id):
+            s_debug_logger.stage_fail(Stage.BOT_OPERATION, "bot not found",
+                                      error=ValueError(f"bot {bot_id} not found"))
             return sanic_json({"code": 2003, "msg": "fail, Bot {} not found".format(bot_id)})
         bot_info = local_doc_qa.milvus_summary.get_bot(None, bot_id)[0]
         bot_id, bot_name, desc, image, prompt, welcome, kb_ids_str, upload_time, user_id, llm_setting = bot_info
-        kb_ids = kb_ids_str.split(',')
-        if not kb_ids:
+        kb_ids_parsed = kb_ids_str.split(',')
+        if not kb_ids_parsed:
+            s_debug_logger.stage_fail(Stage.BOT_OPERATION, "bot unbound kb",
+                                      error=ValueError(f"bot {bot_id} unbound knowledge base"))
             return sanic_json({"code": 2003, "msg": "fail, Bot {} unbound knowledge base.".format(bot_id)})
         custom_prompt = prompt
         if not llm_setting:
+            s_debug_logger.stage_fail(Stage.BOT_OPERATION, "bot llm_setting empty",
+                                      error=ValueError(f"bot {bot_id} llm_setting is empty"))
             return sanic_json({"code": 2003, "msg": "fail, Bot {} llm_setting is empty.".format(bot_id)})
         llm_setting = json.loads(llm_setting)
         rerank = llm_setting.get('rerank', True)
@@ -681,7 +727,7 @@ async def local_doc_chat(req: request):
         hybrid_search = llm_setting.get('hybrid_search', False)
         chunk_size = llm_setting.get('chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
     else:
-        kb_ids = safe_get(req, 'kb_ids')
+        kb_ids_parsed = safe_get(req, 'kb_ids')
         custom_prompt = safe_get(req, 'custom_prompt', None)
         rerank = safe_get(req, 'rerank', default=True)
         only_need_search_results = safe_get(req, 'only_need_search_results', False)
@@ -701,10 +747,16 @@ async def local_doc_chat(req: request):
 
         hybrid_search = safe_get(req, 'hybrid_search', False)
         chunk_size = safe_get(req, 'chunk_size', DEFAULT_PARENT_CHUNK_SIZE)
+    kb_ids = kb_ids_parsed
+
+    set_context(user_id=user_id, bot_id=bot_id, model=model, streaming=safe_get(req, 'streaming', False),
+                rerank=rerank, hybrid_search=hybrid_search, top_k=top_k)
 
     debug_logger.info('rerank %s', rerank)
 
     if len(kb_ids) > 20:
+        s_debug_logger.stage_fail(Stage.RETRIEVAL, "kb_ids too many",
+                                  error=ValueError(f"kb_ids length {len(kb_ids)} > 20"))
         return sanic_json({"code": 2005, "msg": "fail, kb_ids length should less than or equal to 20"})
     kb_ids = [correct_kb_id(kb_id) for kb_id in kb_ids]
     question = safe_get(req, 'question')
@@ -712,6 +764,8 @@ async def local_doc_chat(req: request):
     history = safe_get(req, 'history', [])
 
     if top_k > 100:
+        s_debug_logger.stage_fail(Stage.RETRIEVAL, "top_k too large",
+                                  error=ValueError(f"top_k {top_k} > 100"))
         return sanic_json({"code": 2003, "msg": "fail, top_k should less than or equal to 100"})
 
     missing_params = []
@@ -732,12 +786,20 @@ async def local_doc_chat(req: request):
 
     if missing_params:
         missing_params_str = " and ".join(missing_params) if len(missing_params) > 1 else missing_params[0]
+        s_debug_logger.stage_fail(Stage.RETRIEVAL, "missing params",
+                                  error=ValueError(f"missing params: {missing_params_str}"),
+                                  missing_params=missing_params)
         return sanic_json({"code": 2003, "msg": f"fail, {missing_params_str} is required"})
 
     if only_need_search_results and streaming:
+        s_debug_logger.stage_fail(Stage.RETRIEVAL, "conflicting params",
+                                  error=ValueError("only_need_search_results and streaming can't both be True"))
         return sanic_json(
             {"code": 2006, "msg": "fail, only_need_search_results and streaming can't be True at the same time"})
     request_source = safe_get(req, 'source', 'unknown')
+    update_extra(request_source=request_source, kb_ids_count=len(kb_ids),
+                 question_length=len(question) if question else 0,
+                 history_length=len(history) if history else 0)
 
     debug_logger.info("history: %s ", history)
     debug_logger.info("question: %s", question)
@@ -763,6 +825,9 @@ async def local_doc_chat(req: request):
     if kb_ids:
         not_exist_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, kb_ids)
         if not_exist_kb_ids:
+            s_debug_logger.stage_fail(Stage.RETRIEVAL, "kb not found",
+                                      error=ValueError(f"kb not found: {not_exist_kb_ids}"),
+                                      not_exist_kb_ids=not_exist_kb_ids)
             return sanic_json({"code": 2003, "msg": "fail, knowledge Base {} not found".format(not_exist_kb_ids)})
         faq_kb_ids = [kb + '_FAQ' for kb in kb_ids]
         not_exist_faq_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, faq_kb_ids)
@@ -774,9 +839,11 @@ async def local_doc_chat(req: request):
     for kb_id in kb_ids:
         file_infos.extend(local_doc_qa.milvus_summary.get_files(user_id, kb_id))
     valid_files = [fi for fi in file_infos if fi[2] == 'green']
-    if len(valid_files) == 0:
+    valid_files_count = len(valid_files)
+    if valid_files_count == 0:
         debug_logger.info("valid_files is empty, use only chat mode.")
         kb_ids = []
+    update_extra(valid_files_count=valid_files_count)
     preprocess_end = time.perf_counter()
     time_record['preprocess'] = round(preprocess_end - preprocess_start, 2)
     # 获取格式为'2021-08-01 00:00:00'的时间戳
@@ -831,6 +898,22 @@ async def local_doc_chat(req: request):
                                  'source_documents': source_documents, 'bot_id': bot_id}
                     local_doc_qa.milvus_summary.add_qalog(**chat_data)
                     qa_logger.info("chat_data: %s", chat_data)
+                    s_qa_logger.info("stream chat completed",
+                                     stage=Stage.LLM_GENERATE,
+                                     status="success",
+                                     duration_ms=time_record.get('chat_completed', 0) * 1000,
+                                     model=model,
+                                     tokens_per_second=time_record.get('tokens_per_second', 0),
+                                     retrieval_docs_count=len(retrieval_documents),
+                                     source_docs_count=len(source_documents),
+                                     result_length=len(result))
+                    s_debug_logger.stage_success(Stage.LLM_GENERATE, "stream chat success",
+                                                 duration_ms=time_record.get('chat_completed', 0) * 1000,
+                                                 model=model,
+                                                 tokens_per_second=time_record.get('tokens_per_second', 0),
+                                                 retrieval_docs_count=len(retrieval_documents),
+                                                 source_docs_count=len(source_documents),
+                                                 time_record=formatted_time_record)
                     debug_logger.info("response: %s", chat_data['result'])
                     stream_res = {
                         "code": 200,
@@ -849,6 +932,10 @@ async def local_doc_chat(req: request):
                     time_record['rollback_length'] = resp.get('rollback_length', 0)
                     if 'first_return' not in time_record:
                         time_record['first_return'] = round(time.perf_counter() - preprocess_start, 2)
+                        s_debug_logger.info("first token returned",
+                                            stage=Stage.LLM_GENERATE,
+                                            status="first_token",
+                                            duration_ms=time_record['first_return'] * 1000)
                     chunk_js = json.loads(chunk_str)
                     delta_answer = chunk_js["answer"]
                     stream_res = {
@@ -892,8 +979,11 @@ async def local_doc_chat(req: request):
                                                                            ):
             pass
         if only_need_search_results:
+            src_docs = format_source_documents(resp)
+            s_debug_logger.stage_success(Stage.RETRIEVAL, "search only completed",
+                                         source_docs_count=len(src_docs))
             return sanic_json(
-                {"code": 200, "question": question, "source_documents": format_source_documents(resp)})
+                {"code": 200, "question": question, "source_documents": src_docs})
         retrieval_documents = format_source_documents(resp["retrieval_documents"])
         source_documents = format_source_documents(resp["source_documents"])
         formatted_time_record = format_time_record(time_record)
@@ -904,6 +994,29 @@ async def local_doc_chat(req: request):
                      'source_documents': source_documents, 'bot_id': bot_id}
         local_doc_qa.milvus_summary.add_qalog(**chat_data)
         qa_logger.info("chat_data: %s", chat_data)
+        result_text = resp['result']
+        total_duration_ms = time_record.get('chat_completed', 0) * 1000 if 'chat_completed' in time_record else (
+            (time_record.get('llm_completed', 0) + time_record.get('retriever_search', 0) +
+             time_record.get('preprocess', 0)) * 1000)
+        tokens_per_second = 0
+        if time_record.get('llm_completed', 0) > 0 and result_text:
+            tokens_per_second = round(len(result_text) / time_record['llm_completed'], 2)
+        s_qa_logger.info("non-stream chat completed",
+                         stage=Stage.LLM_GENERATE,
+                         status="success",
+                         duration_ms=total_duration_ms,
+                         model=model,
+                         tokens_per_second=tokens_per_second,
+                         retrieval_docs_count=len(retrieval_documents),
+                         source_docs_count=len(source_documents),
+                         result_length=len(result_text))
+        s_debug_logger.stage_success(Stage.LLM_GENERATE, "non-stream chat success",
+                                     duration_ms=total_duration_ms,
+                                     model=model,
+                                     tokens_per_second=tokens_per_second,
+                                     retrieval_docs_count=len(retrieval_documents),
+                                     source_docs_count=len(source_documents),
+                                     time_record=formatted_time_record)
         debug_logger.info("response: %s", chat_data['result'])
         return sanic_json({"code": 200, "msg": "success no stream chat", "question": question,
                            "response": resp["result"], "model": model,

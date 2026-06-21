@@ -19,7 +19,8 @@ from qanything_kernel.core.retriever.parent_retriever import ParentRetriever
 from qanything_kernel.utils.general_utils import (get_time, clear_string, get_time_async, num_tokens,
                                                   cosine_similarity, clear_string_is_equal, num_tokens_embed,
                                                   num_tokens_rerank, deduplicate_documents, replace_image_references)
-from qanything_kernel.utils.custom_log import debug_logger, qa_logger, rerank_logger
+from qanything_kernel.utils.custom_log import debug_logger, qa_logger, rerank_logger, s_debug_logger, s_rerank_logger
+from qanything_kernel.utils.request_context import set_context, update_extra, Stage
 from qanything_kernel.core.chains.condense_q_chain import RewriteQuestionChain
 from qanything_kernel.core.tools.web_search_tool import duckduckgo_search
 import copy
@@ -76,26 +77,41 @@ class LocalDocQA:
 
     @get_time
     def get_web_search(self, queries, top_k):
-        query = queries[0]
-        web_content, web_documents = duckduckgo_search(query, top_k)
-        source_documents = []
-        for idx, doc in enumerate(web_documents):
-            if 'title' not in doc.metadata:
-                continue
-            doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
-            debug_logger.info(f"web search doc: {doc.metadata}")
-            file_name = re.sub(r'[\uFF01-\uFF5E\u3000-\u303F]', '', doc.metadata['title'])
-            doc.metadata['file_name'] = file_name + '.web'
-            doc.metadata['file_url'] = doc.metadata['source']
-            doc.metadata['embed_version'] = self.embeddings.embed_version
-            doc.metadata['score'] = 1 - (idx / len(web_documents))
-            doc.metadata['file_id'] = 'websearch' + str(idx)
-            doc.metadata['headers'] = {"新闻标题": file_name}
-            if 'description' in doc.metadata:
-                desc_doc = Document(page_content=doc.metadata['description'], metadata=doc.metadata)
-                source_documents.append(desc_doc)
-            source_documents.append(doc)  # 先插入description，再插入原文
-        return web_content, source_documents
+        s_debug_logger.stage_start(Stage.RETRIEVAL, "Start web search", sub_stage="web_search", queries=queries, top_k=top_k)
+        method_start = time.perf_counter()
+        try:
+            query = queries[0]
+            web_content, web_documents = duckduckgo_search(query, top_k)
+            source_documents = []
+            for idx, doc in enumerate(web_documents):
+                if 'title' not in doc.metadata:
+                    continue
+                doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
+                debug_logger.info(f"web search doc: {doc.metadata}")
+                file_name = re.sub(r'[\uFF01-\uFF5E\u3000-\u303F]', '', doc.metadata['title'])
+                doc.metadata['file_name'] = file_name + '.web'
+                doc.metadata['file_url'] = doc.metadata['source']
+                doc.metadata['embed_version'] = self.embeddings.embed_version
+                doc.metadata['score'] = 1 - (idx / len(web_documents))
+                doc.metadata['file_id'] = 'websearch' + str(idx)
+                doc.metadata['headers'] = {"新闻标题": file_name}
+                if 'description' in doc.metadata:
+                    desc_doc = Document(page_content=doc.metadata['description'], metadata=doc.metadata)
+                    source_documents.append(desc_doc)
+                source_documents.append(doc)  # 先插入description，再插入原文
+            duration_ms = (time.perf_counter() - method_start) * 1000
+            s_debug_logger.stage_success(Stage.RETRIEVAL, "Web search succeeded",
+                                          sub_stage="web_search",
+                                          duration_ms=duration_ms,
+                                          result_count=len(source_documents))
+            return web_content, source_documents
+        except Exception as e:
+            duration_ms = (time.perf_counter() - method_start) * 1000
+            s_debug_logger.stage_fail(Stage.RETRIEVAL, "Web search failed",
+                                       sub_stage="web_search",
+                                       error=e,
+                                       duration_ms=duration_ms)
+            raise
 
     def web_page_search(self, query, top_k=None):
         # 防止get_web_search调用失败，需要try catch
@@ -103,40 +119,55 @@ class LocalDocQA:
             web_content, source_documents = self.get_web_search([query], top_k)
         except Exception as e:
             debug_logger.error(f"web search error: {traceback.format_exc()}")
+            s_debug_logger.exception("web_page_search exception", error=e, query=query, top_k=top_k)
             return []
 
         return source_documents
 
     @get_time_async
     async def get_source_documents(self, query, retriever: ParentRetriever, kb_ids, time_record, hybrid_search, top_k):
-        source_documents = []
-        start_time = time.perf_counter()
-        query_docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
-                                                             hybrid_search=hybrid_search, top_k=top_k)
-        if len(query_docs) == 0:
-            debug_logger.warning("MILVUS SEARCH ERROR, RESTARTING MILVUS CLIENT!")
-            retriever.vectorstore_client = VectorStoreMilvusClient()
-            debug_logger.warning("MILVUS CLIENT RESTARTED!")
+        s_debug_logger.stage_start(Stage.RETRIEVAL, "Start retrieval", query=query, kb_ids=kb_ids, top_k=top_k, hybrid_search=hybrid_search)
+        method_start = time.perf_counter()
+        try:
+            source_documents = []
+            start_time = time.perf_counter()
             query_docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
-                                                                    hybrid_search=hybrid_search, top_k=top_k)
-        end_time = time.perf_counter()
-        time_record['retriever_search'] = round(end_time - start_time, 2)
-        debug_logger.info(f"retriever_search time: {time_record['retriever_search']}s")
-        # debug_logger.info(f"query_docs num: {len(query_docs)}, query_docs: {query_docs}")
-        for idx, doc in enumerate(query_docs):
-            if retriever.mysql_client.is_deleted_file(doc.metadata['file_id']):
-                debug_logger.warning(f"file_id: {doc.metadata['file_id']} is deleted")
-                continue
-            doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
-            doc.metadata['embed_version'] = self.embeddings.embed_version
-            if 'score' not in doc.metadata:
-                doc.metadata['score'] = 1 - (idx / len(query_docs))  # TODO 这个score怎么获取呢
-            source_documents.append(doc)
-        debug_logger.info(f"embed scores: {[doc.metadata['score'] for doc in source_documents]}")
-        # if cosine_thresh:
-        #     source_documents = [item for item in source_documents if float(item.metadata['score']) > cosine_thresh]
+                                                                 hybrid_search=hybrid_search, top_k=top_k)
+            if len(query_docs) == 0:
+                debug_logger.warning("MILVUS SEARCH ERROR, RESTARTING MILVUS CLIENT!")
+                retriever.vectorstore_client = VectorStoreMilvusClient()
+                debug_logger.warning("MILVUS CLIENT RESTARTED!")
+                query_docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
+                                                                        hybrid_search=hybrid_search, top_k=top_k)
+            end_time = time.perf_counter()
+            time_record['retriever_search'] = round(end_time - start_time, 2)
+            debug_logger.info(f"retriever_search time: {time_record['retriever_search']}s")
+            # debug_logger.info(f"query_docs num: {len(query_docs)}, query_docs: {query_docs}")
+            for idx, doc in enumerate(query_docs):
+                if retriever.mysql_client.is_deleted_file(doc.metadata['file_id']):
+                    debug_logger.warning(f"file_id: {doc.metadata['file_id']} is deleted")
+                    continue
+                doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
+                doc.metadata['embed_version'] = self.embeddings.embed_version
+                if 'score' not in doc.metadata:
+                    doc.metadata['score'] = 1 - (idx / len(query_docs))  # TODO 这个score怎么获取呢
+                source_documents.append(doc)
+            debug_logger.info(f"embed scores: {[doc.metadata['score'] for doc in source_documents]}")
+            # if cosine_thresh:
+            #     source_documents = [item for item in source_documents if float(item.metadata['score']) > cosine_thresh]
 
-        return source_documents
+            duration_ms = (time.perf_counter() - method_start) * 1000
+            s_debug_logger.stage_success(Stage.RETRIEVAL, "Retrieval succeeded",
+                                          duration_ms=duration_ms,
+                                          retriever_search_time_s=time_record['retriever_search'],
+                                          result_count=len(source_documents))
+            return source_documents
+        except Exception as e:
+            duration_ms = (time.perf_counter() - method_start) * 1000
+            s_debug_logger.stage_fail(Stage.RETRIEVAL, "Retrieval failed",
+                                       error=e,
+                                       duration_ms=duration_ms)
+            raise
 
     def reprocess_source_documents(self, custom_llm: OpenAILLM, query: str,
                                    source_docs: List[Document],

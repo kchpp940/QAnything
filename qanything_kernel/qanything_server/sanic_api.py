@@ -17,10 +17,14 @@ sys.path.append(root_dir)
 
 from handler import *
 from qanything_kernel.core.local_doc_qa import LocalDocQA
-from qanything_kernel.utils.custom_log import debug_logger, qa_logger
+from qanything_kernel.utils.custom_log import debug_logger, qa_logger, s_debug_logger
+from qanything_kernel.utils.request_context import (init_context, set_context, reset_context,
+                                                  get_context, generate_request_id, Stage)
+from qanything_kernel.utils.general_utils import safe_get
 from sanic.worker.manager import WorkerManager
 from sanic import Sanic
 from sanic_ext import Extend
+from sanic.request import Request
 import time
 import argparse
 import webbrowser
@@ -44,6 +48,94 @@ app.config.REQUEST_MAX_SIZE = 128 * 1024 * 1024
 
 # 将 /qanything 路径映射到 ./dist/qanything 文件夹，并指定路由名称
 app.static('/qanything/', 'qanything_kernel/qanything_server/dist/qanything/', name='qanything', index="index.html")
+
+
+def _extract_api_name(path: str) -> str:
+    if path.startswith('/api/local_doc_qa/'):
+        return path.replace('/api/local_doc_qa/', '')
+    if path.startswith('/api/'):
+        return path.replace('/api/', '')
+    return path.strip('/') or 'root'
+
+
+def _extract_request_ids(req: Request) -> dict:
+    ids = {}
+    try:
+        user_id = safe_get(req, 'user_id')
+        if user_id:
+            user_info = safe_get(req, 'user_info', '1234')
+            ids['user_id'] = user_id + '__' + user_info
+    except Exception:
+        pass
+    for key in ['kb_id', 'file_id', 'bot_id']:
+        try:
+            val = safe_get(req, key)
+            if val:
+                ids[key] = val
+        except Exception:
+            pass
+    try:
+        kb_ids = safe_get(req, 'kb_ids')
+        if kb_ids and isinstance(kb_ids, list) and len(kb_ids) > 0:
+            ids.setdefault('kb_id', kb_ids[0])
+    except Exception:
+        pass
+    return ids
+
+
+@app.on_request
+async def on_request_start(req: Request):
+    try:
+        request_id = req.headers.get('X-Request-ID') or req.headers.get('X-Trace-ID') or generate_request_id()
+        api_name = _extract_api_name(req.path)
+        extra_ids = _extract_request_ids(req)
+
+        init_context(
+            request_id=request_id,
+            api_name=api_name,
+            method=req.method,
+            path=req.path,
+            client_ip=req.client_ip if req.client else None,
+            stage=Stage.REQUEST_RECEIVED,
+            **extra_ids
+        )
+
+        s_debug_logger.info(
+            "Request received",
+            stage=Stage.REQUEST_RECEIVED,
+            status="start",
+            api_name=api_name,
+            method=req.method,
+            path=req.path,
+            content_length=req.content_length,
+        )
+    except Exception as e:
+        debug_logger.error(f"on_request_start error: {e}")
+
+
+@app.on_response
+async def on_request_end(req: Request, response):
+    try:
+        ctx = get_context()
+        duration_ms = ctx.get('elapsed_ms', 0)
+        api_name = ctx.get('api_name', _extract_api_name(req.path))
+
+        set_context(stage=Stage.RESPONSE_SENT)
+        status_code = getattr(response, 'status', None)
+
+        s_debug_logger.info(
+            "Response sent",
+            stage=Stage.RESPONSE_SENT,
+            status="success" if status_code and status_code < 400 else "fail",
+            api_name=api_name,
+            status_code=status_code,
+            duration_ms=duration_ms,
+            response_size=len(response.body) if hasattr(response, 'body') else None,
+        )
+    except Exception as e:
+        debug_logger.error(f"on_request_end error: {e}")
+    finally:
+        reset_context()
 
 
 @app.before_server_start
