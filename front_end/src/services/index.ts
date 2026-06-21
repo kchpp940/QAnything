@@ -27,11 +27,7 @@ export default {
       ..._query,
     };
 
-    const {
-      getResponseHeader,
-      validateStatus = defaultValidateStatus,
-      ...others
-    } = option;
+    const { getResponseHeader, validateStatus = defaultValidateStatus, ...others } = option;
     const options = {
       method: 'get',
       url,
@@ -57,11 +53,7 @@ export default {
     } as any;
     const _url = `${apiBase}${baseUrl}`;
     const url = /http/.test(baseUrl) ? baseUrl : _url;
-    const {
-      getResponseHeader,
-      validateStatus = defaultValidateStatus,
-      ...others
-    } = option;
+    const { getResponseHeader, validateStatus = defaultValidateStatus, ...others } = option;
 
     const options = {
       method: 'post',

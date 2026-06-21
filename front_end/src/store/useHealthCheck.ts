@@ -89,9 +89,7 @@ export const useHealthCheck = defineStore('healthCheck', () => {
 
   const unhealthyServices = computed(() => {
     if (!healthStatus.value) return [];
-    return Object.values(healthStatus.value.dependencies).filter(
-      dep => dep.status !== 'healthy'
-    );
+    return Object.values(healthStatus.value.dependencies).filter(dep => dep.status !== 'healthy');
   });
 
   const criticalUnhealthy = computed(() => {

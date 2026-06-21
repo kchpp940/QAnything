@@ -1,0 +1,19 @@
+services:
+  elasticsearch:
+    command: >
+      /bin/bash -c "
+        mkdir -p /usr/share/elasticsearch/data /usr/share/elasticsearch/plugins &&
+        chown -R elasticsearch:elasticsearch /usr/share/elasticsearch &&
+        su elasticsearch -c '/usr/share/elasticsearch/bin/elasticsearch'
+      "
+
+  mysql:
+    image: docker.io/library/mysql:8.4
+
+  qanything_local:
+    image: xixihahaliu01/qanything-mac:v1.5.1
+    ports:
+      - "8777:8777"
+    environment:
+      - USER_IP=${USER_IP:-0.0.0.0}
+      - GATEWAY_IP=host.docker.internal

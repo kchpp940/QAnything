@@ -1,0 +1,17 @@
+services:
+  elasticsearch:
+    command: >
+      /bin/bash -c "
+        mkdir -p /usr/share/elasticsearch/data /usr/share/elasticsearch/plugins &&
+        chown -R elasticsearch:elasticsearch /usr/share/elasticsearch &&
+        su elasticsearch -c '/usr/share/elasticsearch/bin/elasticsearch'
+      "
+
+  qanything_local:
+    image: xixihahaliu01/qanything-linux:v1.5.1
+    network_mode: "host"
+    environment:
+      - NCCL_LAUNCH_MODE=PARALLEL
+      - GPUID=${GPUID:-0}
+      - USER_IP=${USER_IP:-0.0.0.0}
+      - Gateway_IP=${Gateway_IP:-0.0.0.0}
