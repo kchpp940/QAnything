@@ -1,9 +1,5 @@
-import type { IApiResponse } from './utils/types';
-
-export type { IApiResponse };
-
-export interface IAajxRes<T = any> extends IApiResponse<T> {
+export interface IAajxRes {
   msg: string;
   code: number;
-  data: T;
+  data: any;
 }

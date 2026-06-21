@@ -1,0 +1,12 @@
+# ============================================================
+# macOS 平台覆盖配置
+# 使用：docker compose -f docker-compose.yaml -f docker-compose.mac.yaml up -d
+# ============================================================
+
+services:
+  qanything_local:
+    image: ${QANYTHING_IMAGE_MAC:-xixihahaliu01/qanything-mac:v1.5.1}
+    ports:
+      - "${QANYTHING_PORT:-8777}:8777"
+    environment:
+      - GATEWAY_IP=${GATEWAY_IP:-host.docker.internal}

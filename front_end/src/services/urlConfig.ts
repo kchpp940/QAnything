@@ -7,18 +7,6 @@
  * @Description:
  */
 import { useUser } from '@/store/useUser';
-import {
-  adaptPaginatedResponse,
-  adaptKnowledgeFile,
-  adaptBotInfos,
-  adaptQARecords,
-  adaptBotInfo,
-  adaptChatResponse,
-  adaptDiagnosisRecord,
-  adaptDiagnosisRecords,
-  adaptDiagnosisResponse,
-} from '@/utils/responseAdapter';
-import type { IKnowledgeFile, IBotInfo, IQARecord, IChatResponse, IPaginatedResponse, IDiagnosisRecord, IDiagnosisResponse } from '@/utils/types';
 
 const { userInfo: localUserInfo } = useUser();
 enum EUrlType {
@@ -51,8 +39,6 @@ enum EUrlKey {
   getKbInfo = 'getKbInfo',
   getTags = 'getTags',
   updateTags = 'updateTags',
-  getRelatedQa = 'getRelatedQa',
-  getRandomQa = 'getRandomQa',
 }
 
 interface IUrlValueConfig {
@@ -60,10 +46,10 @@ interface IUrlValueConfig {
   url: string;
   showLoading?: boolean;
   loadingId?: string;
+  // errorToast?: boolean;//默认开启
   cancelRepeat?: boolean;
-  sign?: boolean;
+  sign?: boolean; // 是否开启签名
   param?: any;
-  adapter?: (data: any) => any;
 
   [key: string]: any;
 }
@@ -75,6 +61,7 @@ import services from '.';
 export const userId = 'user';
 export const userPhone = localUserInfo.phoneNumber;
 
+//ajax请求接口
 const urlConfig: IUrlConfig = {
   checkLogin: {
     type: EUrlType.GET,
@@ -163,7 +150,6 @@ const urlConfig: IUrlConfig = {
       user_info: userPhone,
       kb_id: '',
     },
-    adapter: (res: any) => adaptPaginatedResponse<IKnowledgeFile>(res.data, adaptKnowledgeFile),
   },
   // 创建Bot
   createBot: {
@@ -190,15 +176,6 @@ const urlConfig: IUrlConfig = {
     param: {
       user_id: userId,
       user_info: userPhone,
-    },
-    adapter: (res: any) => {
-      if (res && res.data) {
-        if (Array.isArray(res.data)) {
-          return adaptBotInfos(res.data);
-        }
-        return adaptBotInfo(res.data);
-      }
-      return adaptBotInfo(res);
     },
   },
   //删除Bot
@@ -263,7 +240,6 @@ const urlConfig: IUrlConfig = {
       user_id: userId,
       user_info: userPhone,
     },
-    adapter: (res: any) => adaptChatResponse(res.data || res),
   },
   // 检索qa日志
   getQAInfo: {
@@ -272,30 +248,6 @@ const urlConfig: IUrlConfig = {
     param: {
       user_id: userId,
       user_info: userPhone,
-    },
-    adapter: (res: any) => {
-      const rawData = res.data || res;
-
-      if (rawData.qa_infos_by_day || rawData.qaInfosByDay) {
-        return {
-          qaInfosByDay: rawData.qa_infos_by_day || rawData.qaInfosByDay || {},
-        };
-      }
-
-      const paginated = adaptPaginatedResponse<IQARecord>(rawData, adaptQARecord);
-
-      const rawQaList =
-        rawData.qaInfos || rawData.qa_infos || paginated.details || [];
-      paginated.qaInfos = Array.isArray(rawQaList) ? adaptQARecords(rawQaList) : [];
-
-      paginated.total =
-        rawData.total !== undefined
-          ? rawData.total
-          : rawData.total_count !== undefined
-            ? rawData.total_count
-            : paginated.total;
-
-      return paginated as IPaginatedResponse<IQARecord> & { qaInfos: IQARecord[] };
     },
   },
   // 获取所有知识库状态
@@ -323,34 +275,6 @@ const urlConfig: IUrlConfig = {
     param: {
       user_id: userId,
       user_info: userPhone,
-    },
-  },
-  // 诊断/溯源：获取相关 QA 记录
-  getRelatedQa: {
-    type: EUrlType.POST,
-    url: '/local_doc_qa/get_related_qa',
-    param: {
-      qa_id: '',
-    },
-    adapter: (res: any) => {
-      const rawData = res.data || res;
-      return adaptDiagnosisResponse(rawData);
-    },
-  },
-  // 获取随机 QA 记录（诊断用）
-  getRandomQa: {
-    type: EUrlType.POST,
-    url: '/local_doc_qa/get_random_qa',
-    param: {
-      limit: 10,
-    },
-    adapter: (res: any) => {
-      const rawData = res.data || res;
-      return {
-        totalUsers: rawData.total_users || rawData.totalUsers || 0,
-        totalQueries: rawData.total_queries || rawData.totalQueries || 0,
-        qaInfos: adaptDiagnosisRecords(rawData.qa_infos || rawData.qaInfos || []),
-      };
     },
   },
 };

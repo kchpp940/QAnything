@@ -1,15 +1,17 @@
-#networks:
-#  default:
-#    name: QAnything
+# ============================================================
+# QAnything Docker Compose 统一配置（基础文件）
+# 所有公共配置均通过环境变量驱动，变量默认值见 .env.example
+# 使用方式（由 run.sh 自动检测平台并加载对应覆盖文件
+# ============================================================
 
 services:
   elasticsearch:
     container_name: es-container-local
-    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.2
+    image: ${ES_IMAGE:-docker.elastic.co/elasticsearch/elasticsearch:8.13.2}
     user: root
     privileged: true
     ports:
-      - "9210:9200"
+      - "${ES_PORT:-9210}:9200"
     restart: on-failure
     environment:
       - discovery.type=single-node
@@ -32,7 +34,7 @@ services:
 
   etcd:
     container_name: milvus-etcd-local
-    image: quay.io/coreos/etcd:v3.5.5
+    image: ${ETCD_IMAGE:-quay.io/coreos/etcd:v3.5.5}
     environment:
       - ETCD_AUTO_COMPACTION_MODE=revision
       - ETCD_AUTO_COMPACTION_RETENTION=1000
@@ -49,13 +51,10 @@ services:
 
   minio:
     container_name: milvus-minio-local
-    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2023-03-20T20-16-18Z}
     environment:
-      MINIO_ACCESS_KEY: minioadmin
-      MINIO_SECRET_KEY: minioadmin
-    # ports:
-    #   - "9001:9001"
-    #       - "9000:9000"
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data
     command: minio server /minio_data --console-address ":9001"
@@ -67,7 +66,7 @@ services:
 
   standalone:
     container_name: milvus-standalone-local
-    image: milvusdb/milvus:v2.4.8
+    image: ${MILVUS_IMAGE:-milvusdb/milvus:v2.4.8}
     logging:
       driver: "json-file"
       options:
@@ -88,7 +87,7 @@ services:
       timeout: 20s
       retries: 3
     ports:
-      - "19540:19530"
+      - "${MILVUS_PORT:-19540}:19530"
     depends_on:
       - "etcd"
       - "minio"
@@ -96,29 +95,39 @@ services:
   mysql:
     container_name: mysql-container-local
     privileged: true
-    image: docker.io/library/mysql:8.4
+    image: ${MYSQL_IMAGE:-mysql:8.4}
     ports:
-      - "3316:3306"
+      - "${MYSQL_PORT:-3316}:3306"
     command: --max-connections=10000
     environment:
-      - MYSQL_ROOT_PASSWORD=123456
+      - MYSQL_ROOT_PASSWORD=${MYSQL_PASSWORD:-123456}
+      - MYSQL_DATABASE=${MYSQL_DATABASE:-qanything}
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/mysql:/var/lib/mysql
 
-
   qanything_local:
     container_name: qanything-container-local
-    image: xixihahaliu01/qanything-mac:v1.5.1
+    image: ${QANYTHING_IMAGE}
     command: /bin/bash -c "cd /workspace/QAnything && bash scripts/entrypoint.sh"
     privileged: true
     shm_size: '8gb'
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/:/workspace/QAnything/
-    ports:
-      - "8777:8777"
     environment:
+      - NCCL_LAUNCH_MODE=PARALLEL
+      - GPUID=${GPUID:--1}
       - USER_IP=${USER_IP:-0.0.0.0}
-      - GATEWAY_IP=host.docker.internal
+      - GATEWAY_IP
+      - MYSQL_HOST=mysql
+      - MYSQL_PORT=3306
+      - MILVUS_HOST=standalone
+      - MILVUS_PORT=19530
+      - ES_HOST=elasticsearch
+      - ES_PORT=9200
+      - EMBED_SERVICE_HOST=localhost
+      - RERANK_SERVICE_HOST=localhost
+      - OCR_SERVICE_HOST=localhost
+      - PDF_PARSER_SERVICE_HOST=localhost
     depends_on:
       standalone:
         condition: service_healthy
@@ -128,6 +137,3 @@ services:
         condition: service_healthy
     tty: true
     stdin_open: true
-
-
-

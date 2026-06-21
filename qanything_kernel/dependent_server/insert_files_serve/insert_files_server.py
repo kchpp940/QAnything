@@ -19,7 +19,8 @@ from qanything_kernel.connector.database.mysql.mysql_client import KnowledgeBase
 from qanything_kernel.core.retriever.elasticsearchstore import StoreElasticSearchClient
 from qanything_kernel.core.retriever.parent_retriever import ParentRetriever
 from qanything_kernel.configs.model_config import MYSQL_HOST_LOCAL, MYSQL_PORT_LOCAL, \
-    MYSQL_USER_LOCAL, MYSQL_PASSWORD_LOCAL, MYSQL_DATABASE_LOCAL, MAX_CHARS
+    MYSQL_USER_LOCAL, MYSQL_PASSWORD_LOCAL, MYSQL_DATABASE_LOCAL, MAX_CHARS, \
+    INSERT_FILES_SERVICE_PORT
 from sanic.worker.manager import WorkerManager
 import asyncio
 import traceback
@@ -32,9 +33,8 @@ import json
 WorkerManager.THRESHOLD = 6000
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--port', type=int, default=8110, help='port')
+parser.add_argument('--port', type=int, default=INSERT_FILES_SERVICE_PORT, help='port')
 parser.add_argument('--workers', type=int, default=4, help='workers')
-# 检查是否是local或online，不是则报错
 args = parser.parse_args()
 
 INSERT_WORKERS = args.workers

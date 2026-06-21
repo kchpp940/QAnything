@@ -160,12 +160,12 @@ export default defineConfig(({ mode }) => {
       cors: true,
       proxy: {
         '/local_doc_qa': {
-          target: 'https://qanything-dev-gpu214.inner.youdao.com/api',
+          target: env.VITE_DEV_PROXY_TARGET || 'http://localhost:8777',
           changeOrigin: true,
-          rewrite: path => path.replace(/^\/local_doc_qa/, '/local_doc_qa'),
+          rewrite: (path) => path.replace(/^\/local_doc_qa/, '/api/local_doc_qa'),
         },
         [env.VITE_APP_API_PREFIX]: {
-          target: env.VITE_APP_API_HOST,
+          target: env.VITE_DEV_PROXY_TARGET || 'http://localhost:8777',
           changeOrigin: true,
           secure: false,
         },

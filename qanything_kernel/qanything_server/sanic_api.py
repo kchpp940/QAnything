@@ -18,6 +18,7 @@ sys.path.append(root_dir)
 from handler import *
 from qanything_kernel.core.local_doc_qa import LocalDocQA
 from qanything_kernel.utils.custom_log import debug_logger, qa_logger
+from qanything_kernel.configs.model_config import QANYTHING_HOST, QANYTHING_PORT, QANYTHING_WORKERS
 from sanic.worker.manager import WorkerManager
 from sanic import Sanic
 from sanic_ext import Extend
@@ -27,12 +28,10 @@ import webbrowser
 
 WorkerManager.THRESHOLD = 6000
 
-# 接收外部参数mode
 parser = argparse.ArgumentParser()
-parser.add_argument('--host', type=str, default='0.0.0.0', help='host')
-parser.add_argument('--port', type=int, default=8777, help='port')
-parser.add_argument('--workers', type=int, default=4, help='workers')
-# 检查是否是local或online，不是则报错
+parser.add_argument('--host', type=str, default=QANYTHING_HOST, help='host')
+parser.add_argument('--port', type=int, default=QANYTHING_PORT, help='port')
+parser.add_argument('--workers', type=int, default=QANYTHING_WORKERS, help='workers')
 args = parser.parse_args()
 
 start_time = time.time()

@@ -16,7 +16,7 @@ import os
 from qanything_kernel.dependent_server.ocr_server.operators import *
 from qanything_kernel.dependent_server.ocr_server.postprocess import build_post_process
 from qanything_kernel.utils.general_utils import safe_get
-from qanything_kernel.configs.model_config import OCR_MODEL_PATH
+from qanything_kernel.configs.model_config import OCR_MODEL_PATH, OCR_SERVICE_PORT
 import numpy as np
 import onnxruntime as ort
 from sanic import Sanic, response
@@ -25,12 +25,10 @@ from sanic.response import json
 import base64
 import argparse
 
-# 接收外部参数mode
 parser = argparse.ArgumentParser()
-# mode必须是local或online
 parser.add_argument('--use_gpu', action="store_true", help='use gpu or not')
 parser.add_argument('--workers', type=int, default=1, help='workers')
-# 检查是否是local或online，不是则报错
+parser.add_argument('--port', type=int, default=OCR_SERVICE_PORT, help='server port')
 args = parser.parse_args()
 print("args:", args)
 
@@ -642,4 +640,4 @@ async def ocr_api(request: Request):
 
 
 if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=7001, workers=args.workers)
+    app.run(host="0.0.0.0", port=args.port, workers=args.workers)

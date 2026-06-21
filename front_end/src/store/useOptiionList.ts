@@ -11,7 +11,6 @@ import urlResquest from '@/services/urlConfig';
 import { formatDate, formatFileSize, resultControl } from '@/utils/utils';
 import { message } from 'ant-design-vue';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
-import type { IKnowledgeFile, IPaginatedResponse } from '@/utils/types';
 
 const { currentId } = storeToRefs(useKnowledgeBase());
 
@@ -108,7 +107,7 @@ export const useOptiionList = defineStore(
       if (timer.value) {
         clearTimeout(timer.value);
       }
-      const res: IPaginatedResponse<IKnowledgeFile> = await resultControl(
+      const res: any = await resultControl(
         // 接口的page_id为页码，page_limit为一页几个
         await urlResquest.fileList({
           kb_id: currentId.value,
@@ -123,7 +122,7 @@ export const useOptiionList = defineStore(
       });
 
       // 更新状态计数
-      Object.assign(totalStatus.value, res.statusCount);
+      Object.assign(totalStatus.value, res.status_count);
 
       setDataSource([]);
 
@@ -137,16 +136,16 @@ export const useOptiionList = defineStore(
         return JSON.parse(msg.toString());
       };
 
-      res?.details.forEach((item: IKnowledgeFile, index) => {
+      res?.details.forEach((item: any, index) => {
         dataSource.value.push({
-          key: item?.fileId,
+          key: item?.file_id,
           id: 10000 + index,
-          fileId: item?.fileId,
-          fileIdName: item?.fileName,
-          fileTag: (item as any)?.tags,
+          fileId: item?.file_id,
+          fileIdName: item?.file_name,
+          fileTag: item?.tags,
           status: item?.status,
           bytes: formatFileSize(item?.bytes || 0),
-          contentLength: item?.contentLength,
+          contentLength: item?.content_length,
           createtime: formatDate(item?.timestamp),
           remark: item?.status === 'gray' ? '' : computedRemark(item?.msg, item?.status),
         });
@@ -170,7 +169,7 @@ export const useOptiionList = defineStore(
     const getProgressDetails = () => {
       let timer = null;
       timer = setInterval(async () => {
-        const res: IPaginatedResponse<IKnowledgeFile> = await resultControl(
+        const res: any = await resultControl(
           // 接口的page_id为页码，page_limit为一页几个
           await urlResquest.fileList({
             kb_id: currentId.value,
@@ -184,7 +183,7 @@ export const useOptiionList = defineStore(
         });
 
         // 更新状态计数
-        Object.assign(totalStatus.value, res.statusCount);
+        Object.assign(totalStatus.value, res.status_count);
 
         // 设置一共几个文件
         setKbTotal(res.total);
@@ -203,7 +202,7 @@ export const useOptiionList = defineStore(
           clearTimeout(faqTimer.value);
         }
         setLoading(true);
-        const res: IPaginatedResponse<IKnowledgeFile> = await resultControl(
+        const res: any = await resultControl(
           await urlResquest.fileList({
             kb_id: currentId.value + '_FAQ',
             page_id: pageNum.value,
@@ -223,22 +222,22 @@ export const useOptiionList = defineStore(
           const i = res?.details.indexOf(item);
           faqList.value.push({
             id: 10000 + i,
-            faqId: item?.fileId,
+            faqId: item?.file_id,
             question: item?.question,
             answer: item?.answer,
             status: item?.status,
-            bytes: `${item?.contentLength}字符`,
+            bytes: `${item?.content_length}字符`,
             createtime: formatDate(item?.timestamp),
             picUrlList: [],
           });
           // 格式化图片为upload支持的结构
-          if ((item as any)?.picUrlList) {
-            await fetchImagesAsFiles((item as any)?.picUrlList)
+          if (item?.picUrlList) {
+            await fetchImagesAsFiles(item?.picUrlList)
               .then(files => {
                 // 在这里可以使用获取到的File对象数组
                 console.log('成功获取图片文件:', files);
                 // 进行赋值操作或其他处理
-                faqList.value[i].picUrlList = (item as any)?.picUrlList.map((img, index) => {
+                faqList.value[i].picUrlList = item?.picUrlList.map((img, index) => {
                   return {
                     uid: -index,
                     name: 'image',

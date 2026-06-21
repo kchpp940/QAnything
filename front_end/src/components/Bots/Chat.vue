@@ -3,14 +3,14 @@
     <div class="my-page">
       <div class="header">
         <img src="@/assets/bots/bot-avatar.png" alt="avatar" />
-        {{ adaptedBotInfo.botName }}
+        {{ botInfo.bot_name }}
       </div>
       <div id="chat" class="chat">
         <ul id="chat-ul" ref="scrollDom">
           <div class="ai">
             <div class="content">
               <img class="avatar" src="@/assets/home/ai-avatar.png" alt="头像" />
-              <p class="question-text" v-html="adaptedBotInfo.welcomeMessage"></p>
+              <p class="question-text" v-html="botInfo.welcome_message"></p>
             </div>
           </div>
           <li v-for="(item, index) in QA_List" :key="index">
@@ -73,50 +73,50 @@
                 </div>
                 <div v-show="showSourceIdxs.includes(index)" class="source-list">
                   <div
-                      v-for="(sourceItem, sourceIndex) in item.source"
-                      :key="sourceIndex"
-                      class="data-source"
-                    >
-                      <p v-show="sourceItem.fileName" class="control">
-                        <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
-                        <a
-                          v-if="sourceItem.fileId.startsWith('http')"
-                          :href="sourceItem.fileId"
-                          target="_blank"
-                        >
-                          {{ sourceItem.fileName }}
-                        </a>
-                        <span
-                          v-else
-                          :class="[
-                            'file',
-                            checkFileType(sourceItem.fileName) ? 'filename-active' : '',
-                          ]"
-                          @click="handleChatSource(sourceItem)"
-                        >
-                          {{ sourceItem.fileName }}
-                        </span>
-                        <SvgIcon
-                          v-show="sourceItem.showDetailDataSource"
-                          name="iconup"
-                          @click="hideDetail(item, sourceIndex)"
-                        />
-                        <SvgIcon
-                          v-show="!sourceItem.showDetailDataSource"
-                          name="icondown"
-                          @click="showDetail(item, sourceIndex)"
-                        />
-                      </p>
-                      <Transition name="sourceitem">
-                        <div v-show="sourceItem.showDetailDataSource" class="source-content">
-                          <HighLightMarkDown :content="sourceItem.content" />
-                          <p class="score">
-                            <span class="tips">{{ common.correlation }}</span>
-                            {{ sourceItem.score }}
-                          </p>
-                        </div>
-                      </Transition>
-                    </div>
+                    v-for="(sourceItem, sourceIndex) in item.source"
+                    :key="sourceIndex"
+                    class="data-source"
+                  >
+                    <p v-show="sourceItem.file_name" class="control">
+                      <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
+                      <a
+                        v-if="sourceItem.file_id.startsWith('http')"
+                        :href="sourceItem.file_id"
+                        target="_blank"
+                      >
+                        {{ sourceItem.file_name }}
+                      </a>
+                      <span
+                        v-else
+                        :class="[
+                          'file',
+                          checkFileType(sourceItem.file_name) ? 'filename-active' : '',
+                        ]"
+                        @click="handleChatSource(sourceItem)"
+                      >
+                        {{ sourceItem.file_name }}
+                      </span>
+                      <SvgIcon
+                        v-show="sourceItem.showDetailDataSource"
+                        name="iconup"
+                        @click="hideDetail(item, sourceIndex)"
+                      />
+                      <SvgIcon
+                        v-show="!sourceItem.showDetailDataSource"
+                        name="icondown"
+                        @click="showDetail(item, sourceIndex)"
+                      />
+                    </p>
+                    <Transition name="sourceitem">
+                      <div v-show="sourceItem.showDetailDataSource" class="source-content">
+                        <p v-html="sourceItem.content?.replaceAll('\n', '<br/>')"></p>
+                        <p class="score">
+                          <span class="tips">{{ common.correlation }}</span
+                          >{{ sourceItem.score }}
+                        </p>
+                      </div>
+                    </Transition>
+                  </div>
                 </div>
               </template>
               <div v-if="item.showTools" class="feed-back">
@@ -207,7 +207,7 @@
         </div>
       </div>
     </div>
-    <div v-if="!adaptedBotInfo.kbIds || !adaptedBotInfo.kbIds.length" class="mask">
+    <div v-if="!botInfo.kb_ids || !botInfo.kb_ids.length" class="mask">
       <img src="@/assets/bots/lock.png" alt="icon" />
       <p>{{ bots.bindKbtoPreview }}</p>
     </div>
@@ -217,14 +217,7 @@
 </template>
 <script lang="ts" setup>
 import { apiBase } from '@/services';
-import { IChatItem, IChatSetting } from '@/utils/types';
-import {
-  toAIChatItem,
-  toUserChatItem,
-  adaptChatResponse,
-  adaptBotInfo,
-  createChatStreamHandlers,
-} from '@/utils/responseAdapter';
+import { IChatItem } from '@/utils/types';
 import { useClipboard } from '@vueuse/core';
 import { message } from 'ant-design-vue';
 import SvgIcon from '../SvgIcon.vue';
@@ -239,7 +232,7 @@ import { getLanguage } from '@/language/index';
 import { useLanguage } from '@/store/useLanguage';
 import { userId, userPhone } from '@/services/urlConfig';
 import urlResquest from '@/services/urlConfig';
-import { resultControl, throttle } from '@/utils/utils';
+import { ChatInfoClass, resultControl, throttle } from '@/utils/utils';
 import { useChatSetting } from '@/store/useChatSetting';
 import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
@@ -259,8 +252,6 @@ const props = defineProps({
 
 const common = getLanguage().common;
 const bots = getLanguage().bots;
-
-const adaptedBotInfo = computed(() => adaptBotInfo(props.botInfo));
 
 const typewriter = new Typewriter((str: string) => {
   if (str) {
@@ -336,41 +327,29 @@ const myCopy = (item: IChatItem) => {
 };
 
 const addQuestion = q => {
-  QA_List.value.push(toUserChatItem(q));
+  QA_List.value.push({
+    question: q,
+    type: 'user',
+  });
   scrollBottom();
 };
 
 const addAnswer = (question: string) => {
-  const emptyChatResponse = {
+  QA_List.value.push({
+    answer: '',
     question,
-    response: '',
-    source_documents: [],
-    llm_setting: {
-      only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-    },
-    time_record: {
-      time_usage: {},
-      token_usage: {},
-    },
-    show_images: [],
-  };
-  const chatSetting = getChatSetting();
-  const aiItem = toAIChatItem(adaptChatResponse(emptyChatResponse), chatSetting);
-  aiItem.showTools = false;
-  aiItem.picList = undefined;
-  QA_List.value.push(aiItem);
+    onlySearch: chatSettingFormActive.value.capabilities.onlySearch,
+    type: 'ai',
+    copied: false,
+    like: false,
+    unlike: false,
+    source: [],
+    picList: null,
+    showTools: false,
+  });
 };
 
-const getChatSetting = (): IChatSetting => {
-  const { capabilities, ...rest } = chatSettingFormActive.value;
-  return {
-    ...rest,
-    rerank: capabilities.rerank,
-    hybridSearch: capabilities.mixedSearch,
-    networking: capabilities.networkSearch,
-    onlyNeedSearchResults: capabilities.onlySearch,
-  };
-};
+const chatInfoClass = new ChatInfoClass();
 
 const stopChat = () => {
   if (ctrl) {
@@ -386,7 +365,7 @@ const mentionOptions = ref<string[]>([]);
 const getMentionOptions = async () => {
   const res: any = await resultControl(
     await urlResquest.getTags({
-      kb_ids: adaptedBotInfo.value.kbIds,
+      kb_ids: props.botInfo.kb_ids,
     })
   );
   mentionOptions.value = res.tags;
@@ -452,7 +431,7 @@ const send = async () => {
     body: JSON.stringify({
       user_id: userId,
       user_info: userPhone,
-      bot_id: adaptedBotInfo.value.botId,
+      bot_id: props.botInfo.bot_id,
       history: history.value,
       question: q,
       streaming: chatSettingFormActive.value.capabilities.onlySearch === false,
@@ -476,36 +455,45 @@ const send = async () => {
       console.log('open', e);
       addAnswer(q);
       if (e.ok && e.headers.get('content-type') === 'text/event-stream') {
+        // 模型配置添加进去
+        chatInfoClass.addChatSetting(chatSettingFormActive.value);
         typewriter.start();
       } else if (e.headers.get('content-type') === 'application/json') {
         typewriter.add('Error 请检查模型是否配置正确');
       }
     },
-    ...createChatStreamHandlers({
-      appendResponse: (text) => {
-        typewriter.add(text);
-      },
-      setSource: (docs) => {
-        QA_List.value[QA_List.value.length - 1].source = docs;
-      },
-      setShowImages: (imgs) => {
-        QA_List.value[QA_List.value.length - 1].picList = imgs;
-      },
-      setItemInfo: (itemInfo) => {
-        const lastItem = QA_List.value.at(-1);
-        if (lastItem) {
-          lastItem.itemInfo = itemInfo;
-        }
-      },
-      getChatSetting: () => getChatSetting(),
-      onScroll: () => scrollBottom(),
-    }),
+    onmessage(msg: { data: string }) {
+      console.log('message');
+      const res: any = JSON.parse(msg.data);
+      console.log(res);
+      if (res?.code == 200 && res?.response && res.msg === 'success') {
+        // QA_List.value[QA_List.value.length - 1].answer += res.result.response;
+        typewriter.add(res?.response.replaceAll('\n', '<br/>'));
+        scrollBottom();
+      } else {
+        const timeObj = res.time_record.time_usage;
+        delete timeObj['retriever_search_by_milvus'];
+        chatInfoClass.addTime(res.time_record.time_usage);
+        chatInfoClass.addToken(res.time_record.token_usage);
+        chatInfoClass.addDate(Date.now());
+      }
+
+      if (res?.source_documents?.length) {
+        QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+      }
+
+      // if (res?.history.length) {
+      //   history.value = res?.history;
+      // }
+    },
     onclose(e: any) {
       console.log('close', e);
       typewriter.done();
       ctrl.abort();
       showLoading.value = false;
       QA_List.value[QA_List.value.length - 1].showTools = true;
+      // 将chat info添加进回答中
+      QA_List.value.at(-1).itemInfo = chatInfoClass.getChatInfo();
       nextTick(() => {
         scrollBottom();
       });

@@ -92,7 +92,6 @@
 import { h } from 'vue';
 import urlResquest from '@/services/urlConfig';
 import { downLoad, getContentDispositionByHeader, resultControl } from '@/utils/utils';
-import type { IQARecord, IPaginatedResponse } from '@/utils/types';
 import { getLanguage } from '@/language';
 import { SearchOutlined } from '@ant-design/icons-vue';
 import message from 'ant-design-vue/es/message';
@@ -221,22 +220,21 @@ const searchHandle = () => {
 const getQADetail = async (...args) => {
   loading.value = true;
   try {
-    const res = (await resultControl(
+    const res: any = await resultControl(
       await urlResquest.getQAInfo({
         page_id: paginationConfig.value.current,
         page_limit: paginationConfig.value.pageSize,
         ...args[0],
       })
-    )) as IPaginatedResponse<IQARecord> & { qaInfos: IQARecord[] };
-
+    );
     dataSource.value = [];
-    paginationConfig.value.total = res.total;
-
-    res.qaInfos.forEach((item: IQARecord) => {
+    paginationConfig.value.total = res.total_count;
+    const { qa_infos } = res;
+    qa_infos.map(item => {
       dataSource.value.push({
-        key: item.qaId,
-        kbIds: item.kbIds.toString().replaceAll(',', `\n`),
-        question: item.condenseQuestion,
+        key: item.qa_id,
+        kbIds: item.kb_ids.toString().replaceAll(',', `\n`),
+        question: item.condense_question,
         answer: item.result,
         date: item.timestamp,
       });

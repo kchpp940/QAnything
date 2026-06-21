@@ -74,24 +74,24 @@
                         :key="sourceIndex"
                         class="data-source"
                       >
-                        <p v-show="sourceItem.fileName" class="control">
+                        <p v-show="sourceItem.file_name" class="control">
                           <span class="tips">{{ common.dataSource }}{{ sourceIndex + 1 }}:</span>
                           <a
-                            v-if="sourceItem.fileUrl.startsWith('http')"
-                            :href="sourceItem.fileUrl"
+                            v-if="sourceItem.file_url.startsWith('http')"
+                            :href="sourceItem.file_url"
                             target="_blank"
                           >
-                            {{ sourceItem.fileName }}
+                            {{ sourceItem.file_name }}
                           </a>
                           <span
                             v-else
                             :class="[
                               'file',
-                              checkFileType(sourceItem.fileName) ? 'filename-active' : '',
+                              checkFileType(sourceItem.file_name) ? 'filename-active' : '',
                             ]"
                             @click="handleChatSource(sourceItem)"
                           >
-                            {{ sourceItem.fileName }}
+                            {{ sourceItem.file_name }}
                           </span>
                           <SvgIcon
                             v-show="sourceItem.showDetailDataSource"
@@ -250,20 +250,14 @@ import SvgIcon from '@/components/SvgIcon.vue';
 import { getLanguage } from '@/language';
 import { Typewriter } from '@/utils/typewriter';
 import { useClipboard, useThrottleFn } from '@vueuse/core';
-import { IChatItem, IFileListItem, IChatSetting } from '@/utils/types';
-import {
-  toAIChatItem,
-  toUserChatItem,
-  adaptChatResponse,
-  createChatStreamHandlers,
-} from '@/utils/responseAdapter';
+import { IChatItem, IFileListItem } from '@/utils/types';
 import { message } from 'ant-design-vue';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { apiBase } from '@/services';
 import urlResquest, { userId, userPhone } from '@/services/urlConfig';
 import { useChat } from '@/store/useChat';
 import html2canvas from 'html2canvas';
-import { formatTimestamp, resultControl } from '@/utils/utils';
+import { ChatInfoClass, formatTimestamp, resultControl } from '@/utils/utils';
 import { useChatSource } from '@/store/useChatSource';
 import { useLanguage } from '@/store/useLanguage';
 import { useQuickStart } from '@/store/useQuickStart';
@@ -442,42 +436,29 @@ const deleteFile = async (file_id: string, kb_id: string) => {
 };
 
 const addQuestion = q => {
-  const userItem = toUserChatItem(q);
-  (userItem as any).fileDataList = [...fileBlockArr.value.filter(item => item.status !== 'red')];
-  QA_List.value.push(userItem);
+  QA_List.value.push({
+    question: q,
+    type: 'user',
+    fileDataList: [...fileBlockArr.value.filter(item => item.status !== 'red')],
+  });
   scrollBottom();
 };
 
 const addAnswer = (question: string) => {
-  const emptyChatResponse = {
+  QA_List.value.push({
+    answer: '',
     question,
-    response: '',
-    source_documents: [],
-    llm_setting: {
-      only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-    },
-    time_record: {
-      time_usage: {},
-      token_usage: {},
-    },
-    show_images: [],
-  };
-  const chatSetting = getChatSetting();
-  const aiItem = toAIChatItem(adaptChatResponse(emptyChatResponse), chatSetting);
-  aiItem.showTools = false;
-  QA_List.value.push(aiItem);
+    onlySearch: chatSettingFormActive.value.capabilities.onlySearch,
+    type: 'ai',
+    copied: false,
+    like: false,
+    unlike: false,
+    source: [],
+    showTools: false,
+  });
 };
 
-const getChatSetting = (): IChatSetting => {
-  const { capabilities, ...rest } = chatSettingFormActive.value;
-  return {
-    ...rest,
-    rerank: capabilities.rerank,
-    hybridSearch: capabilities.mixedSearch,
-    networking: capabilities.networkSearch,
-    onlyNeedSearchResults: capabilities.onlySearch,
-  } as IChatSetting;
-};
+const chatInfoClass = new ChatInfoClass();
 
 const stopChat = () => {
   if (ctrl) {
@@ -561,17 +542,16 @@ const send = async () => {
 
   // 如果是仅检索
   if (chatSettingFormActive.value.capabilities.onlySearch) {
+    // 模型配置添加进去
+    chatInfoClass.addChatSetting(chatSettingFormActive.value);
     addAnswer(q);
     try {
-      const chatResponse = (await resultControl(
-        await urlResquest.sendQuestion(sendData)
-      )) as any;
-      if (chatResponse.code === 200) {
-        const lastItem = QA_List.value[QA_List.value.length - 1];
-        lastItem.answer = chatResponse.sourceDocuments?.length
+      const res: any = await resultControl(await urlResquest.sendQuestion(sendData));
+      if (res.code === 200) {
+        QA_List.value[QA_List.value.length - 1].answer = res?.source_documents.length
           ? common.searchCompleted
           : common.searchNotFound;
-        lastItem.source = chatResponse.sourceDocuments;
+        QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
       }
     } catch (e) {
       message.error(e.msg || '出错了');
@@ -603,39 +583,50 @@ const send = async () => {
         console.log('open', e);
         addAnswer(q);
         if (e.ok && e.headers.get('content-type') === 'text/event-stream') {
+          // 模型配置添加进去
+          chatInfoClass.addChatSetting(chatSettingFormActive.value);
           typewriter.start();
         } else if (e.headers.get('content-type') === 'application/json') {
           typewriter.add('Error 请检查模型是否配置正确');
         }
       },
-      ...createChatStreamHandlers({
-        appendResponse: (text) => {
-          typewriter.add(text);
-        },
-        setSource: (docs) => {
-          QA_List.value[QA_List.value.length - 1].source = docs;
-        },
-        setShowImages: (imgs) => {
-          imgs.map((item) => {
+      onmessage(msg: { data: string }) {
+        console.log('message', msg);
+        const res: any = JSON.parse(msg.data);
+        if (res?.code == 200 && res?.response && res.msg === 'success') {
+          // 中间的回答
+          // QA_List.value[QA_List.value.length - 1].answer += res.result.response;
+          // typewriter.add(res?.response.replaceAll('\n', '<br/>'));
+          typewriter.add(res?.response);
+          scrollBottom();
+        } else {
+          // 最后一次回答
+          const timeObj = res.time_record.time_usage;
+          delete timeObj['retriever_search_by_milvus'];
+          chatInfoClass.addTime(res.time_record.time_usage);
+          chatInfoClass.addToken(res.time_record.token_usage);
+          chatInfoClass.addDate(Date.now());
+        }
+
+        if (res?.source_documents?.length) {
+          QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
+        }
+
+        if (res?.show_images?.length) {
+          res?.show_images.map(item => {
             typewriter.add(item);
-            console.log(QA_List.value.at(-1)?.answer);
+            console.log(QA_List.value.at(-1).answer);
           });
-        },
-        setItemInfo: (itemInfo) => {
-          const lastItem = QA_List.value.at(-1);
-          if (lastItem) {
-            lastItem.itemInfo = itemInfo;
-          }
-        },
-        getChatSetting: () => getChatSetting(),
-        onScroll: () => scrollBottom(),
-      }),
+        }
+      },
       onclose(e: any) {
         console.log('close', e);
         typewriter.done();
         ctrl.abort();
         showLoading.value = false;
         QA_List.value[QA_List.value.length - 1].showTools = true;
+        // 将chat info添加进回答中
+        QA_List.value.at(-1).itemInfo = chatInfoClass.getChatInfo();
         // 更新最大的chatList
         addChatList(chatId.value, QA_List.value);
         nextTick(() => {
@@ -827,7 +818,7 @@ const checkFileType = filename => {
 };
 
 const handleChatSource = file => {
-  const isSupport = checkFileType(file.fileName);
+  const isSupport = checkFileType(file.file_name);
   if (isSupport) {
     queryFile(file);
   }
@@ -836,8 +827,8 @@ const handleChatSource = file => {
 async function queryFile(file) {
   try {
     setSourceUrl(null);
-    const res: any = await resultControl(await urlResquest.getFile({ file_id: file.fileId }));
-    const suffix = file.fileName.split('.').pop();
+    const res: any = await resultControl(await urlResquest.getFile({ file_id: file.file_id }));
+    const suffix = file.file_name.split('.').pop();
     const b64Type = getB64Type(suffix);
     setSourceType(suffix);
     setSourceUrl(`data:${b64Type};base64,${res.file_base64}`);

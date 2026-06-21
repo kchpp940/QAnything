@@ -1,0 +1,11 @@
+# ============================================================
+# Linux 平台覆盖配置
+# 使用：docker compose -f docker-compose.yaml -f docker-compose.linux.yaml up -d
+# ============================================================
+
+services:
+  qanything_local:
+    image: ${QANYTHING_IMAGE_LINUX:-xixihahaliu01/qanything-linux:v1.5.1}
+    network_mode: "host"
+    environment:
+      - GATEWAY_IP=${GATEWAY_IP:-127.0.0.1}

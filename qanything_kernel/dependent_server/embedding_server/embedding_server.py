@@ -14,16 +14,15 @@ from sanic import Sanic
 from sanic.response import json
 from qanything_kernel.dependent_server.embedding_server.embedding_async_backend import EmbeddingAsyncBackend
 from qanything_kernel.dependent_server.embedding_server.embedding_onnx_backend import EmbeddingOnnxBackend
-from qanything_kernel.configs.model_config import LOCAL_EMBED_MODEL_PATH, LOCAL_EMBED_THREADS
+from qanything_kernel.configs.model_config import (LOCAL_EMBED_MODEL_PATH, LOCAL_EMBED_THREADS,
+                                                   EMBED_SERVICE_PORT)
 from qanything_kernel.utils.general_utils import get_time_async
 import argparse
 
-# 接收外部参数mode
 parser = argparse.ArgumentParser()
-# mode必须是local或online
 parser.add_argument('--use_gpu', action="store_true", help='use gpu or not')
 parser.add_argument('--workers', type=int, default=1, help='workers')
-# 检查是否是local或online，不是则报错
+parser.add_argument('--port', type=int, default=EMBED_SERVICE_PORT, help='server port')
 args = parser.parse_args()
 print("args:", args)
 
