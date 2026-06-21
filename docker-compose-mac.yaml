@@ -104,6 +104,12 @@ services:
       - MYSQL_ROOT_PASSWORD=123456
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p123456"]
+      interval: 10s
+      start_period: 30s
+      timeout: 5s
+      retries: 5
 
 
   qanything_local:
@@ -123,7 +129,7 @@ services:
       standalone:
         condition: service_healthy
       mysql:
-        condition: service_started
+        condition: service_healthy
       elasticsearch:
         condition: service_healthy
     tty: true
