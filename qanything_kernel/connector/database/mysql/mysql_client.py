@@ -208,10 +208,22 @@ class KnowledgeBaseManager:
                 result TEXT NOT NULL,
                 retrieval_documents MEDIUMTEXT NOT NULL,
                 source_documents MEDIUMTEXT NOT NULL,
+                retrieval_trace MEDIUMTEXT,
+                web_search_trace MEDIUMTEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
         self.execute_query_(query, (), commit=True)
+
+        alter_queries = [
+            "ALTER TABLE QaLogs ADD COLUMN IF NOT EXISTS retrieval_trace MEDIUMTEXT NULL",
+            "ALTER TABLE QaLogs ADD COLUMN IF NOT EXISTS web_search_trace MEDIUMTEXT NULL",
+        ]
+        for alter_query in alter_queries:
+            try:
+                self.execute_query_(alter_query, (), commit=True)
+            except Exception as e:
+                debug_logger.warning(f"QaLogs ALTER skipped: {e}")
 
         # create_index_query = "CREATE INDEX IF NOT EXISTS index_bot_id ON QaLogs (bot_id);"
         # self.execute_query_(create_index_query, (), commit=True)
@@ -671,7 +683,7 @@ class KnowledgeBaseManager:
         debug_logger.info(f"delete_faqs count: {total_deleted}")
 
     def add_qalog(self, user_id, bot_id, kb_ids, query, model, product_source, time_record, history, condense_question,
-                  prompt, result, retrieval_documents, source_documents):
+                  prompt, result, retrieval_documents, source_documents, retrieval_trace=None, web_search_trace=None):
         debug_logger.info("add_qalog: {}".format(query))
         qa_id = uuid.uuid4().hex
         kb_ids = json.dumps(kb_ids, ensure_ascii=False)
@@ -679,13 +691,16 @@ class KnowledgeBaseManager:
         source_documents = json.dumps(source_documents, ensure_ascii=False)
         history = json.dumps(history, ensure_ascii=False)
         time_record = json.dumps(time_record, ensure_ascii=False)
+        retrieval_trace = json.dumps(retrieval_trace or [], ensure_ascii=False)
+        web_search_trace = json.dumps(web_search_trace or [], ensure_ascii=False)
         insert_query = (
             "INSERT INTO QaLogs (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record, "
-            "history, condense_question, prompt, result, retrieval_documents, source_documents) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
+            "history, condense_question, prompt, result, retrieval_documents, source_documents, "
+            "retrieval_trace, web_search_trace) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
         self.execute_query_(insert_query, (qa_id, user_id, bot_id, kb_ids, query, model, product_source, time_record,
                                            history, condense_question, prompt, result, retrieval_documents,
-                                           source_documents), commit=True)
+                                           source_documents, retrieval_trace, web_search_trace), commit=True)
 
     def get_qalog_by_filter(self, need_info, user_id=None, query=None, bot_id=None, time_range=None, any_kb_id=None, qa_ids=None):
         # 判断哪些条件不是None，构建搜索query
@@ -725,6 +740,14 @@ class KnowledgeBaseManager:
                 qa_info['source_documents'] = json.loads(qa_info['source_documents'])
             if 'history' in qa_info:
                 qa_info['history'] = json.loads(qa_info['history'])
+            if 'retrieval_trace' in qa_info and qa_info['retrieval_trace'] is not None:
+                qa_info['retrieval_trace'] = json.loads(qa_info['retrieval_trace'])
+            else:
+                qa_info['retrieval_trace'] = []
+            if 'web_search_trace' in qa_info and qa_info['web_search_trace'] is not None:
+                qa_info['web_search_trace'] = json.loads(qa_info['web_search_trace'])
+            else:
+                qa_info['web_search_trace'] = []
         if 'timestamp' in need_info:
             qa_infos = sorted(qa_infos, key=lambda x: x["timestamp"], reverse=True)
         return qa_infos
@@ -768,7 +791,36 @@ class KnowledgeBaseManager:
         qa_infos = self.execute_query_(query, (time_range[0], time_range[1], limit), fetch=True, user_dict=True)
         for qa_info in qa_infos:
             qa_info['timestamp'] = qa_info['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+            if 'kb_ids' in qa_info and qa_info['kb_ids'] is not None:
+                qa_info['kb_ids'] = json.loads(qa_info['kb_ids'])
+            if 'time_record' in qa_info and qa_info['time_record'] is not None:
+                qa_info['time_record'] = json.loads(qa_info['time_record'])
+            if 'retrieval_documents' in qa_info and qa_info['retrieval_documents'] is not None:
+                qa_info['retrieval_documents'] = json.loads(qa_info['retrieval_documents'])
+            if 'source_documents' in qa_info and qa_info['source_documents'] is not None:
+                qa_info['source_documents'] = json.loads(qa_info['source_documents'])
+            if 'history' in qa_info and qa_info['history'] is not None:
+                qa_info['history'] = json.loads(qa_info['history'])
+            qa_info['retrieval_trace'] = json.loads(qa_info.get('retrieval_trace')) if qa_info.get('retrieval_trace') is not None else []
+            qa_info['web_search_trace'] = json.loads(qa_info.get('web_search_trace')) if qa_info.get('web_search_trace') is not None else []
         return qa_infos
+
+    def _parse_qalog_json_fields(self, qa_info):
+        if qa_info is None:
+            return qa_info
+        if 'kb_ids' in qa_info and qa_info['kb_ids'] is not None and isinstance(qa_info['kb_ids'], str):
+            qa_info['kb_ids'] = json.loads(qa_info['kb_ids'])
+        if 'time_record' in qa_info and qa_info['time_record'] is not None and isinstance(qa_info['time_record'], str):
+            qa_info['time_record'] = json.loads(qa_info['time_record'])
+        if 'retrieval_documents' in qa_info and qa_info['retrieval_documents'] is not None and isinstance(qa_info['retrieval_documents'], str):
+            qa_info['retrieval_documents'] = json.loads(qa_info['retrieval_documents'])
+        if 'source_documents' in qa_info and qa_info['source_documents'] is not None and isinstance(qa_info['source_documents'], str):
+            qa_info['source_documents'] = json.loads(qa_info['source_documents'])
+        if 'history' in qa_info and qa_info['history'] is not None and isinstance(qa_info['history'], str):
+            qa_info['history'] = json.loads(qa_info['history'])
+        qa_info['retrieval_trace'] = json.loads(qa_info.get('retrieval_trace')) if qa_info.get('retrieval_trace') is not None and isinstance(qa_info.get('retrieval_trace'), str) else qa_info.get('retrieval_trace', []) or []
+        qa_info['web_search_trace'] = json.loads(qa_info.get('web_search_trace')) if qa_info.get('web_search_trace') is not None and isinstance(qa_info.get('web_search_trace'), str) else qa_info.get('web_search_trace', []) or []
+        return qa_info
 
     def get_related_qa_infos(self, qa_id, need_info=None, need_more=False):
         if need_info is None:
@@ -781,6 +833,7 @@ class KnowledgeBaseManager:
         query = f"SELECT {need_info} FROM QaLogs WHERE qa_id = %s"
         qa_log = self.execute_query_(query, (qa_id,), fetch=True, user_dict=True)[0]
         qa_log['timestamp'] = qa_log['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+        qa_log = self._parse_qalog_json_fields(qa_log)
         user_id = qa_log['user_id']
         # 获取当前时间和7天前的时间
         current_time = datetime.utcnow()
@@ -806,6 +859,7 @@ class KnowledgeBaseManager:
                 break
             for log in logs:
                 log['timestamp'] = log['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+                self._parse_qalog_json_fields(log)
             recent_logs.extend(logs)
             offset += limit
             # TODO 最多返回50条，后续可以有翻页逻辑
@@ -828,6 +882,7 @@ class KnowledgeBaseManager:
                 break
             for log in logs:
                 log['timestamp'] = log['timestamp'].strftime("%Y-%m-%d %H:%M:%S")
+                self._parse_qalog_json_fields(log)
             older_logs.extend(logs)
             offset += limit
             # TODO 最多返回50条，后续可以有翻页逻辑

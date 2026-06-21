@@ -842,12 +842,16 @@ async def local_doc_chat(req: request):
                         format_source_documents(resp["source_documents"]))
                     retrieval_docs = SourceDocumentSerializer.serialize_list(
                         format_source_documents(resp["retrieval_documents"]))
+                    retrieval_trace = resp.get("retrieval_trace", [])
+                    web_search_trace = resp.get("web_search_trace", [])
                     chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, "model": model,
                                  "product_source": request_source, 'time_record': formatted_time_record,
                                  'history': history,
                                  'condense_question': resp['condense_question'], 'prompt': resp['prompt'],
                                  'result': result, 'retrieval_documents': retrieval_docs,
-                                 'source_documents': source_docs, 'bot_id': bot_id}
+                                 'source_documents': source_docs, 'bot_id': bot_id,
+                                 'retrieval_trace': retrieval_trace,
+                                 'web_search_trace': web_search_trace}
                     local_doc_qa.milvus_summary.add_qalog(**chat_data)
                     qa_logger.info("chat_data: %s", chat_data)
                     debug_logger.info("response: %s", chat_data['result'])
@@ -864,6 +868,8 @@ async def local_doc_chat(req: request):
                         retrieval_documents=retrieval_docs,
                         time_record=time_record,
                         llm_setting=llm_setting_dict,
+                        retrieval_trace=retrieval_trace,
+                        web_search_trace=web_search_trace,
                         show_images=resp.get('show_images', []),
                         bot_id=bot_id if bot_id else ''
                     )
@@ -931,11 +937,15 @@ async def local_doc_chat(req: request):
         retrieval_docs = SourceDocumentSerializer.serialize_list(
             format_source_documents(resp["retrieval_documents"]))
         formatted_time_record = TimeRecordSerializer.serialize(time_record)
+        retrieval_trace = resp.get("retrieval_trace", [])
+        web_search_trace = resp.get("web_search_trace", [])
         chat_data = {'user_id': user_id, 'kb_ids': kb_ids, 'query': question, 'time_record': formatted_time_record,
                      'history': history, "condense_question": resp['condense_question'], "model": model,
                      "product_source": request_source,
                      'retrieval_documents': retrieval_docs, 'prompt': resp['prompt'], 'result': resp['result'],
-                     'source_documents': source_docs, 'bot_id': bot_id}
+                     'source_documents': source_docs, 'bot_id': bot_id,
+                     'retrieval_trace': retrieval_trace,
+                     'web_search_trace': web_search_trace}
         local_doc_qa.milvus_summary.add_qalog(**chat_data)
         qa_logger.info("chat_data: %s", chat_data)
         debug_logger.info("response: %s", chat_data['result'])
@@ -952,6 +962,8 @@ async def local_doc_chat(req: request):
             retrieval_documents=retrieval_docs,
             time_record=time_record,
             llm_setting=llm_setting_dict,
+            retrieval_trace=retrieval_trace,
+            web_search_trace=web_search_trace,
             bot_id=bot_id if bot_id else ''
         )
         return sanic_json(final_response)

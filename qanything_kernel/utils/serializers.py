@@ -588,6 +588,24 @@ class QARecordSerializer(BaseSerializer):
                 if hasattr(value, 'strftime'):
                     value = value.strftime('%Y-%m-%d %H:%M:%S')
 
+            elif field == 'retrieval_trace':
+                if isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        value = []
+                if not isinstance(value, list):
+                    value = []
+
+            elif field == 'web_search_trace':
+                if isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        value = []
+                if not isinstance(value, list):
+                    value = []
+
             result[field] = value
 
         return result

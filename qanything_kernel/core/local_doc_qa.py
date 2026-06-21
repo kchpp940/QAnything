@@ -371,7 +371,8 @@ class LocalDocQA:
         return relevant_docs
 
     @staticmethod
-    async def generate_response(query, res, condense_question, source_documents, time_record, chat_history, streaming, prompt):
+    async def generate_response(query, res, condense_question, source_documents, time_record, chat_history, streaming, prompt,
+                                retrieval_trace=None, web_search_trace=None):
         """
         生成response并使用yield返回。
 
@@ -383,6 +384,8 @@ class LocalDocQA:
         :param chat_history: 聊天历史
         :param streaming: 是否启用流式输出
         :param prompt: 生成response时的prompt类型
+        :param retrieval_trace: 检索过程追踪记录
+        :param web_search_trace: 联网搜索过程追踪记录
         """
         history = chat_history + [[query, res]]
 
@@ -395,7 +398,9 @@ class LocalDocQA:
             "result": res,
             "condense_question": condense_question,
             "retrieval_documents": source_documents,
-            "source_documents": source_documents
+            "source_documents": source_documents,
+            "retrieval_trace": retrieval_trace or [],
+            "web_search_trace": web_search_trace or [],
         }
 
         if 'llm_completed' not in time_record:
@@ -423,6 +428,8 @@ class LocalDocQA:
         custom_llm = OpenAILLM(model, max_token, api_base, api_key, api_context_length, top_p, temperature)
         if chat_history is None:
             chat_history = []
+        retrieval_trace = []
+        web_search_trace = []
         retrieval_query = query
         condense_question = query
         if chat_history:
@@ -478,6 +485,14 @@ class LocalDocQA:
         if kb_ids:
             source_documents = await self.get_source_documents(retrieval_query, retriever, kb_ids, time_record,
                                                                hybrid_search, top_k)
+            retrieval_trace.append({
+                'query': retrieval_query,
+                'retrieval_method': 'milvus_hybrid' if hybrid_search else 'milvus_dense',
+                'total_results': len(source_documents),
+                'filtered_results': len(source_documents),
+                'stage': 'initial_retrieval',
+                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
+            })
         else:
             source_documents = []
 
@@ -494,6 +509,7 @@ class LocalDocQA:
 
             current_doc_id = 0
             current_file_id = web_search_results[0].metadata['file_id']
+            selected_urls = []
             for doc in web_search_results:
                 if doc.metadata['file_id'] == current_file_id:
                     doc.metadata['doc_id'] = current_file_id + '_' + str(current_doc_id)
@@ -507,10 +523,20 @@ class LocalDocQA:
                 if doc_json['kwargs'].get('metadata') is None:
                     doc_json['kwargs']['metadata'] = doc.metadata
                 self.milvus_summary.add_document(doc_id=doc.metadata['doc_id'], json_data=doc_json)
+                if doc.metadata.get('file_url') and doc.metadata['file_url'] not in selected_urls:
+                    selected_urls.append(doc.metadata['file_url'])
 
             t2 = time.perf_counter()
             time_record['web_search'] = round(t2 - t1, 2)
             source_documents += web_search_results
+
+            web_search_trace.append({
+                'query': query,
+                'search_engine': 'duckduckgo',
+                'result_count': len(web_search_results),
+                'selected_urls': selected_urls,
+                'timestamp': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
+            })
 
         # if kb_ids and not source_documents:
         #     res = "数据库检索失败，请检查logs/debug_logs/debug.log日志！"
@@ -548,6 +574,16 @@ class LocalDocQA:
                 time_record['rerank'] = 0.0
                 debug_logger.error(f"query {query}: kb_ids: {kb_ids}, rerank error: {traceback.format_exc()}")
 
+            if rerank:
+                retrieval_trace.append({
+                    'query': retrieval_query,
+                    'retrieval_method': 'rerank',
+                    'total_results': len(source_documents),
+                    'filtered_results': len(source_documents),
+                    'stage': 'after_rerank',
+                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime()),
+                })
+
         # es检索+milvus检索结果最多可能是2k
         source_documents = source_documents[:top_k]
 
@@ -569,7 +605,9 @@ class LocalDocQA:
                     return
                 res = doc.metadata['faq_dict']['answer']
                 async for response, history in self.generate_response(query, res, condense_question, source_documents,
-                                                                      time_record, chat_history, streaming, 'MATCH_FAQ'):
+                                                                      time_record, chat_history, streaming, 'MATCH_FAQ',
+                                                                      retrieval_trace=retrieval_trace,
+                                                                      web_search_trace=web_search_trace):
                     yield response, history
                 return
 
@@ -610,7 +648,9 @@ class LocalDocQA:
                         f"\n计算方式：{tokens_msg}")
                     async for response, history in self.generate_response(query, res, condense_question, source_documents,
                                                                           time_record, chat_history, streaming,
-                                                                          'TOKENS_NOT_ENOUGH'):
+                                                                          'TOKENS_NOT_ENOUGH',
+                                                                          retrieval_trace=retrieval_trace,
+                                                                          web_search_trace=web_search_trace):
                         yield response, history
                     return
 
@@ -677,7 +717,9 @@ class LocalDocQA:
                         "result": resp,
                         "condense_question": condense_question,
                         "retrieval_documents": retrieval_documents,
-                        "source_documents": source_documents}
+                        "source_documents": source_documents,
+                        "retrieval_trace": retrieval_trace,
+                        "web_search_trace": web_search_trace}
             time_record['prompt_tokens'] = prompt_tokens if prompt_tokens != 0 else est_prompt_tokens
             time_record['completion_tokens'] = completion_tokens if completion_tokens != 0 else num_tokens(acc_resp)
             time_record['total_tokens'] = total_tokens if total_tokens != 0 else time_record['prompt_tokens'] + \
@@ -693,7 +735,9 @@ class LocalDocQA:
                                 "result": f"data: {json.dumps({'answer': extra_msg}, ensure_ascii=False)}",
                                 "condense_question": condense_question,
                                 "retrieval_documents": retrieval_documents,
-                                "source_documents": source_documents}
+                                "source_documents": source_documents,
+                                "retrieval_trace": retrieval_trace,
+                                "web_search_trace": web_search_trace}
                     yield msg_response, history
                 last_return_time = time.perf_counter()
                 time_record['llm_completed'] = round(last_return_time - t1, 2) - time_record['llm_first_return']
