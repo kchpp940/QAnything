@@ -14,15 +14,16 @@ from sanic import Sanic
 from sanic.response import json
 from qanything_kernel.dependent_server.rerank_server.rerank_async_backend import RerankAsyncBackend
 from qanything_kernel.dependent_server.rerank_server.rerank_onnx_backend import RerankOnnxBackend
-from qanything_kernel.configs.model_config import (LOCAL_RERANK_MODEL_PATH, LOCAL_RERANK_THREADS,
-                                                   RERANK_SERVICE_PORT)
+from qanything_kernel.configs.model_config import LOCAL_RERANK_MODEL_PATH, LOCAL_RERANK_THREADS
 from qanything_kernel.utils.general_utils import get_time_async
 import argparse
 
+# 接收外部参数mode
 parser = argparse.ArgumentParser()
+# mode必须是local或online
 parser.add_argument('--use_gpu', action="store_true", help='use gpu or not')
 parser.add_argument('--workers', type=int, default=1, help='workers')
-parser.add_argument('--port', type=int, default=RERANK_SERVICE_PORT, help='server port')
+# 检查是否是local或online，不是则报错
 args = parser.parse_args()
 print("args:", args)
 
@@ -55,4 +56,4 @@ async def setup_onnx_backend(app, loop):
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=args.port, workers=args.workers)
+    app.run(host="0.0.0.0", port=8001, workers=args.workers)

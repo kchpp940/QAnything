@@ -39,6 +39,8 @@ enum EUrlKey {
   getKbInfo = 'getKbInfo',
   getTags = 'getTags',
   updateTags = 'updateTags',
+  healthCheck = 'healthCheck',
+  dependencyHealth = 'dependencyHealth',
 }
 
 interface IUrlValueConfig {
@@ -276,6 +278,22 @@ const urlConfig: IUrlConfig = {
       user_id: userId,
       user_info: userPhone,
     },
+  },
+  // 健康检查
+  healthCheck: {
+    type: EUrlType.GET,
+    url: '/api/health_check',
+    showLoading: false,
+    cancelRepeat: false,
+    errorToast: false,
+  },
+  // 依赖健康检查
+  dependencyHealth: {
+    type: EUrlType.GET,
+    url: '/api/dependency_health',
+    showLoading: false,
+    cancelRepeat: false,
+    errorToast: false,
   },
 };
 

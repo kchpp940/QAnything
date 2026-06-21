@@ -5,7 +5,7 @@ from qanything_kernel.core.local_doc_qa import LocalDocQA
 from qanything_kernel.utils.custom_log import debug_logger, qa_logger
 from qanything_kernel.configs.model_config import (BOT_DESC, BOT_IMAGE, BOT_PROMPT, BOT_WELCOME,
                                                    DEFAULT_PARENT_CHUNK_SIZE, MAX_CHARS, VECTOR_SEARCH_TOP_K,
-                                                   UPLOAD_ROOT_PATH, IMAGES_ROOT_PATH, GATEWAY_IP)
+                                                   UPLOAD_ROOT_PATH, IMAGES_ROOT_PATH)
 from qanything_kernel.utils.general_utils import *
 from langchain.schema import Document
 from sanic.response import ResponseStream
@@ -29,11 +29,14 @@ import base64
 __all__ = ["new_knowledge_base", "upload_files", "list_kbs", "list_docs", "delete_knowledge_base", "delete_docs",
            "rename_knowledge_base", "get_total_status", "clean_files_by_status", "upload_weblink", "local_doc_chat",
            "document", "upload_faqs", "get_doc_completed", "get_qa_info", "get_user_id", "get_doc",
-           "get_rerank_results", "get_user_status", "health_check", "update_chunks", "get_file_base64",
-           "get_random_qa", "get_related_qa", "new_bot", "delete_bot", "update_bot", "get_bot_info"]
+           "get_rerank_results", "get_user_status", "health_check", "dependency_health", "update_chunks",
+           "get_file_base64", "get_random_qa", "get_related_qa", "new_bot", "delete_bot", "update_bot",
+           "get_bot_info"]
 
 INVALID_USER_ID = f"fail, Invalid user_id: . user_id 必须只含有字母，数字和下划线且字母开头"
 
+# 获取环境变量GATEWAY_IP
+GATEWAY_IP = os.getenv("GATEWAY_IP", "localhost")
 debug_logger.info(f"GATEWAY_IP: {GATEWAY_IP}")
 
 # 异步包装器，用于在后台执行带有参数的同步函数
@@ -1237,8 +1240,56 @@ async def get_user_status(req: request):
 
 @get_time_async
 async def health_check(req: request):
-    # 实现一个服务健康检查的逻辑，正常就返回200，不正常就返回500
-    return sanic_json({"code": 200, "msg": "success"})
+    from qanything_kernel.utils.health_check import HealthCheckManager, ServiceStatus
+
+    health_manager: HealthCheckManager = req.app.ctx.health_manager
+
+    specific = req.args.get('services', None)
+    use_cache = req.args.get('use_cache', 'true').lower() != 'false'
+
+    if specific:
+        service_list = [s.strip() for s in specific.split(',') if s.strip()]
+        health_status = await health_manager.check_specific(service_list)
+    else:
+        health_status = await health_manager.check_all(use_cache=use_cache)
+
+    status_code = 200 if health_status.overall_status == ServiceStatus.HEALTHY else 503
+
+    return sanic_json({
+        "code": 200,
+        "msg": "success",
+        "data": health_status.to_dict()
+    }, status=status_code)
+
+
+@get_time_async
+async def dependency_health(req: request):
+    from qanything_kernel.utils.health_check import HealthCheckManager, ServiceStatus
+
+    health_manager: HealthCheckManager = req.app.ctx.health_manager
+
+    specific = req.args.get('services', None)
+    use_cache = req.args.get('use_cache', 'true').lower() != 'false'
+
+    if specific:
+        service_list = [s.strip() for s in specific.split(',') if s.strip()]
+        health_status = await health_manager.check_specific(service_list)
+    else:
+        health_status = await health_manager.check_all(use_cache=use_cache)
+
+    status_code = 200 if health_status.overall_status == ServiceStatus.HEALTHY else 503
+
+    return sanic_json({
+        "code": 200,
+        "msg": "success",
+        "status": health_status.overall_status.value,
+        "dependencies": {
+            name: dep.to_dict()
+            for name, dep in health_status.dependencies.items()
+        },
+        "timestamp": health_status.timestamp,
+        "critical_services": health_manager.get_critical_services(),
+    }, status=status_code)
 
 
 @get_time_async

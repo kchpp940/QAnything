@@ -79,6 +79,17 @@
           <span>{{ header.statistics }}</span>
         </div>
       </li>
+      <li>
+        <a-popover placement="bottomRight" trigger="click">
+          <template #content>
+            <HealthStatusPanel />
+          </template>
+          <div class="health-indicator" :class="`health-${healthStore.healthStatus?.status || 'unknown'}`">
+            <span class="health-dot"></span>
+            <span class="health-text">{{ healthStore.overallStatusLabel }}</span>
+          </div>
+        </a-popover>
+      </li>
     </ul>
   </div>
 </template>
@@ -92,6 +103,11 @@ import { getLanguage } from '@/language/index';
 import routeController from '@/controller/router';
 import message from 'ant-design-vue/es/message';
 import { useUser } from '@/store/useUser';
+import { useHealthCheck } from '@/store/useHealthCheck';
+import HealthStatusPanel from '@/components/HealthStatusPanel.vue';
+import { storeToRefs } from 'pinia';
+
+const healthStore = useHealthCheck();
 
 const header = getLanguage().header;
 const { language } = storeToRefs(useLanguage());
@@ -320,6 +336,66 @@ onMounted(() => {
         white-space: nowrap;
       }
     }
+
+    .health-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.2s;
+
+      .health-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+
+      .health-text {
+        font-size: 12px;
+        font-weight: 500;
+      }
+
+      &.health-healthy {
+        background: rgba(82, 196, 26, 0.15);
+        .health-dot {
+          background: #52c41a;
+          box-shadow: 0 0 6px rgba(82, 196, 26, 0.5);
+        }
+        .health-text { color: #52c41a; }
+      }
+
+      &.health-unhealthy {
+        background: rgba(255, 77, 79, 0.15);
+        .health-dot {
+          background: #ff4d4f;
+          box-shadow: 0 0 6px rgba(255, 77, 79, 0.5);
+          animation: health-pulse 1.5s infinite;
+        }
+        .health-text { color: #ff4d4f; }
+      }
+
+      &.health-degraded {
+        background: rgba(250, 173, 20, 0.15);
+        .health-dot {
+          background: #faad14;
+          box-shadow: 0 0 6px rgba(250, 173, 20, 0.5);
+        }
+        .health-text { color: #faad14; }
+      }
+
+      &.health-unknown {
+        background: rgba(191, 191, 191, 0.15);
+        .health-dot { background: #bfbfbf; }
+        .health-text { color: #bfbfbf; }
+      }
+    }
   }
+}
+
+@keyframes health-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 </style>

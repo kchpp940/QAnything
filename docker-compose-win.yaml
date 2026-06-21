@@ -1,18 +1,11 @@
-# ============================================================
-# Windows 平台 Docker Compose 配置（兼容入口）
-# ⚠️  此文件为向后兼容保留，新结构请使用：
-#     docker compose -f docker-compose.yaml -f docker-compose.win.yaml up -d
-# 所有环境变量默认值见 .env.example
-# ============================================================
-
 services:
   elasticsearch:
     container_name: es-container-local
-    image: ${ES_IMAGE:-docker.elastic.co/elasticsearch/elasticsearch:8.13.2}
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.13.2
     user: root
     privileged: true
     ports:
-      - "${ES_PORT:-9210}:9200"
+      - "9210:9200"
     restart: on-failure
     environment:
       - discovery.type=single-node
@@ -23,9 +16,9 @@ services:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/es/data:/usr/share/elasticsearch/data
     command: >
       /bin/bash -c "
-        mkdir -p /usr/share/elasticsearch/data /usr/share/elasticsearch/plugins &&
-        chown -R elasticsearch:elasticsearch /usr/share/elasticsearch &&
-        su elasticsearch -c '/usr/share/elasticsearch/bin/elasticsearch'
+          mkdir -p /usr/share/elasticsearch/data /usr/share/elasticsearch/plugins &&
+          chown -R elasticsearch:elasticsearch /usr/share/elasticsearch &&
+          su elasticsearch -c '/usr/share/elasticsearch/bin/elasticsearch'
       "
     healthcheck:
       test: curl --fail http://localhost:9200/_cat/health || exit 1
@@ -35,7 +28,7 @@ services:
 
   etcd:
     container_name: milvus-etcd-local
-    image: ${ETCD_IMAGE:-quay.io/coreos/etcd:v3.5.5}
+    image: quay.io/coreos/etcd:v3.5.5
     environment:
       - ETCD_AUTO_COMPACTION_MODE=revision
       - ETCD_AUTO_COMPACTION_RETENTION=1000
@@ -52,10 +45,13 @@ services:
 
   minio:
     container_name: milvus-minio-local
-    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2023-03-20T20-16-18Z}
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
     environment:
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+    # ports:
+    #   - "9001:9001"
+    #       - "9000:9000"
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/minio:/minio_data
     command: minio server /minio_data --console-address ":9001"
@@ -67,7 +63,7 @@ services:
 
   standalone:
     container_name: milvus-standalone-local
-    image: ${MILVUS_IMAGE:-milvusdb/milvus:v2.4.8}
+    image: milvusdb/milvus:v2.4.8
     logging:
       driver: "json-file"
       options:
@@ -88,7 +84,7 @@ services:
       timeout: 20s
       retries: 3
     ports:
-      - "${MILVUS_PORT:-19540}:19530"
+      - "19540:19530"
     depends_on:
       - "etcd"
       - "minio"
@@ -96,41 +92,31 @@ services:
   mysql:
     container_name: mysql-container-local
     privileged: true
-    image: ${MYSQL_IMAGE:-mysql:8.4}
+    image: mysql:8.4
     ports:
-      - "${MYSQL_PORT:-3316}:3306"
+      - "3316:3306"
     command: --max-connections=10000
     environment:
-      - MYSQL_ROOT_PASSWORD=${MYSQL_PASSWORD:-123456}
-      - MYSQL_DATABASE=${MYSQL_DATABASE:-qanything}
+      - MYSQL_ROOT_PASSWORD=123456
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/volumes/mysql:/var/lib/mysql
 
+
   qanything_local:
     container_name: qanything-container-local
-    image: ${QANYTHING_IMAGE_WIN:-xixihahaliu01/qanything-win:v1.5.1}
+    image: xixihahaliu01/qanything-win:v1.5.1
     command: /bin/bash -c "cd /workspace/QAnything && bash scripts/entrypoint.sh"
     privileged: true
     shm_size: '8gb'
-    ports:
-      - "${QANYTHING_PORT:-8777}:8777"
     volumes:
       - ${DOCKER_VOLUME_DIRECTORY:-.}/:/workspace/QAnything/
+    ports:
+      - "8777:8777"
     environment:
       - NCCL_LAUNCH_MODE=PARALLEL
-      - GPUID=${GPUID:--1}
+      - GPUID=${GPUID:-0}
       - USER_IP=${USER_IP:-0.0.0.0}
-      - GATEWAY_IP=${GATEWAY_IP:-host.docker.internal}
-      - MYSQL_HOST=mysql
-      - MYSQL_PORT=3306
-      - MILVUS_HOST=standalone
-      - MILVUS_PORT=19530
-      - ES_HOST=elasticsearch
-      - ES_PORT=9200
-      - EMBED_SERVICE_HOST=localhost
-      - RERANK_SERVICE_HOST=localhost
-      - OCR_SERVICE_HOST=localhost
-      - PDF_PARSER_SERVICE_HOST=localhost
+      - GATEWAY_IP=host.docker.internal
     depends_on:
       standalone:
         condition: service_healthy
@@ -140,3 +126,8 @@ services:
         condition: service_healthy
     tty: true
     stdin_open: true
+
+#networks:
+#  default:
+#    name: QAnything
+

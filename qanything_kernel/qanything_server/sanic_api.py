@@ -18,7 +18,7 @@ sys.path.append(root_dir)
 from handler import *
 from qanything_kernel.core.local_doc_qa import LocalDocQA
 from qanything_kernel.utils.custom_log import debug_logger, qa_logger
-from qanything_kernel.configs.model_config import QANYTHING_HOST, QANYTHING_PORT, QANYTHING_WORKERS
+from qanything_kernel.utils.health_check import HealthCheckManager
 from sanic.worker.manager import WorkerManager
 from sanic import Sanic
 from sanic_ext import Extend
@@ -28,10 +28,12 @@ import webbrowser
 
 WorkerManager.THRESHOLD = 6000
 
+# 接收外部参数mode
 parser = argparse.ArgumentParser()
-parser.add_argument('--host', type=str, default=QANYTHING_HOST, help='host')
-parser.add_argument('--port', type=int, default=QANYTHING_PORT, help='port')
-parser.add_argument('--workers', type=int, default=QANYTHING_WORKERS, help='workers')
+parser.add_argument('--host', type=str, default='0.0.0.0', help='host')
+parser.add_argument('--port', type=int, default=8777, help='port')
+parser.add_argument('--workers', type=int, default=4, help='workers')
+# 检查是否是local或online，不是则报错
 args = parser.parse_args()
 
 start_time = time.time()
@@ -53,6 +55,10 @@ async def init_local_doc_qa(app, loop):
     end = time.time()
     print(f'init local_doc_qa cost {end - start}s', flush=True)
     app.ctx.local_doc_qa = local_doc_qa
+
+    health_manager = HealthCheckManager()
+    app.ctx.health_manager = health_manager
+    print('init health_manager success', flush=True)
     
 @app.after_server_start
 async def notify_server_started(app, loop):
@@ -71,6 +77,7 @@ async def start_server_and_open_browser(app, loop):
 # tags=["新建知识库"]
 app.add_route(document, "/api/docs", methods=['GET'])
 app.add_route(health_check, "/api/health_check", methods=['GET'])  # tags=["健康检查"]
+app.add_route(dependency_health, "/api/dependency_health", methods=['GET'])  # tags=["依赖健康检查"]
 app.add_route(new_knowledge_base, "/api/local_doc_qa/new_knowledge_base", methods=['POST'])  # tags=["新建知识库"]
 app.add_route(upload_weblink, "/api/local_doc_qa/upload_weblink", methods=['POST'])  # tags=["上传网页链接"]
 app.add_route(upload_files, "/api/local_doc_qa/upload_files", methods=['POST'])  # tags=["上传文件"]

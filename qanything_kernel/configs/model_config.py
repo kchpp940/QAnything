@@ -1,69 +1,29 @@
 import os
 from dotenv import load_dotenv
 
-
-def _get_env_bool(key: str, default: bool = False) -> bool:
-    val = os.getenv(key)
-    if val is None:
-        return default
-    return val.lower() in ("true", "1", "yes", "on")
-
-
-def _get_env_int(key: str, default: int = 0) -> int:
-    val = os.getenv(key)
-    if val is None or val == "":
-        return default
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return default
-
-
-def _get_env_float(key: str, default: float = 0.0) -> float:
-    val = os.getenv(key)
-    if val is None or val == "":
-        return default
-    try:
-        return float(val)
-    except (ValueError, TypeError):
-        return default
-
-
 load_dotenv()
-
-# ============================================================
-# 路径配置
-# ============================================================
+# 获取环境变量GATEWAY_IP
+GATEWAY_IP = os.getenv("GATEWAY_IP", "localhost")
+# LOG_FORMAT = "%(levelname) -5s %(asctime)s" "-1d: %(message)s"
+# logger = logging.getLogger()
+# logger.setLevel(logging.INFO)
+# logging.basicConfig(format=LOG_FORMAT)
+# 获取项目根目录
+# 获取当前脚本的绝对路径
 current_script_path = os.path.abspath(__file__)
 root_path = os.path.dirname(os.path.dirname(os.path.dirname(current_script_path)))
-
-UPLOAD_ROOT_PATH = os.path.join(root_path, os.getenv("UPLOAD_ROOT_PATH", "QANY_DB/content"))
+UPLOAD_ROOT_PATH = os.path.join(root_path, "QANY_DB", "content")
 IMAGES_ROOT_PATH = os.path.join(root_path, "qanything_kernel/qanything_server/dist/qanything/assets", "file_images")
 print("UPLOAD_ROOT_PATH:", UPLOAD_ROOT_PATH)
 print("IMAGES_ROOT_PATH:", IMAGES_ROOT_PATH)
-
 OCR_MODEL_PATH = os.path.join(root_path, "qanything_kernel", "dependent_server", "ocr_server", "ocr_models")
 RERANK_MODEL_PATH = os.path.join(root_path, "qanything_kernel", "dependent_server", "rerank_server", "rerank_models")
-EMBED_MODEL_PATH = os.path.join(root_path, "qanything_kernel", "dependent_server", "embedding_server", "embed_models")
+EMBED_MODEL_PATH = os.path.join(root_path, "qanything_kernel", "dependent_server", "embed_server", "embed_models")
 PDF_MODEL_PATH = os.path.join(root_path, "qanything_kernel/dependent_server/pdf_parser_server/pdf_to_markdown")
 
-# ============================================================
-# 基础运行配置
-# ============================================================
-GATEWAY_IP = os.getenv("GATEWAY_IP", "localhost")
-USER_IP = os.getenv("USER_IP", "localhost")
+# LLM streaming reponse
+STREAMING = True
 
-QANYTHING_HOST = os.getenv("QANYTHING_HOST", "0.0.0.0")
-QANYTHING_PORT = _get_env_int("QANYTHING_PORT", 8777)
-QANYTHING_WORKERS = _get_env_int("QANYTHING_WORKERS", 4)
-
-INSERT_FILES_SERVICE_PORT = _get_env_int("INSERT_FILES_SERVICE_PORT", 8110)
-
-STREAMING = _get_env_bool("STREAMING", True)
-
-# ============================================================
-# Prompt 模板
-# ============================================================
 SYSTEM = """
 You are always a reliable assistant that can answer questions with the help of external documents.
 You are an AI assistant that follows instructions extremely well. Help as much as you can. 
@@ -81,7 +41,7 @@ Today's date is {{today_date}}. The current time is {{current_time}}.
 3. **No redundancy**:
     - If different parts of the reference contain overlapping information, merge and summarize them to avoid repetition.
 4. **Flexible use of information sources**:
-    - During the **inference and reasoning process**, use the "Information Sources" section to track document citations and ensure accuracy.
+    - During the **inference and reasoning process**, use the "Information Sources" module to track document citations and ensure accuracy.
     - **Each reference** must be listed separately with its corresponding information (ref_number, title, section, abstract). 
     - **Do not include the full "Information Sources" section in the final user-facing answer**.
 5. **Start the "Inferred Answer" Section**:  
@@ -139,7 +99,7 @@ INSTRUCTIONS = """
 - Respond in the same language as the question "{{question}}", using "根据参考信息" if in Chinese, or "According to the reference information" if in English.
 - **Flexible Format**:
     - Use headings (##, ###, ####), bullet points, or tables as appropriate.
-    - Use **bullet points** (- or 1., 2., 3.) for listing multiple items.
+    - Use **bullet points** (- or 1., 2., 3.) for listing multiple points.
     - **Highlight key information** using **bold** or *italic* text where relevant.
     - **Reference ID visibility**:
         - Do not show reference IDs in the final answer.
@@ -192,66 +152,44 @@ SIMPLE_PROMPT_TEMPLATE = """
 Return your answer in Markdown formatting, and in the same language as the question "{{question}}". 
 """
 
-# ============================================================
-# 知识库 / 检索配置
-# ============================================================
-CACHED_VS_NUM = _get_env_int("CACHED_VS_NUM", 100)
+# 缓存知识库数量
+CACHED_VS_NUM = 100
 
-SENTENCE_SIZE = _get_env_int("SENTENCE_SIZE", 100)
+# 文本分句长度
+SENTENCE_SIZE = 100
 
-VECTOR_SEARCH_TOP_K = _get_env_int("VECTOR_SEARCH_TOP_K", 30)
+# 知识库检索时返回的匹配内容条数
+VECTOR_SEARCH_TOP_K = 30
 
-VECTOR_SEARCH_SCORE_THRESHOLD = _get_env_float("VECTOR_SEARCH_SCORE_THRESHOLD", 0.3)
+VECTOR_SEARCH_SCORE_THRESHOLD = 0.3
 
-KB_SUFFIX = os.getenv("KB_SUFFIX", "_240625")
+KB_SUFFIX = '_240625'
+# MILVUS_HOST_LOCAL = 'milvus-standalone-local'
+# MILVUS_PORT = 19530
+MILVUS_HOST_LOCAL = GATEWAY_IP
+MILVUS_PORT = 19540
+MILVUS_COLLECTION_NAME = 'qanything_collection' + KB_SUFFIX
 
-DEFAULT_CHILD_CHUNK_SIZE = _get_env_int("DEFAULT_CHILD_CHUNK_SIZE", 400)
-DEFAULT_PARENT_CHUNK_SIZE = _get_env_int("DEFAULT_PARENT_CHUNK_SIZE", 800)
-SEPARATORS = ["\n\n", "\n", "。", "，", ",", ".", ""]
-MAX_CHARS = _get_env_int("MAX_CHARS", 1000000)
+# ES_URL = 'http://es-container-local:9200/'
+ES_URL = f'http://{GATEWAY_IP}:9210/'
+ES_USER = None
+ES_PASSWORD = None
+ES_TOP_K = 30
+ES_INDEX_NAME = 'qanything_es_index' + KB_SUFFIX
 
-# ============================================================
-# Milvus 配置
-# ============================================================
-MILVUS_HOST_LOCAL = os.getenv("MILVUS_HOST", GATEWAY_IP)
-MILVUS_HOST_ONLINE = MILVUS_HOST_LOCAL
-MILVUS_PORT = _get_env_int("MILVUS_PORT", 19540)
-MILVUS_COLLECTION_NAME = os.getenv("MILVUS_COLLECTION_NAME", "qanything_collection") + KB_SUFFIX
+# MYSQL_HOST_LOCAL = 'mysql-container-local'
+# MYSQL_PORT_LOCAL = 3306
+MYSQL_HOST_LOCAL = GATEWAY_IP
+MYSQL_PORT_LOCAL = 3316
+MYSQL_USER_LOCAL = 'root'
+MYSQL_PASSWORD_LOCAL = '123456'
+MYSQL_DATABASE_LOCAL = 'qanything'
 
-# ============================================================
-# Elasticsearch 配置
-# ============================================================
-ES_HOST = os.getenv("ES_HOST", GATEWAY_IP)
-ES_PORT = _get_env_int("ES_PORT", 9210)
-ES_URL = f'http://{ES_HOST}:{ES_PORT}/'
-ES_USER = os.getenv("ES_USER") or None
-ES_PASSWORD = os.getenv("ES_PASSWORD") or None
-ES_TOP_K = _get_env_int("ES_TOP_K", 30)
-ES_INDEX_NAME = os.getenv("ES_INDEX_NAME", "qanything_es_index") + KB_SUFFIX
+LOCAL_OCR_SERVICE_URL = "localhost:7001"
 
-# ============================================================
-# MySQL 配置
-# ============================================================
-MYSQL_HOST_LOCAL = os.getenv("MYSQL_HOST", GATEWAY_IP)
-MYSQL_PORT_LOCAL = _get_env_int("MYSQL_PORT", 3316)
-MYSQL_USER_LOCAL = os.getenv("MYSQL_USER", "root")
-MYSQL_PASSWORD_LOCAL = os.getenv("MYSQL_PASSWORD", "123456")
-MYSQL_DATABASE_LOCAL = os.getenv("MYSQL_DATABASE", "qanything")
+LOCAL_PDF_PARSER_SERVICE_URL = "localhost:9009"
 
-# ============================================================
-# 本地依赖服务地址
-# ============================================================
-OCR_SERVICE_HOST = os.getenv("OCR_SERVICE_HOST", "localhost")
-OCR_SERVICE_PORT = _get_env_int("OCR_SERVICE_PORT", 7001)
-LOCAL_OCR_SERVICE_URL = f"{OCR_SERVICE_HOST}:{OCR_SERVICE_PORT}"
-
-PDF_PARSER_SERVICE_HOST = os.getenv("PDF_PARSER_SERVICE_HOST", "localhost")
-PDF_PARSER_SERVICE_PORT = _get_env_int("PDF_PARSER_SERVICE_PORT", 9009)
-LOCAL_PDF_PARSER_SERVICE_URL = f"{PDF_PARSER_SERVICE_HOST}:{PDF_PARSER_SERVICE_PORT}"
-
-RERANK_SERVICE_HOST = os.getenv("RERANK_SERVICE_HOST", "localhost")
-RERANK_SERVICE_PORT = _get_env_int("RERANK_SERVICE_PORT", 8001)
-LOCAL_RERANK_SERVICE_URL = f"{RERANK_SERVICE_HOST}:{RERANK_SERVICE_PORT}"
+LOCAL_RERANK_SERVICE_URL = "localhost:8001"
 LOCAL_RERANK_MODEL_NAME = 'rerank'
 LOCAL_RERANK_MAX_LENGTH = 512
 LOCAL_RERANK_BATCH = 1
@@ -259,9 +197,7 @@ LOCAL_RERANK_THREADS = 1
 LOCAL_RERANK_PATH = os.path.join(root_path, 'qanything_kernel/dependent_server/rerank_server', 'rerank_model_configs_v0.0.1')
 LOCAL_RERANK_MODEL_PATH = os.path.join(LOCAL_RERANK_PATH, "rerank.onnx")
 
-EMBED_SERVICE_HOST = os.getenv("EMBED_SERVICE_HOST", "localhost")
-EMBED_SERVICE_PORT = _get_env_int("EMBED_SERVICE_PORT", 9001)
-LOCAL_EMBED_SERVICE_URL = f"{EMBED_SERVICE_HOST}:{EMBED_SERVICE_PORT}"
+LOCAL_EMBED_SERVICE_URL = "localhost:9001"
 LOCAL_EMBED_MODEL_NAME = 'embed'
 LOCAL_EMBED_MAX_LENGTH = 512
 LOCAL_EMBED_BATCH = 1
@@ -271,14 +207,28 @@ LOCAL_EMBED_MODEL_PATH = os.path.join(LOCAL_EMBED_PATH, "embed.onnx")
 
 TOKENIZER_PATH = os.path.join(root_path, 'qanything_kernel/connector/llm/tokenizer_files')
 
-# ============================================================
-# Bot 相关
-# ============================================================
+DEFAULT_CHILD_CHUNK_SIZE = 400
+DEFAULT_PARENT_CHUNK_SIZE = 800
+SEPARATORS = ["\n\n", "\n", "。", "，", ",", ".", ""]
+MAX_CHARS = 1000000  # 单个文件最大字符数，超过此字符数将上传失败，改大可能会导致解析超时
+
+# llm_config = {
+#     # 回答的最大token数，一般来说对于国内模型一个中文不到1个token，国外模型一个中文1.5-2个token
+#     "max_token": 512,
+#     # 附带的上下文数目
+#     "history_len": 2,
+#     # 总共的token数，如果遇到电脑显存不够的情况可以将此数字改小，如果低于3000仍然无法使用，就更换模型
+#     "token_window": 4096,
+#     # 如果报错显示top_p值必须在0到1，可以在这里修改
+#     "top_p": 1.0
+# }
+
+# Bot
 BOT_DESC = "一个简单的问答机器人"
 BOT_IMAGE = ""
 BOT_PROMPT = """
 - 你是一个耐心、友好、专业的机器人，能够回答用户的各种问题。
 - 根据知识库内的检索结果，以清晰简洁的表达方式回答问题。
-- 不要编造答案，如果答案不在经核实的资料中或无法从经核实的资料中得出，请回答"我无法回答您的问题。"（或者您可以修改为：如果给定的检索结果无法回答问题，可以利用你的知识尽可能回答用户的问题。)
+- 不要编造答案，如果答案不在经核实的资料中或无法从经核实的资料中得出，请回答“我无法回答您的问题。”（或者您可以修改为：如果给定的检索结果无法回答问题，可以利用你的知识尽可能回答用户的问题。)
 """
 BOT_WELCOME = "您好，我是您的专属机器人，请问有什么可以帮您呢？"

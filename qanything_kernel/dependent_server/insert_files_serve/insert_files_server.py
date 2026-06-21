@@ -19,8 +19,8 @@ from qanything_kernel.connector.database.mysql.mysql_client import KnowledgeBase
 from qanything_kernel.core.retriever.elasticsearchstore import StoreElasticSearchClient
 from qanything_kernel.core.retriever.parent_retriever import ParentRetriever
 from qanything_kernel.configs.model_config import MYSQL_HOST_LOCAL, MYSQL_PORT_LOCAL, \
-    MYSQL_USER_LOCAL, MYSQL_PASSWORD_LOCAL, MYSQL_DATABASE_LOCAL, MAX_CHARS, \
-    INSERT_FILES_SERVICE_PORT
+    MYSQL_USER_LOCAL, MYSQL_PASSWORD_LOCAL, MYSQL_DATABASE_LOCAL, MAX_CHARS
+from qanything_kernel.utils.health_check import HealthCheckManager
 from sanic.worker.manager import WorkerManager
 import asyncio
 import traceback
@@ -33,8 +33,9 @@ import json
 WorkerManager.THRESHOLD = 6000
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--port', type=int, default=INSERT_FILES_SERVICE_PORT, help='port')
+parser.add_argument('--port', type=int, default=8110, help='port')
 parser.add_argument('--workers', type=int, default=4, help='workers')
+# 检查是否是local或online，不是则报错
 args = parser.parse_args()
 
 INSERT_WORKERS = args.workers
@@ -232,9 +233,33 @@ async def close_db(app, loop):
 
 @app.listener('before_server_start')
 async def setup_workers(app, loop):
-    # 创建数据库连接池
+    health_manager = HealthCheckManager()
+    critical_services = ["mysql", "milvus", "elasticsearch", "embedding", "rerank"]
+
+    insert_logger.info(f"Waiting for critical dependencies: {critical_services}")
+    ready = await health_manager.wait_for_services(
+        required_services=critical_services,
+        timeout=180.0,
+        interval=3.0,
+    )
+
+    if not ready:
+        health_status = await health_manager.check_specific(critical_services)
+        unhealthy = [
+            f"{name}: {dep.status.value} - {dep.message}"
+            for name, dep in health_status.dependencies.items()
+            if dep.status.value != "healthy"
+        ]
+        insert_logger.error(
+            f"Critical dependencies not ready after timeout. Unhealthy services: {unhealthy}"
+        )
+    else:
+        insert_logger.info("All critical dependencies are ready")
+
+    app.ctx.health_manager = health_manager
+
     app.ctx.pool = await aiomysql.create_pool(**db_config, minsize=1, maxsize=16, loop=loop, autocommit=False,
-                                              init_command='SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED')  # 更改事务隔离级别
+                                              init_command='SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED')
     app.add_task(check_and_process(app.ctx.pool))
 
 
