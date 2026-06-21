@@ -17,6 +17,24 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 # ------------------------------------------------------------
+# 环境变量契约校验（启动前）
+# ------------------------------------------------------------
+echo -e "${YELLOW}[1/5] 执行环境变量契约校验...${NC}"
+VALIDATE_SCRIPT="scripts/validate_env.py"
+if [ -f "$VALIDATE_SCRIPT" ] && command -v python3 &>/dev/null; then
+  if python3 "$VALIDATE_SCRIPT" --strict; then
+    echo -e "${GREEN}环境变量契约校验通过 ✓${NC}"
+  else
+    echo -e "${RED}环境变量契约校验失败，请修复上述问题后重试。${NC}"
+    echo -e "${YELLOW}如需忽略校验继续启动，请手动执行: docker compose up -d${NC}"
+    exit 1
+  fi
+else
+  echo -e "${YELLOW}警告: 无法执行校验脚本（跳过），将继续启动。${NC}"
+fi
+echo
+
+# ------------------------------------------------------------
 # 工具函数：更新或追加键值对到 .env 文件
 # ------------------------------------------------------------
 update_or_append_to_env() {
