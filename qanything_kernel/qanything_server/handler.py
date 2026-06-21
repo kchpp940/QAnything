@@ -1240,26 +1240,12 @@ async def get_user_status(req: request):
 
 @get_time_async
 async def health_check(req: request):
-    from qanything_kernel.utils.health_check import HealthCheckManager, ServiceStatus
-
-    health_manager: HealthCheckManager = req.app.ctx.health_manager
-
-    specific = req.args.get('services', None)
-    use_cache = req.args.get('use_cache', 'true').lower() != 'false'
-
-    if specific:
-        service_list = [s.strip() for s in specific.split(',') if s.strip()]
-        health_status = await health_manager.check_specific(service_list)
-    else:
-        health_status = await health_manager.check_all(use_cache=use_cache)
-
-    status_code = 200 if health_status.overall_status == ServiceStatus.HEALTHY else 503
-
     return sanic_json({
         "code": 200,
         "msg": "success",
-        "data": health_status.to_dict()
-    }, status=status_code)
+        "status": "alive",
+        "service": "qanything-api",
+    })
 
 
 @get_time_async
@@ -1283,6 +1269,7 @@ async def dependency_health(req: request):
         "code": 200,
         "msg": "success",
         "status": health_status.overall_status.value,
+        "status_code": status_code,
         "dependencies": {
             name: dep.to_dict()
             for name, dep in health_status.dependencies.items()

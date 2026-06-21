@@ -234,27 +234,39 @@ async def close_db(app, loop):
 @app.listener('before_server_start')
 async def setup_workers(app, loop):
     health_manager = HealthCheckManager()
-    critical_services = ["mysql", "milvus", "elasticsearch", "embedding", "rerank"]
+    required_services = health_manager.get_insert_files_required_services()
 
-    insert_logger.info(f"Waiting for critical dependencies: {critical_services}")
-    ready = await health_manager.wait_for_services(
-        required_services=critical_services,
-        timeout=180.0,
+    insert_logger.info(
+        f"Waiting for insert-files required dependencies: {required_services}. "
+        f"Each service check has short timeout (~2-3s), total wait timeout 120s"
+    )
+    ready, last_health = await health_manager.wait_for_services(
+        required_services=required_services,
+        timeout=120.0,
         interval=3.0,
     )
 
     if not ready:
-        health_status = await health_manager.check_specific(critical_services)
-        unhealthy = [
-            f"{name}: {dep.status.value} - {dep.message}"
-            for name, dep in health_status.dependencies.items()
-            if dep.status.value != "healthy"
-        ]
+        report = health_manager.get_structured_failure_report(required_services, last_health)
+        healthy_strs = [f"{s['name']}({s['latency_ms']:.0f}ms)" for s in report['healthy']]
+        unhealthy_strs = "\n".join(
+            f"  - {s['name']}: [{s['error_type']}] {s['status']} - {s['message']}"
+            f" | latency={s['latency_ms']:.0f}ms | details={s.get('details', {})}"
+            for s in report['unhealthy']
+        )
         insert_logger.error(
-            f"Critical dependencies not ready after timeout. Unhealthy services: {unhealthy}"
+            "=== INSERT FILES SERVER DEPENDENCY FAILURE REPORT ===\n"
+            f"Required services: {required_services}\n"
+            f"Healthy services ({len(report['healthy'])}): {healthy_strs}\n"
+            f"Unhealthy services ({len(report['unhealthy'])}):\n{unhealthy_strs}\n"
+            f"Missing services ({len(report['missing'])}): {report['missing']}\n"
+            "Server will continue startup but file ingestion tasks may fail until dependencies are ready. "
+            "Check the above error_type for diagnosis hints: "
+            "connection_refused -> service not started; timeout -> network/load issue; "
+            "config_missing -> check environment variables; auth_failed -> check credentials."
         )
     else:
-        insert_logger.info("All critical dependencies are ready")
+        insert_logger.info(f"All insert-files required dependencies are ready: {required_services}")
 
     app.ctx.health_manager = health_manager
 

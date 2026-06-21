@@ -279,21 +279,23 @@ const urlConfig: IUrlConfig = {
       user_info: userPhone,
     },
   },
-  // 健康检查
+  // 健康检查（liveness 探针）
   healthCheck: {
     type: EUrlType.GET,
     url: '/api/health_check',
     showLoading: false,
     cancelRepeat: false,
     errorToast: false,
+    validateStatus: () => true,
   },
-  // 依赖健康检查
+  // 依赖健康检查（readiness 探针）- 覆盖 validateStatus 确保 503 响应体不会被拦截器吞掉
   dependencyHealth: {
     type: EUrlType.GET,
     url: '/api/dependency_health',
     showLoading: false,
     cancelRepeat: false,
     errorToast: false,
+    validateStatus: () => true,
   },
 };
 

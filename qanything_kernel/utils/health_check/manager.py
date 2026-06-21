@@ -1,8 +1,8 @@
 import asyncio
 import time
-from typing import List, Dict, Optional, Set
+from typing import List, Dict, Optional, Tuple
 from qanything_kernel.utils.health_check.base import (
-    BaseHealthChecker, HealthStatus, ServiceStatus, DependencyHealth
+    BaseHealthChecker, HealthStatus, ServiceStatus, DependencyHealth, ErrorType
 )
 from qanything_kernel.utils.health_check.mysql_check import MySQLHealthChecker
 from qanything_kernel.utils.health_check.milvus_check import MilvusHealthChecker
@@ -40,6 +40,26 @@ class HealthCheckManager:
         if name in self.checkers:
             del self.checkers[name]
 
+    def _handle_exception(self, name: str, exc: Exception) -> DependencyHealth:
+        debug_logger.error(f"Health checker {name} raised exception: {exc}")
+        msg = str(exc).lower()
+        exc_name = type(exc).__name__.lower()
+
+        if 'timeout' in msg or 'timed out' in msg:
+            error_type = ErrorType.TIMEOUT
+        elif 'refused' in msg or 'connectionrefusederror' in exc_name:
+            error_type = ErrorType.CONNECTION_REFUSED
+        else:
+            error_type = ErrorType.UNKNOWN_ERROR
+
+        return DependencyHealth(
+            name=name,
+            status=ServiceStatus.UNHEALTHY,
+            error_type=error_type,
+            message=f"Checker exception: {str(exc)}",
+            last_check_time=time.time(),
+        )
+
     async def check_all(self, use_cache: bool = True) -> HealthStatus:
         if use_cache and self._cache and (time.time() - self._last_check_time) < self._cache_ttl:
             return self._cache
@@ -55,13 +75,7 @@ class HealthCheckManager:
         dependencies: Dict[str, DependencyHealth] = {}
         for name, result in zip(checker_names, results):
             if isinstance(result, Exception):
-                debug_logger.error(f"Health checker {name} raised exception: {result}")
-                dependencies[name] = DependencyHealth(
-                    name=name,
-                    status=ServiceStatus.UNHEALTHY,
-                    message=f"Checker exception: {str(result)}",
-                    last_check_time=time.time(),
-                )
+                dependencies[name] = self._handle_exception(name, result)
             else:
                 dependencies[name] = result
 
@@ -91,12 +105,7 @@ class HealthCheckManager:
         dependencies: Dict[str, DependencyHealth] = {}
         for name, result in zip(checker_names, results):
             if isinstance(result, Exception):
-                dependencies[name] = DependencyHealth(
-                    name=name,
-                    status=ServiceStatus.UNHEALTHY,
-                    message=f"Checker exception: {str(result)}",
-                    last_check_time=time.time(),
-                )
+                dependencies[name] = self._handle_exception(name, result)
             else:
                 dependencies[name] = result
 
@@ -113,14 +122,16 @@ class HealthCheckManager:
         required_services: List[str],
         timeout: float = 120.0,
         interval: float = 2.0,
-    ) -> bool:
+    ) -> Tuple[bool, Optional[HealthStatus]]:
         start_time = time.time()
         required_set = set(required_services)
+        last_health: Optional[HealthStatus] = None
 
         debug_logger.info(f"Waiting for services: {required_services}, timeout: {timeout}s")
 
         while time.time() - start_time < timeout:
             health = await self.check_specific(required_services)
+            last_health = health
             all_healthy = all(
                 dep.status == ServiceStatus.HEALTHY
                 for name, dep in health.dependencies.items()
@@ -129,21 +140,61 @@ class HealthCheckManager:
 
             if all_healthy:
                 debug_logger.info(f"All required services are healthy: {required_services}")
-                return True
+                return True, last_health
 
-            unhealthy = [
-                name for name, dep in health.dependencies.items()
+            unhealthy_details = [
+                f"{name}({dep.status.value}, {dep.error_type.value}): {dep.message}"
+                for name, dep in health.dependencies.items()
                 if name in required_set and dep.status != ServiceStatus.HEALTHY
             ]
             debug_logger.info(
-                f"Waiting for services... unhealthy: {unhealthy}, "
-                f"elapsed: {round(time.time() - start_time, 1)}s"
+                f"Waiting for services... elapsed: {round(time.time() - start_time, 1)}s, "
+                f"unhealthy: {unhealthy_details}"
             )
 
             await asyncio.sleep(interval)
 
         debug_logger.error(f"Timeout waiting for services: {required_services} after {timeout}s")
-        return False
+        return False, last_health
+
+    def get_structured_failure_report(
+        self,
+        required_services: List[str],
+        last_health: Optional[HealthStatus],
+    ) -> Dict:
+        required_set = set(required_services)
+        report = {
+            "required_services": list(required_services),
+            "healthy": [],
+            "unhealthy": [],
+            "missing": [],
+        }
+
+        if last_health is None:
+            report["missing"] = list(required_services)
+            return report
+
+        for name in required_services:
+            if name in last_health.dependencies:
+                dep = last_health.dependencies[name]
+                if dep.status == ServiceStatus.HEALTHY:
+                    report["healthy"].append({
+                        "name": name,
+                        "latency_ms": dep.latency_ms,
+                    })
+                else:
+                    report["unhealthy"].append({
+                        "name": name,
+                        "status": dep.status.value,
+                        "error_type": dep.error_type.value,
+                        "message": dep.message,
+                        "details": dep.details,
+                        "latency_ms": dep.latency_ms,
+                    })
+            else:
+                report["missing"].append(name)
+
+        return report
 
     def _compute_overall_status(self, dependencies: Dict[str, DependencyHealth]) -> ServiceStatus:
         if not dependencies:
@@ -163,6 +214,9 @@ class HealthCheckManager:
         return ServiceStatus.UNKNOWN
 
     def get_critical_services(self) -> List[str]:
+        return ["mysql", "milvus", "elasticsearch", "embedding", "rerank"]
+
+    def get_insert_files_required_services(self) -> List[str]:
         return ["mysql", "milvus", "elasticsearch", "embedding", "rerank"]
 
     def invalidate_cache(self):
