@@ -153,6 +153,33 @@ export interface IQARecord {
   kb_names: string;
 }
 
+export interface IDiagnosisRecord {
+  qaId: string;
+  userId: string;
+  botId: string;
+  kbIds: string[];
+  query: string;
+  model: string;
+  productSource: string;
+  timeRecord: ITimeRecord;
+  history: Array<[string, string]>;
+  condenseQuestion: string;
+  prompt: string;
+  result: string;
+  retrievalDocuments: ISourceDocument[];
+  sourceDocuments: ISourceDocument[];
+  timestamp: string;
+  retrievalTrace: IRetrievalTrace[];
+  webSearchTrace: IWebSearchTrace[];
+  kbNames: string;
+}
+
+export interface IDiagnosisResponse {
+  qaInfo: IDiagnosisRecord;
+  recentSections: Record<number, IDiagnosisRecord[]>;
+  olderSections: Record<number, IDiagnosisRecord[]>;
+}
+
 export interface IChatResponse {
   code: number;
   msg: string;

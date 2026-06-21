@@ -593,6 +593,117 @@ class QARecordSerializer(BaseSerializer):
         return result
 
 
+class DiagnosisRecordSerializer(BaseSerializer):
+    """诊断记录序列化器，用于 get_related_qa 接口返回的单条 qa_info 和关联 section 中的 log"""
+
+    fields = [
+        'qa_id', 'user_id', 'bot_id', 'kb_ids', 'query', 'model',
+        'product_source', 'time_record', 'history', 'condense_question',
+        'prompt', 'result', 'retrieval_documents', 'source_documents',
+        'timestamp', 'retrieval_trace', 'web_search_trace', 'kb_names'
+    ]
+
+    defaults = {
+        'qa_id': '',
+        'user_id': '',
+        'bot_id': '',
+        'kb_ids': [],
+        'query': '',
+        'model': '',
+        'product_source': '',
+        'time_record': TimeRecordSerializer.defaults,
+        'history': [],
+        'condense_question': '',
+        'prompt': '',
+        'result': '',
+        'retrieval_documents': [],
+        'source_documents': [],
+        'timestamp': '',
+        'retrieval_trace': [],
+        'web_search_trace': [],
+        'kb_names': ''
+    }
+
+    json_fields = ['kb_ids', 'time_record', 'history',
+                   'retrieval_documents', 'source_documents']
+
+    @classmethod
+    def serialize(cls, data: Any, **kwargs) -> Dict[str, Any]:
+        if data is None:
+            return cls.defaults.copy()
+
+        if isinstance(data, dict):
+            raw_data = data
+        else:
+            raw_data = cls._object_to_dict(data)
+
+        result = cls.defaults.copy()
+
+        for field in cls.fields:
+            value = kwargs.get(field, raw_data.get(field))
+            if value is None:
+                continue
+
+            if field == 'time_record':
+                if isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        value = {}
+                value = TimeRecordSerializer.serialize(value)
+
+            elif field == 'source_documents':
+                if isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        value = []
+                if isinstance(value, list):
+                    value = SourceDocumentSerializer.serialize_list(value)
+
+            elif field == 'retrieval_documents':
+                if isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        value = []
+                if isinstance(value, list):
+                    value = SourceDocumentSerializer.serialize_list(value)
+
+            elif field in ['kb_ids', 'history']:
+                if isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        value = cls.defaults[field]
+
+            elif field == 'timestamp':
+                if hasattr(value, 'strftime'):
+                    value = value.strftime('%Y-%m-%d %H:%M:%S')
+
+            elif field == 'retrieval_trace':
+                if isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        value = []
+                if not isinstance(value, list):
+                    value = []
+
+            elif field == 'web_search_trace':
+                if isinstance(value, str):
+                    try:
+                        value = json.loads(value)
+                    except (json.JSONDecodeError, TypeError):
+                        value = []
+                if not isinstance(value, list):
+                    value = []
+
+            result[field] = value
+
+        return result
+
+
 class PaginatedResponseSerializer(BaseSerializer):
     """分页响应序列化器"""
 

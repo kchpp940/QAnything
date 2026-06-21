@@ -21,10 +21,9 @@ import urlConfig from '@/services/urlConfig';
 import LineEchart, { type IChartList } from '@/views/Statistics/components/lineEchart.vue';
 import { message } from 'ant-design-vue';
 import { useUser } from '@/store/useUser';
+import { adaptApiResponse } from '@/utils/responseAdapter';
 
 const { userInfo } = useUser();
-
-// 问答图表的处理
 
 const qaLoading = ref(false);
 
@@ -40,7 +39,6 @@ const handleQAInfo = (infos: object) => {
   });
 };
 
-// 获取对话记录相关信息
 const getQAInfo = async () => {
   qaLoading.value = true;
   const { time_start, time_end } = getLastDaysRange(30);
@@ -52,7 +50,7 @@ const getQAInfo = async () => {
         only_need_count: true,
       })
     );
-    handleQAInfo(res.qa_infos_by_day);
+    handleQAInfo(res.qaInfosByDay);
   } catch (e) {
     message.error(e.msg || '出错了');
   } finally {

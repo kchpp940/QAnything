@@ -10,7 +10,8 @@ from qanything_kernel.utils.general_utils import *
 from qanything_kernel.utils.serializers import (
     ChatResponseSerializer, BotInfoSerializer, KnowledgeFileSerializer,
     QARecordSerializer, PaginatedResponseSerializer, ApiResponseSerializer,
-    SourceDocumentSerializer, TimeRecordSerializer, LLMSettingSerializer
+    SourceDocumentSerializer, TimeRecordSerializer, LLMSettingSerializer,
+    DiagnosisRecordSerializer
 )
 from langchain.schema import Document
 from sanic.response import ResponseStream
@@ -1173,8 +1174,10 @@ async def get_random_qa(req: request):
     qa_infos = local_doc_qa.milvus_summary.get_random_qa_infos(limit=limit, time_range=time_range, need_info=need_info)
 
     counts = local_doc_qa.milvus_summary.get_statistic(time_range=time_range)
-    return sanic_json({"code": 200, "msg": "success", "total_users": counts["total_users"],
-                       "total_queries": counts["total_queries"], "qa_infos": qa_infos})
+    serialized_qa_infos = DiagnosisRecordSerializer.serialize_list(qa_infos)
+    return sanic_json(ApiResponseSerializer.success(
+        data={'total_users': counts["total_users"], 'total_queries': counts["total_queries"], 'qa_infos': serialized_qa_infos}
+    ))
 
 
 @get_time_async
@@ -1187,11 +1190,13 @@ async def get_related_qa(req: request):
     need_more = safe_get(req, 'need_more', False)
     debug_logger.info("get_related_qa %s", qa_id)
     qa_log, recent_logs, older_logs = local_doc_qa.milvus_summary.get_related_qa_infos(qa_id, need_info, need_more)
-    # 按kb_ids划分sections
+
+    qa_log = DiagnosisRecordSerializer.serialize(qa_log)
+
     recent_sections = defaultdict(list)
     for log in recent_logs:
-        recent_sections[log['kb_ids']].append(log)
-    # 把recent_sections的key改为自增的正整数，且每个log都新增kb_name
+        kb_ids_key = log.get('kb_ids', '')
+        recent_sections[kb_ids_key].append(log)
     for i, kb_ids in enumerate(list(recent_sections.keys())):
         kb_names = local_doc_qa.milvus_summary.get_knowledge_base_name(json.loads(kb_ids))
         kb_names = [kb_name for user_id, kb_id, kb_name in kb_names]
@@ -1199,11 +1204,12 @@ async def get_related_qa(req: request):
         recent_sections[i] = recent_sections.pop(kb_ids)
         for log in recent_sections[i]:
             log['kb_names'] = kb_names
+        recent_sections[i] = DiagnosisRecordSerializer.serialize_list(recent_sections[i])
 
     older_sections = defaultdict(list)
     for log in older_logs:
-        older_sections[log['kb_ids']].append(log)
-    # 把older_sections的key改为自增的正整数，且每个log都新增kb_name
+        kb_ids_key = log.get('kb_ids', '')
+        older_sections[kb_ids_key].append(log)
     for i, kb_ids in enumerate(list(older_sections.keys())):
         kb_names = local_doc_qa.milvus_summary.get_knowledge_base_name(json.loads(kb_ids))
         kb_names = [kb_name for user_id, kb_id, kb_name in kb_names]
@@ -1211,9 +1217,11 @@ async def get_related_qa(req: request):
         older_sections[i] = older_sections.pop(kb_ids)
         for log in older_sections[i]:
             log['kb_names'] = kb_names
+        older_sections[i] = DiagnosisRecordSerializer.serialize_list(older_sections[i])
 
-    return sanic_json({"code": 200, "msg": "success", "qa_info": qa_log, "recent_sections": recent_sections,
-                       "older_sections": older_sections})
+    return sanic_json(ApiResponseSerializer.success(
+        data={'qa_info': qa_log, 'recent_sections': dict(recent_sections), 'older_sections': dict(older_sections)}
+    ))
 
 
 @get_time_async

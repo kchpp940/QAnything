@@ -522,6 +522,127 @@ export const adaptLegacyQARecord = (raw: any): IQARecord => {
 };
 
 // ============================================
+// 诊断记录适配器（诊断/溯源面板消费）
+// ============================================
+
+import type { IDiagnosisRecord, IDiagnosisResponse } from './types';
+
+const createDefaultDiagnosisRecord = (): IDiagnosisRecord => ({
+  qaId: '',
+  userId: '',
+  botId: '',
+  kbIds: [],
+  query: '',
+  model: '',
+  productSource: '',
+  timeRecord: adaptTimeRecord(null),
+  history: [],
+  condenseQuestion: '',
+  prompt: '',
+  result: '',
+  retrievalDocuments: [],
+  sourceDocuments: [],
+  timestamp: '',
+  retrievalTrace: [],
+  webSearchTrace: [],
+  kbNames: '',
+});
+
+export const adaptDiagnosisRecord = (raw: any): IDiagnosisRecord => {
+  if (!raw) return createDefaultDiagnosisRecord();
+
+  const transformed = transformKeys<Partial<IDiagnosisRecord>>(raw);
+  const result = { ...createDefaultDiagnosisRecord(), ...transformed };
+
+  result.timeRecord = adaptTimeRecord(raw.time_record || raw.timeRecord);
+
+  result.sourceDocuments = adaptSourceDocuments(raw.source_documents || raw.sourceDocuments);
+  result.retrievalDocuments = adaptSourceDocuments(raw.retrieval_documents || raw.retrievalDocuments);
+
+  if (raw.retrieval_trace || raw.retrievalTrace) {
+    result.retrievalTrace = (raw.retrieval_trace || raw.retrievalTrace || []).map((t: any) =>
+      adaptRetrievalTrace(t)
+    );
+  }
+
+  if (raw.web_search_trace || raw.webSearchTrace) {
+    result.webSearchTrace = (raw.web_search_trace || raw.webSearchTrace || []).map((t: any) =>
+      adaptWebSearchTrace(t)
+    );
+  }
+
+  if (raw.kb_ids && typeof raw.kb_ids === 'string') {
+    try {
+      result.kbIds = JSON.parse(raw.kb_ids);
+    } catch {
+      result.kbIds = raw.kb_ids.split(',').filter(Boolean);
+    }
+  }
+
+  if (raw.history && typeof raw.history === 'string') {
+    try {
+      result.history = JSON.parse(raw.history);
+    } catch {
+      result.history = [];
+    }
+  }
+
+  if (raw.time_record && typeof raw.time_record === 'string') {
+    try {
+      result.timeRecord = adaptTimeRecord(JSON.parse(raw.time_record));
+    } catch {
+      result.timeRecord = adaptTimeRecord(null);
+    }
+  }
+
+  if (raw.source_documents && typeof raw.source_documents === 'string') {
+    try {
+      result.sourceDocuments = adaptSourceDocuments(JSON.parse(raw.source_documents));
+    } catch {
+      result.sourceDocuments = [];
+    }
+  }
+
+  if (raw.retrieval_documents && typeof raw.retrieval_documents === 'string') {
+    try {
+      result.retrievalDocuments = adaptSourceDocuments(JSON.parse(raw.retrieval_documents));
+    } catch {
+      result.retrievalDocuments = [];
+    }
+  }
+
+  return result;
+};
+
+export const adaptDiagnosisRecords = (rawList: any[]): IDiagnosisRecord[] => {
+  if (!Array.isArray(rawList)) return [];
+  return rawList.map(item => adaptDiagnosisRecord(item));
+};
+
+export const adaptDiagnosisResponse = (raw: any): IDiagnosisResponse => {
+  const qaInfo = adaptDiagnosisRecord(raw?.qa_info || raw?.qaInfo);
+
+  const adaptSections = (sections: any): Record<number, IDiagnosisRecord[]> => {
+    if (!sections) return {};
+    const result: Record<number, IDiagnosisRecord[]> = {};
+    for (const key of Object.keys(sections)) {
+      const numKey = Number(key);
+      const sectionData = sections[key];
+      result[numKey] = Array.isArray(sectionData)
+        ? adaptDiagnosisRecords(sectionData)
+        : [];
+    }
+    return result;
+  };
+
+  return {
+    qaInfo,
+    recentSections: adaptSections(raw?.recent_sections || raw?.recentSections),
+    olderSections: adaptSections(raw?.older_sections || raw?.olderSections),
+  };
+};
+
+// ============================================
 // 流式聊天统一处理器（所有聊天入口必须共用）
 // fetchEventSource 不走 services 的普通 request 包装，
 // 因此必须每个 onmessage 都显式走这一套，禁止在组件里手动 parse

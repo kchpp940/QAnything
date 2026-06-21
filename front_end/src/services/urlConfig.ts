@@ -14,8 +14,11 @@ import {
   adaptQARecords,
   adaptBotInfo,
   adaptChatResponse,
+  adaptDiagnosisRecord,
+  adaptDiagnosisRecords,
+  adaptDiagnosisResponse,
 } from '@/utils/responseAdapter';
-import type { IKnowledgeFile, IBotInfo, IQARecord, IChatResponse, IPaginatedResponse } from '@/utils/types';
+import type { IKnowledgeFile, IBotInfo, IQARecord, IChatResponse, IPaginatedResponse, IDiagnosisRecord, IDiagnosisResponse } from '@/utils/types';
 
 const { userInfo: localUserInfo } = useUser();
 enum EUrlType {
@@ -48,6 +51,8 @@ enum EUrlKey {
   getKbInfo = 'getKbInfo',
   getTags = 'getTags',
   updateTags = 'updateTags',
+  getRelatedQa = 'getRelatedQa',
+  getRandomQa = 'getRandomQa',
 }
 
 interface IUrlValueConfig {
@@ -270,6 +275,13 @@ const urlConfig: IUrlConfig = {
     },
     adapter: (res: any) => {
       const rawData = res.data || res;
+
+      if (rawData.qa_infos_by_day || rawData.qaInfosByDay) {
+        return {
+          qaInfosByDay: rawData.qa_infos_by_day || rawData.qaInfosByDay || {},
+        };
+      }
+
       const paginated = adaptPaginatedResponse<IQARecord>(rawData, adaptQARecord);
 
       const rawQaList =
@@ -311,6 +323,34 @@ const urlConfig: IUrlConfig = {
     param: {
       user_id: userId,
       user_info: userPhone,
+    },
+  },
+  // 诊断/溯源：获取相关 QA 记录
+  getRelatedQa: {
+    type: EUrlType.POST,
+    url: '/local_doc_qa/get_related_qa',
+    param: {
+      qa_id: '',
+    },
+    adapter: (res: any) => {
+      const rawData = res.data || res;
+      return adaptDiagnosisResponse(rawData);
+    },
+  },
+  // 获取随机 QA 记录（诊断用）
+  getRandomQa: {
+    type: EUrlType.POST,
+    url: '/local_doc_qa/get_random_qa',
+    param: {
+      limit: 10,
+    },
+    adapter: (res: any) => {
+      const rawData = res.data || res;
+      return {
+        totalUsers: rawData.total_users || rawData.totalUsers || 0,
+        totalQueries: rawData.total_queries || rawData.totalQueries || 0,
+        qaInfos: adaptDiagnosisRecords(rawData.qa_infos || rawData.qaInfos || []),
+      };
     },
   },
 };
