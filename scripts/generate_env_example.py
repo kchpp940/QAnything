@@ -6,13 +6,17 @@
 使用方法：
   python scripts/generate_env_example.py            # 生成到标准输出，可预览
   python scripts/generate_env_example.py --write    # 写入 .env.example 文件
-  python scripts/generate_env_example.py --check    # 仅检查当前 .env.example 是否与生成结果一致
+  python scripts/generate_env_example.py --check    # 仅检查当前 .env.example 是否与 schema 生成结果一致
+
+生成特性：
+  - 输出完全确定（无动态时间戳），同一份 schema 多次生成结果一致
+  - 按 category 分组排序，变量顺序与 schema 中声明顺序一致
 """
 from __future__ import annotations
 
 import argparse
+import os
 import sys
-from datetime import datetime
 from pathlib import Path
 
 try:
@@ -23,8 +27,8 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parent.parent
-SCHEMA_FILE = ROOT / "config" / "env_schema.yaml"
-OUTPUT_FILE = ROOT / ".env.example"
+SCHEMA_FILE = Path(os.environ.get("ENV_SCHEMA_PATH", ROOT / "config" / "env_schema.yaml"))
+OUTPUT_FILE = Path(os.environ.get("ENV_EXAMPLE_PATH", ROOT / ".env.example"))
 
 
 # category -> (中文分类名, 中文描述)
@@ -73,20 +77,19 @@ def load_schema():
 
 def generate_content(schema_version: str, by_category: dict[str, list[dict]]) -> str:
     lines: list[str] = []
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # 文件头
     lines.append("# ============================================================")
     lines.append("# QAnything 统一环境变量契约")
     lines.append("# ============================================================")
     lines.append("#")
-    lines.append(f"# ⚠️   此文件由 scripts/generate_env_example.py 自动生成，请勿手动修改！")
-    lines.append(f"# 📋 来源配置：config/env_schema.yaml  (schema_version={schema_version})")
-    lines.append(f"# 🔧 生成时间：{now}")
+    lines.append("# ⚠️  此文件由 scripts/generate_env_example.py 自动生成，请勿手动修改！")
+    lines.append(f"# 📋 来源配置：config/env_schema.yaml")
+    lines.append(f"# 🏷️  Schema 版本：{schema_version}")
     lines.append("#")
     lines.append("# 使用方法：")
-    lines.append("#   cp .env.example .env        # 复制为本地配置")
-    lines.append("#   vim .env                     # 按需修改本地值")
+    lines.append("#   cp .env.example .env       # 复制为本地配置")
+    lines.append("#   vim .env                   # 按需修改本地值")
     lines.append("#")
     lines.append("# 新增/修改变量：")
     lines.append("#   1) 编辑 config/env_schema.yaml")
@@ -173,12 +176,8 @@ def main():
             print("[FAIL] .env.example 文件不存在", file=sys.stderr)
             sys.exit(1)
         existing = OUTPUT_FILE.read_text(encoding="utf-8")
-        # 逐行比较，忽略换行符差异和时间戳行
-        gen_lines = [l for l in content.splitlines()
-                     if not l.startswith("# 🔧 生成时间：")]
-        cur_lines = [l for l in existing.splitlines()
-                     if not l.startswith("# 🔧 生成时间：")]
-        if gen_lines == cur_lines:
+        # 完全逐行比较（生成结果已无动态内容，完全确定）
+        if content == existing:
             print("[OK] .env.example 与 schema 生成结果一致 ✓")
             sys.exit(0)
         else:

@@ -47,8 +47,8 @@ except ImportError:
 
 
 ROOT = Path(__file__).resolve().parent.parent
-SCHEMA_FILE = ROOT / "config" / "env_schema.yaml"
-ENV_EXAMPLE = ROOT / ".env.example"
+SCHEMA_FILE = Path(os.environ.get("ENV_SCHEMA_PATH", ROOT / "config" / "env_schema.yaml"))
+ENV_EXAMPLE = Path(os.environ.get("ENV_EXAMPLE_PATH", ROOT / ".env.example"))
 GENERATE_SCRIPT = ROOT / "scripts" / "generate_env_example.py"
 
 
@@ -89,7 +89,6 @@ def scan_env_example_generated(schema: Dict[str, EnvVar]) -> List[Issue]:
         # 回退方案：基本变量存在性检查
         with open(ENV_EXAMPLE, "r", encoding="utf-8") as f:
             content = f.read()
-        from collections import Counter
         cnt_vars = 0
         for line in content.splitlines():
             line = line.strip()
@@ -105,20 +104,14 @@ def scan_env_example_generated(schema: Dict[str, EnvVar]) -> List[Issue]:
             ))
         return issues
 
-    # 逐行严格比较，忽略时间戳行
-    actual_lines = [
-        l for l in ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
-        if not l.startswith("# 🔧 生成时间：")
-    ]
-    expected_lines = [
-        l for l in expected.splitlines()
-        if not l.startswith("# 🔧 生成时间：")
-    ]
-
-    if actual_lines == expected_lines:
+    # 完全逐行比较（生成结果已无动态内容，输出完全确定）
+    actual = ENV_EXAMPLE.read_text(encoding="utf-8")
+    if actual == expected:
         return issues
 
-    # 差异定位：找出前 10 个不同行号
+    # 差异定位：找出前 6 处不同行号
+    actual_lines = actual.splitlines()
+    expected_lines = expected.splitlines()
     diffs = []
     max_lines = max(len(actual_lines), len(expected_lines))
     for i in range(max_lines):
@@ -136,7 +129,7 @@ def scan_env_example_generated(schema: Dict[str, EnvVar]) -> List[Issue]:
     issues.append(Issue(
         "error", "template",
         str(ENV_EXAMPLE.relative_to(ROOT)),
-        ".env.example 与 schema 不一致。请执行: \n"
+        ".env.example 与 schema 生成结果不一致。请执行:\n"
         "         python scripts/generate_env_example.py --write\n"
         "       前 6 处差异:\n           " + "\n           ".join(diffs[:18]),
     ))
