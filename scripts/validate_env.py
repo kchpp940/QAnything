@@ -48,6 +48,99 @@ except ImportError:
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA_FILE = ROOT / "config" / "env_schema.yaml"
+ENV_EXAMPLE = ROOT / ".env.example"
+GENERATE_SCRIPT = ROOT / "scripts" / "generate_env_example.py"
+
+
+# ------------------------------------------------------------
+# 生成一致性校验：复用 generate_env_example.py 生成内容比对
+# ------------------------------------------------------------
+def _generate_expected_content() -> Optional[str]:
+    """通过 import generate_env_example 生成期望的 .env.example 内容"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        import generate_env_example as ge
+    except ImportError:
+        return None
+    finally:
+        if str(Path(__file__).resolve().parent) in sys.path:
+            sys.path.remove(str(Path(__file__).resolve().parent))
+    try:
+        schema_version, by_category = ge.load_schema()
+        return ge.generate_content(schema_version, by_category)
+    except Exception:
+        return None
+
+
+def scan_env_example_generated(schema: Dict[str, EnvVar]) -> List[Issue]:
+    """校验 .env.example 是否与 schema 生成结果一致（取代原手写一致性检查）"""
+    issues: List[Issue] = []
+
+    if not ENV_EXAMPLE.exists():
+        issues.append(Issue(
+            "error", "template",
+            str(ENV_EXAMPLE.relative_to(ROOT)),
+            "文件不存在，请执行: python scripts/generate_env_example.py --write",
+        ))
+        return issues
+
+    expected = _generate_expected_content()
+    if expected is None:
+        # 回退方案：基本变量存在性检查
+        with open(ENV_EXAMPLE, "r", encoding="utf-8") as f:
+            content = f.read()
+        from collections import Counter
+        cnt_vars = 0
+        for line in content.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                cnt_vars += 1
+        schema_cnt = len(schema)
+        if cnt_vars != schema_cnt:
+            issues.append(Issue(
+                "warning", "template",
+                str(ENV_EXAMPLE.relative_to(ROOT)),
+                f"无法调用生成脚本做严格校验。粗略计数: .env.example 中有 {cnt_vars} 个变量，schema 中有 {schema_cnt} 个变量。"
+                "建议运行: python scripts/generate_env_example.py --check",
+            ))
+        return issues
+
+    # 逐行严格比较，忽略时间戳行
+    actual_lines = [
+        l for l in ENV_EXAMPLE.read_text(encoding="utf-8").splitlines()
+        if not l.startswith("# 🔧 生成时间：")
+    ]
+    expected_lines = [
+        l for l in expected.splitlines()
+        if not l.startswith("# 🔧 生成时间：")
+    ]
+
+    if actual_lines == expected_lines:
+        return issues
+
+    # 差异定位：找出前 10 个不同行号
+    diffs = []
+    max_lines = max(len(actual_lines), len(expected_lines))
+    for i in range(max_lines):
+        if i >= len(actual_lines):
+            diffs.append(f"第 {i+1} 行缺失 (期望: {expected_lines[i][:60]}...)")
+        elif i >= len(expected_lines):
+            diffs.append(f"第 {i+1} 行多余 (实际: {actual_lines[i][:60]}...)")
+        elif actual_lines[i] != expected_lines[i]:
+            diffs.append(f"第 {i+1} 行不同")
+            diffs.append(f"  期望: {expected_lines[i][:80]}")
+            diffs.append(f"  实际: {actual_lines[i][:80]}")
+        if len(diffs) >= 18:
+            break
+
+    issues.append(Issue(
+        "error", "template",
+        str(ENV_EXAMPLE.relative_to(ROOT)),
+        ".env.example 与 schema 不一致。请执行: \n"
+        "         python scripts/generate_env_example.py --write\n"
+        "       前 6 处差异:\n           " + "\n           ".join(diffs[:18]),
+    ))
+    return issues
 
 # ------------------------------------------------------------
 # 数据结构
@@ -601,7 +694,7 @@ def main():
         scan_dockerfile,
         scan_backend,
         scan_frontend,
-        scan_env_example,
+        scan_env_example_generated,
     ]
 
     for sc in scanners:

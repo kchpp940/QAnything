@@ -1,23 +1,35 @@
 # ============================================================
-# QAnything 环境变量契约（机器可读）
-# 这是所有环境变量的单一事实来源（Single Source of Truth）
+# QAnything 环境变量契约（机器可读 / 唯一权威来源）
+# ============================================================
 #
-# 用途：
-#   1. 生成 .env.example 模板
-#   2. 驱动 scripts/validate_env.py 校验所有配置入口
-#   3. 作为文档和新增变量的参考规范
+# ⚠️   此文件是所有环境变量的【单一事实来源】(Single Source of Truth)
 #
-# 新增变量规范：
-#   - 必须在此文件中注册，否则校验失败
-#   - name:       环境变量名（必填）
-#   - default:    默认值（必填，null 表示空字符串）
-#   - type:       类型: string|int|float|bool (默认 string)
-#   - required:   是否必填 (默认 false)
-#   - category:   分类: runtime|mysql|milvus|es|services|
-#                             kb|paths|frontend|docker|images|other
-#   - description: 用途说明（必填，中文）
-#   - used_in:    引用位置: [compose, dockerfile, backend, frontend]
-#   - deprecated: 是否弃用 (默认 false)
+# 🚫  不要手动修改以下文件：
+#       ❌ .env.example    （由 scripts/generate_env_example.py 自动生成）
+#
+# 🛠️  新增/修改变量的标准流程：
+#       1) ✏️  修改本文件（添加/修改变量条目）
+#       2) 🔄  运行: python scripts/generate_env_example.py --write
+#       3) ✅  校验: python scripts/validate_env.py
+#       4) 🚀  启动: ./run.sh（会自动执行 --strict 校验）
+#
+# 📄 受此文件约束的配置：
+#     compose     → docker-compose*.yaml 中的 ${VAR_NAME} 引用
+#     dockerfile  → build_images/Dockerfile 中的 ENV 指令
+#     backend     → qanything_kernel/configs/model_config.py 的 os.getenv()
+#     frontend    → front_end/.env.* 和 vite.config.ts
+#     template    → .env.example（自动生成，请勿手改）
+#
+# 每个变量条目字段说明：
+#   name:          变量名（必填，唯一）
+#   default:       默认值（必填，null 表示空字符串）
+#   type:          类型: string | int | float | bool
+#   required:      是否必填: true | false（默认 false）
+#   category:      分类: runtime | mysql | milvus | es | services |
+#                             kb | paths | frontend | images | other
+#   used_in:       引用位置: [compose, dockerfile, backend, frontend]
+#   description:   中文说明（必填，建议包含示例值）
+#   deprecated:    是否已弃用: true | false（默认 false）
 # ============================================================
 
 schema_version: "1.0"
