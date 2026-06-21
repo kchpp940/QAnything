@@ -334,11 +334,11 @@ git clone https://github.com/netease-youdao/QAnything.git
 ```shell
 cd QAnything
 # Start on Linux
-docker compose -f docker-compose-linux.yaml up
+docker compose -f docker-compose.yaml -f docker-compose.linux.yaml up
 # Start on Mac
-docker compose -f docker-compose-mac.yaml up
+docker compose -f docker-compose.yaml -f docker-compose.mac.yaml up
 # Start on Windows
-docker compose -f docker-compose-win.yaml up
+docker compose -f docker-compose.yaml -f docker-compose.win.yaml up
 ```
 
 (Note) If the startup fails, you can try changing `docker compose` to `docker-compose`.
@@ -380,10 +380,10 @@ If you want to view the relevant logs, please check the log files in the `QAnyth
 ### Close service
 ```shell
 # Front desk service startup mode like:
-docker compose -f docker-compose-xxx.yaml up  # To close the service, please press Ctrl+C.
+docker compose -f docker-compose.yaml -f docker-compose.xxx.yaml up  # To close the service, please press Ctrl+C.
 # Backend service startup mode like: 
-docker compose -f docker-compose-xxx.yaml up -d # To close the service, please execute the following command.
-docker compose -f docker-compose-xxx.yaml down
+docker compose -f docker-compose.yaml -f docker-compose.xxx.yaml up -d # To close the service, please execute the following command.
+docker compose -f docker-compose.yaml -f docker-compose.xxx.yaml down
 ```
 
 ## Offline Use
@@ -412,9 +412,9 @@ docker load -i qanything_offline.tar
 # Unzip the code and run it
 unzip QAnything-master.zip
 cd QAnything-master
-docker compose -f docker-compose-win.yaml up
+docker compose -f docker-compose.yaml -f docker-compose.win.yaml up
 ``` 
-Similarly for other systems, just replace the corresponding image of the system, such as replacing mac with docker-compose-mac.yaml, and linux with docker-compose-linux.yaml.
+Similarly for other systems, just replace the platform overlay file, such as replacing win with docker-compose.mac.yaml for mac, and docker-compose.linux.yaml for linux.
 
 
 ## FAQ

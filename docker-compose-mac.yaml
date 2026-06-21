@@ -2,6 +2,9 @@
 #  default:
 #    name: QAnything
 
+# DEPRECATED: This file is preserved for backward compatibility only.
+# Please use the new dual-layer structure instead:
+#   docker compose -f docker-compose.yaml -f docker-compose.mac.yaml up -d
 services:
   elasticsearch:
     container_name: es-container-local

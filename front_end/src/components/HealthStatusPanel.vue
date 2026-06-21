@@ -58,7 +58,9 @@
               {{ expandedDetails[dep.name] ? '▼' : '▶' }}
               技术详情
             </span>
-            <pre v-if="expandedDetails[dep.name]" class="details-content">{{ formatDetails(dep.details) }}</pre>
+            <pre v-if="expandedDetails[dep.name]" class="details-content">{{
+              formatDetails(dep.details)
+            }}</pre>
           </div>
         </div>
       </div>
@@ -71,9 +73,7 @@
       </div>
 
       <div class="health-actions">
-        <a-button size="small" @click="refresh" :loading="loading">
-          刷新状态
-        </a-button>
+        <a-button size="small" :loading="loading" @click="refresh"> 刷新状态 </a-button>
       </div>
     </div>
   </div>
@@ -190,15 +190,28 @@ onUnmounted(() => {
 }
 
 @keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .status-text {
-  .status-healthy & { color: #52c41a; }
-  .status-unhealthy & { color: #ff4d4f; }
-  .status-degraded & { color: #faad14; }
-  .status-unknown & { color: #bfbfbf; }
+  .status-healthy & {
+    color: #52c41a;
+  }
+  .status-unhealthy & {
+    color: #ff4d4f;
+  }
+  .status-degraded & {
+    color: #faad14;
+  }
+  .status-unknown & {
+    color: #bfbfbf;
+  }
 }
 
 .expand-icon {
@@ -253,10 +266,18 @@ onUnmounted(() => {
   border-radius: 50%;
   flex-shrink: 0;
 
-  &.dot-healthy { background: #52c41a; }
-  &.dot-unhealthy { background: #ff4d4f; }
-  &.dot-degraded { background: #faad14; }
-  &.dot-unknown { background: #bfbfbf; }
+  &.dot-healthy {
+    background: #52c41a;
+  }
+  &.dot-unhealthy {
+    background: #ff4d4f;
+  }
+  &.dot-degraded {
+    background: #faad14;
+  }
+  &.dot-unknown {
+    background: #bfbfbf;
+  }
 }
 
 .service-info {

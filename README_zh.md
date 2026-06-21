@@ -328,11 +328,11 @@ git clone https://github.com/netease-youdao/QAnything.git
 ```shell
 cd QAnything
 # 在 Linux 上启动
-docker compose -f docker-compose-linux.yaml up
+docker compose -f docker-compose.yaml -f docker-compose.linux.yaml up
 # 在 Mac 上启动
-docker compose -f docker-compose-mac.yaml up
+docker compose -f docker-compose.yaml -f docker-compose.mac.yaml up
 # 在 Windows 上启动
-docker compose -f docker-compose-win.yaml up
+docker compose -f docker-compose.yaml -f docker-compose.win.yaml up
 ```
 
 （注意）如果启动失败，可以尝试将 `docker compose`改为 `docker-compose`。
@@ -383,10 +383,10 @@ docker load -i qanything_xxx.tar
 ### 关闭服务
 ```shell
 # 前台启动服务方式如下：
-docker compose -f docker-compose-xxx.yaml up # 关闭服务请按Ctrl+C
+docker compose -f docker-compose.yaml -f docker-compose.xxx.yaml up # 关闭服务请按Ctrl+C
 # 后台启动服务方式如下：
-docker compose -f docker-compose-xxx.yaml up -d  # 关闭服务请执行以下命令
-docker compose -f docker-compose-xxx.yaml down
+docker compose -f docker-compose.yaml -f docker-compose.xxx.yaml up -d  # 关闭服务请执行以下命令
+docker compose -f docker-compose.yaml -f docker-compose.xxx.yaml down
 ```
 
 ## 离线使用
@@ -416,7 +416,7 @@ docker load -i qanything_offline.tar
 # 解压代码，运行
 unzip QAnything-master.zip
 cd QAnything-master
-docker compose -f docker-compose-win.yaml up
+docker compose -f docker-compose.yaml -f docker-compose.win.yaml up
 ```
 
 ### Linux离线使用
@@ -444,7 +444,7 @@ docker load -i qanything_offline.tar
 # 解压代码，运行
 unzip QAnything-master.zip
 cd QAnything-master
-docker compose -f docker-compose-linux.yaml up
+docker compose -f docker-compose.yaml -f docker-compose.linux.yaml up
 ```
 
 ## 常见问题

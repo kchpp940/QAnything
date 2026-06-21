@@ -84,7 +84,10 @@
           <template #content>
             <HealthStatusPanel />
           </template>
-          <div class="health-indicator" :class="`health-${healthStore.healthStatus?.status || 'unknown'}`">
+          <div
+            class="health-indicator"
+            :class="`health-${healthStore.healthStatus?.status || 'unknown'}`"
+          >
             <span class="health-dot"></span>
             <span class="health-text">{{ healthStore.overallStatusLabel }}</span>
           </div>
@@ -138,7 +141,6 @@ const changLanguage = (lang: string) => {
 };
 
 const goDetail = (url: string) => {
-  console.log(url);
   window.location.href = url;
 };
 
@@ -363,7 +365,9 @@ onMounted(() => {
           background: #52c41a;
           box-shadow: 0 0 6px rgba(82, 196, 26, 0.5);
         }
-        .health-text { color: #52c41a; }
+        .health-text {
+          color: #52c41a;
+        }
       }
 
       &.health-unhealthy {
@@ -373,7 +377,9 @@ onMounted(() => {
           box-shadow: 0 0 6px rgba(255, 77, 79, 0.5);
           animation: health-pulse 1.5s infinite;
         }
-        .health-text { color: #ff4d4f; }
+        .health-text {
+          color: #ff4d4f;
+        }
       }
 
       &.health-degraded {
@@ -382,20 +388,31 @@ onMounted(() => {
           background: #faad14;
           box-shadow: 0 0 6px rgba(250, 173, 20, 0.5);
         }
-        .health-text { color: #faad14; }
+        .health-text {
+          color: #faad14;
+        }
       }
 
       &.health-unknown {
         background: rgba(191, 191, 191, 0.15);
-        .health-dot { background: #bfbfbf; }
-        .health-text { color: #bfbfbf; }
+        .health-dot {
+          background: #bfbfbf;
+        }
+        .health-text {
+          color: #bfbfbf;
+        }
       }
     }
   }
 }
 
 @keyframes health-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
 }
 </style>
