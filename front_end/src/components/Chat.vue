@@ -225,7 +225,7 @@ import { useChatSource } from '@/store/useChatSource';
 import { Typewriter } from '@/utils/typewriter';
 import DefaultModal from './DefaultModal.vue';
 import html2canvas from 'html2canvas';
-import urlResquest, { userId, userPhone } from '@/services/urlConfig';
+import { userId, getUserPhone } from '@/utils/session';
 import { api } from '@/services/api';
 import { getLanguage } from '@/language';
 import { useLanguage } from '@/store/useLanguage';
@@ -578,7 +578,7 @@ const send = async () => {
       openWhenHidden: true,
       body: JSON.stringify({
         user_id: userId,
-        user_info: userPhone,
+        user_info: getUserPhone(),
         ...sendData,
       }),
       signal: ctrl.signal,

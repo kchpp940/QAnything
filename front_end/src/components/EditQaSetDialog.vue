@@ -176,7 +176,7 @@ import { getLanguage } from '@/language/index';
 import { fileStatus } from '@/utils/enum';
 import { useLanguage } from '@/store/useLanguage';
 import { IFileListItem } from '@/utils/types';
-import { userId, userPhone } from '@/services/urlConfig';
+import { userId, getUserPhone } from '@/utils/session';
 import { useChatSetting } from '@/store/useChatSetting';
 
 const { setEditModalVisible, setEditQaSet, getFaqList } = useOptiionList();
@@ -352,7 +352,7 @@ const uplolad = async () => {
     formData.append('files', list[i]?.file);
   }
   formData.append('user_id', userId);
-  formData.append('user_info', userPhone);
+  formData.append('user_info', getUserPhone());
   formData.append('kb_id', `${currentId.value}_FAQ`);
 
   fetch(apiBase + '/local_doc_qa/upload_faqs', {

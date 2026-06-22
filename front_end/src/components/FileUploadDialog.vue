@@ -106,7 +106,7 @@ import SvgIcon from './SvgIcon.vue';
 import { pageStatus } from '@/utils/enum';
 import { IFileListItem } from '@/utils/types';
 import { message, notification } from 'ant-design-vue';
-import { userId, userPhone } from '@/services/urlConfig';
+import { userId, getUserPhone } from '@/utils/session';
 import { getLanguage } from '@/language/index';
 import { useUploadFiles } from '@/store/useUploadFiles';
 import { useChatSetting } from '@/store/useChatSetting';
@@ -267,7 +267,7 @@ const uplolad = async () => {
   }
   formData.append('kb_id', currentId.value);
   formData.append('user_id', userId);
-  formData.append('user_info', userPhone);
+  formData.append('user_info', getUserPhone());
   formData.append('chunk_size', chatSettingFormActive.value.chunkSize.toString());
   // 上传模式，soft：文件名重复的文件不再上传，strong：文件名重复的文件强制上传
   formData.append('mode', 'soft');

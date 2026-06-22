@@ -230,7 +230,7 @@ import DefaultModal from '../DefaultModal.vue';
 import html2canvas from 'html2canvas';
 import { getLanguage } from '@/language/index';
 import { useLanguage } from '@/store/useLanguage';
-import { userId, userPhone } from '@/services/urlConfig';
+import { userId, getUserPhone } from '@/utils/session';
 import { ChatInfoClass, throttle } from '@/utils/utils';
 import { api } from '@/services/api';
 import { useChatSetting } from '@/store/useChatSetting';
@@ -428,7 +428,7 @@ const send = async () => {
     openWhenHidden: true,
     body: JSON.stringify({
       user_id: userId,
-      user_info: userPhone,
+      user_info: getUserPhone(),
       bot_id: props.botInfo.bot_id,
       history: history.value,
       question: q,

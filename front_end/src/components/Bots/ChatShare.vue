@@ -233,7 +233,6 @@ import DefaultModal from '../DefaultModal.vue';
 import html2canvas from 'html2canvas';
 import { getLanguage } from '@/language/index';
 import { useLanguage } from '@/store/useLanguage';
-import urlResquest from '@/services/urlConfig';
 import { api } from '@/services/api';
 import { ChatInfoClass, resultControl } from '@/utils/utils';
 import ChatInfoPanel from '@/components/ChatInfoPanel.vue';

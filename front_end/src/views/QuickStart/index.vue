@@ -254,7 +254,7 @@ import { IChatItem, IFileListItem } from '@/utils/types';
 import { message } from 'ant-design-vue';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { apiBase } from '@/services';
-import urlResquest, { userId, userPhone } from '@/services/urlConfig';
+import { userId, getUserPhone } from '@/utils/session';
 import { api } from '@/services/api';
 import { useChat } from '@/store/useChat';
 import html2canvas from 'html2canvas';
@@ -575,7 +575,7 @@ const send = async () => {
       openWhenHidden: true,
       body: JSON.stringify({
         user_id: userId,
-        user_info: userPhone,
+        user_info: getUserPhone(),
         ...sendData,
       }),
       signal: ctrl.signal,

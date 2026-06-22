@@ -4,7 +4,7 @@
  * @LastEditors: 祝占朋 wb.zhuzhanpeng01@mesg.corp.netease.com
  * @LastEditTime: 2024-01-11 10:48:36
  * @FilePath: /QAnything/front_end/.eslintrc.js
- * @Description: 
+ * @Description:
  */
 
 module.exports = {
@@ -44,7 +44,7 @@ module.exports = {
     '@typescript-eslint/no-unused-vars': ['error'],
     'vue/no-v-html': 'off',
     'no-restricted-imports': [
-      'warn',
+      'error',
       {
         paths: [
           {
@@ -58,9 +58,8 @@ module.exports = {
         ],
         patterns: [
           {
-            group: ['@/**'],
-            importNamePattern: '^.*Raw$',
-            message: '禁止直接导入 Raw 类型，请使用 adapter 后的业务对象类型。如需访问原始字段，请通过 .raw 属性',
+            group: ['@/services/urlConfig', '@/interface'],
+            message: '请使用 @/services/api 中的替代方案，禁止直接导入',
           },
         ],
       },

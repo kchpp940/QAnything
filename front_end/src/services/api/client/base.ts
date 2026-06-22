@@ -1,50 +1,20 @@
 import services from '../..';
 import { useUser } from '@/store/useUser';
-import {
-  EHttpMethod,
-  EResponseCode,
-} from '../types/common';
-import type {
-  IApiBaseResponse,
-  IRequestOptions,
-  IUserContext,
-} from '../types/common';
+import { EHttpMethod, EResponseCode } from '../types/common';
+import type { IApiBaseResponse, IRequestOptions } from '../types/common';
+import { injectUserContext } from '@/utils/session';
 
-const { userInfo: localUserInfo } = useUser();
+export { getUserContext } from '@/utils/session';
+export { injectUserContext } from '@/utils/session';
 
-export const DEFAULT_USER_CONTEXT: IUserContext = {
-  user_id: 'user',
-  user_info: localUserInfo.phoneNumber || '',
-};
-
-export function getUserContext(): IUserContext {
-  return { ...DEFAULT_USER_CONTEXT };
-}
-
-export function injectUserContext<T extends Record<string, unknown>>(
-  params: T
-): T & IUserContext {
-  const ctx = getUserContext();
-  return {
-    ...ctx,
-    ...params,
-  };
-}
-
-export function isSuccessResponse(
-  res: IApiBaseResponse
-): boolean {
+export function isSuccessResponse(res: IApiBaseResponse): boolean {
   const code = Number(res.code ?? res.errorCode);
   return (
-    code === EResponseCode.SUCCESS ||
-    code === EResponseCode.SUCCESS_V2 ||
-    res.errorCode === '0'
+    code === EResponseCode.SUCCESS || code === EResponseCode.SUCCESS_V2 || res.errorCode === '0'
   );
 }
 
-export function extractResponseData<T>(
-  res: IApiBaseResponse<T>
-): T | undefined {
+export function extractResponseData<T>(res: IApiBaseResponse<T>): T | undefined {
   return res.data ?? res.result;
 }
 
