@@ -131,8 +131,15 @@ class StructuredLogger:
         if duration_ms is not None:
             raw_fields[LogSchema.DURATION_MS] = round(duration_ms, 2)
 
-        valid_fields, extra_fields = validate_log_fields(fields)
+        valid_fields, extra_fields, warnings = validate_log_fields(fields)
         raw_fields.update(valid_fields)
+
+        if warnings:
+            raise ValueError(
+                f"日志字段校验失败：\n" + "\n".join(f"  - {w}" for w in warnings) +
+                "\n请修正字段名或使用 LogSchema 中定义的字段常量。\n"
+                "核心字段拼错会直接失败，扩展字段请加 X_ 前缀标识。"
+            )
 
         structured = dict(raw_fields)
         if extra_fields:

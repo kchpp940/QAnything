@@ -20,48 +20,18 @@ COMMON_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "cri
 
 # 从 LogSchema/Stage/Status 动态加载合法字段与 stage 值
 sys.path.insert(0, str(PROJECT_ROOT))
-from qanything_kernel.utils.request_context import LogSchema, Stage, Status, get_log_schema_fields
+from qanything_kernel.utils.request_context import LogSchema, Stage, Status, _find_similar_core_field
 
-SCHEMA_FIELDS = get_log_schema_fields()
+SCHEMA_FIELDS = LogSchema.get_all_fields()
+CORE_FIELDS = LogSchema.get_core_fields()
 STAGE_VALUES = {v for k, v in Stage.__dict__.items() if not k.startswith('_') and isinstance(v, str)}
 STATUS_VALUES = {v for k, v in Status.__dict__.items() if not k.startswith('_') and isinstance(v, str)}
 
-# 允许的扩展字段名（业务专属字段，暂未入 schema 但允许存在，会出现在 extra_fields 中）
-# 新增字段必须在此登记，防止拼写错误导致字段漂移
+# 真正的业务扩展字段（运行时落入 extra_fields）
+# 命名规范：使用 X_ 前缀标识扩展字段，例如 X_MSG, X_CUSTOM_FIELD
+# 核心字段必须在 LogSchema 中定义，不允许放入此列表
 ALLOWED_EXTRA_FIELDS = {
-    # ===== 通用业务字段（跨模块出现） =====
-    "result", "result_count", "file_url", "file_info", "doc_id", "doc_count",
-    "total_deleted", "timestamp", "queries", "score", "metadata",
-    "missing_params", "not_exist_kb_ids", "kb_ids_invalid", "exist_files",
-    "new_files", "exist_faq_kb_ids", "faqs_count", "content_length",
-    "traceback", "kb_ids", "pid", "original_len", "final_len",
-
-    # ===== MySQL / 数据库专属 =====
-    "mysql_errno", "free_cnx", "used_cnx", "pool_size", "database",
-    "database_name", "image_id", "nos_key", "any_kb_id", "time_range",
-    "user_name", "doc_ids_count", "faq_id", "batch_index", "batch_count",
-
-    # ===== Milvus / 向量库专属 =====
-    "collection_name", "deleted_chunks_count", "files_id", "groups_count",
-    "host", "port",
-
-    # ===== ElasticSearch 专属 =====
-    "index_name", "es_url", "es_user",
-
-    # ===== 文件入库 / insert 专属 =====
-    "chunks_number", "parse_seconds", "insert_seconds", "timeout_seconds",
-    "file_to_update", "target_status", "inherited_request_id",
-
-    # ===== 检索 / 问答专属 =====
-    "retriever_search_time_s", "docs_len", "query_tokens", "condense_question",
-    "formatted_chat_history", "web_chunk_size", "total_images_number",
-    "original", "replaced", "first_doc_tokens", "second_doc_tokens",
-    "second_limit_doc_tokens", "table_doc_id", "table_doc_tokens",
-    "token_nums", "token_window", "offcut_token", "limited_token",
-    "rollback_length", "rerank_time", "llm_time", "preprocess_time",
-    "retrieve_time", "total_time",
-
-    # ===== 调试 / 临时字段 =====
+    # ===== 真正的业务扩展字段（带 X_ 前缀的实际字段名，无前缀）=====
     "add_msg", "est_rows", "idx_name", "tbl_name", "table_name",
     "bot_name", "bot_prompt", "bot_welcome", "bot_desc", "bot_image",
     "source", "description", "prompt_length", "result_length",
@@ -70,21 +40,21 @@ ALLOWED_EXTRA_FIELDS = {
     "limited_token_nums", "template_token_nums", "reference_field_token_nums",
     "query_token_nums", "history_token_nums", "max_token",
     "worker_id", "error_info", "docs_count", "first_doc_id",
-    "delete_result", "batch_result_count", "retry_count", "max_retries",
-    "expr", "is_stream", "show_images", "total_files_count",
+    "delete_result", "batch_result_count",
+    "is_stream", "show_images", "total_files_count",
     "skipped_files", "skipped_urls", "skipped_faqs", "inserted_files",
     "estimated_chars", "url_type", "user_size", "kb_size",
     "is_quick_mode", "file_content_length", "file_type_count", "total_kbs",
-    "total_files", "total_qa", "qas_size_kb", "product_source",
+    "total_qa", "qas_size_kb", "product_source",
     "system_prompt_len", "max_context_len", "truncated",
     "truncated_history", "docs_token_length", "reference_docs",
     "remaining_tokens", "selected_docs", "doc_tokens", "result_tokens",
     "answer_tokens", "need_web_search", "time_record", "add_size",
-    "del_size", "msg", "error", "traceback_info", "stack_info",
+    "del_size", "msg", "traceback_info", "stack_info",
     "user_msg", "docs", "index", "table_md", "next_cells",
     "text_before_table", "text_after_table", "tables_md", "cell_content",
     "row", "col", "max_add_tokens", "token_diff", "table_doc",
-    "total_tables", "incomplete_tables",
+    "total_tables", "incomplete_tables", "invalid_fields",
 }
 
 # 允许的参数名（s_*_logger 方法的位置参数和显式 keyword 参数）
@@ -127,9 +97,15 @@ class LogSchemaChecker(ast.NodeVisitor):
                 continue
             if key in ALLOWED_EXTRA_FIELDS:
                 continue
-            self._add(kw_node, "WARN",
-                      f"字段 '{key}' 不在 LogSchema 白名单也不在允许扩展列表，"
-                      f"运行时会落入 extra_fields 命名空间")
+            # 检查是否是核心字段拼写错误（编辑距离 <= 2）
+            suggestion = _find_similar_core_field(key, CORE_FIELDS)
+            if suggestion:
+                self._add(kw_node, "ERROR",
+                          f"字段 '{key}' 疑似核心字段拼写错误，建议改为 LogSchema.{suggestion.upper()} ('{suggestion}')")
+            else:
+                self._add(kw_node, "WARN",
+                          f"字段 '{key}' 不在 LogSchema 白名单也不在允许扩展列表，"
+                          f"运行时会落入 extra_fields 命名空间")
 
         # ---- stage_* 方法特殊检查 ----
         if method in STAGE_METHODS:

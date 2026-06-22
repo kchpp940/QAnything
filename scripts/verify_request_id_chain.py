@@ -28,7 +28,7 @@ from qanything_kernel.utils.request_context import (
 )
 from qanything_kernel.utils.custom_log import (
     s_debug_logger, s_insert_logger, s_qa_logger,
-    StructuredJsonFormatter,
+    StructuredJsonFormatter, StructuredLogger,
 )
 
 PASS = 0
@@ -192,7 +192,7 @@ def test_4_log_schema_compliance():
     all_fields.update({k: "v" for k in valid_fields})
     all_fields.update({k: "v" for k in invalid_fields})
 
-    valid, extra = validate_log_fields(all_fields)
+    valid, extra, warnings = validate_log_fields(all_fields)
 
     check("schema 字段都被识别为合法", set(valid.keys()) & valid_fields == valid_fields)
     check("非 schema 字段都落入 extra", set(extra.keys()) & invalid_fields == invalid_fields)
@@ -246,6 +246,233 @@ def test_5_error_classification():
               cat == ErrorCategory.SEARCH_ENGINE_ERROR, f"cat={cat}")
 
 
+async def test_6_real_log_json_chain():
+    """测试 6: 基于真实 StructuredLogger JSON 输出的跨阶段 request_id 断言
+    模拟完整链路：上传 API → Worker → 检索 → 流式 LLM
+    捕获所有 JSON 日志，用 jq 语义按同一个 request_id 检索，断言跨阶段可关联
+    """
+    import logging
+    from io import StringIO
+
+    print("\n📋 Test 6: 真实 StructuredLogger JSON 跨阶段链路断言")
+
+    # 捕获 JSON 日志输出
+    log_capture = StringIO()
+    capture_handler = logging.StreamHandler(log_capture)
+    capture_handler.setFormatter(StructuredJsonFormatter())
+    capture_handler.setLevel(logging.INFO)
+
+    # 创建独立 logger 避免污染全局
+    test_logger = logging.getLogger('test_chain_json')
+    test_logger.handlers.clear()
+    test_logger.addHandler(capture_handler)
+    test_logger.setLevel(logging.INFO)
+    test_logger.propagate = False
+
+    s_test = StructuredLogger(test_logger)
+
+    # 统一的 request_id 贯穿全链路
+    request_id = generate_request_id()
+    user_id = "u_chain_001"
+    kb_id = "kb_chain_001"
+    file_id = "file_chain_001"
+
+    # ===== 阶段 1: 上传 API =====
+    init_context(request_id=request_id, user_id=user_id, kb_id=kb_id,
+                api_name="upload_files")
+    s_test.info("文件上传开始",
+                stage=Stage.FILE_UPLOAD,
+                status=Status.START,
+                file_id=file_id,
+                file_name="test_rag.pdf",
+                file_size=1024000)
+    s_test.info("文件上传成功",
+                stage=Stage.FILE_UPLOAD,
+                status=Status.SUCCESS,
+                duration_ms=234.56,
+                file_id=file_id)
+    upload_rid = get_request_id()
+
+    # ===== 阶段 2: Worker 继承 request_id（从 upload_infos JSON）=====
+    # 模拟从数据库读出 upload_infos JSON，继承同一个 request_id
+    upload_infos = json.dumps({
+        "request_id": request_id,
+        "user_id": user_id,
+        "kb_id": kb_id,
+        "file_id": file_id,
+    })
+    worker_rid = json.loads(upload_infos)["request_id"]
+    check("worker 从 upload_infos 继承的 request_id 与上传一致",
+          worker_rid == upload_rid, f"worker={worker_rid[:12]} upload={upload_rid[:12]}")
+
+    # Worker 中初始化上下文（继承 request_id）
+    init_context(request_id=worker_rid, user_id=user_id, kb_id=kb_id,
+                api_name="insert_worker", inherited_request_id=True)
+    s_test.info("文件解析开始",
+                stage=Stage.FILE_PARSE,
+                status=Status.START,
+                file_id=file_id)
+    s_test.info("文件入库完成",
+                stage=Stage.FILE_INSERT,
+                status=Status.SUCCESS,
+                duration_ms=1567.89,
+                chunks_count=42,
+                file_id=file_id)
+    reset_context()
+
+    # ===== 阶段 3: 检索阶段 =====
+    init_context(request_id=request_id, user_id=user_id, kb_id=kb_id,
+                api_name="local_doc_chat")
+    s_test.info("检索开始",
+                stage=Stage.RETRIEVAL,
+                status=Status.START,
+                query="什么是 RAG 系统？")
+    s_test.info("检索完成",
+                stage=Stage.RETRIEVAL,
+                status=Status.SUCCESS,
+                duration_ms=89.12,
+                retrieval_docs_count=10,
+                source_docs_count=10,
+                top_k=10,
+                rerank=True,
+                hybrid_search=True)
+
+    # ===== 阶段 4: 流式 LLM 生成阶段 =====
+    s_test.info("LLM 生成开始",
+                stage=Stage.LLM_GENERATE,
+                status=Status.START,
+                streaming=True,
+                model="qwen-72b-chat")
+    s_test.info("首 token 输出",
+                stage=Stage.LLM_GENERATE,
+                status=Status.FIRST_TOKEN,
+                first_token_ms=345.67,
+                model="qwen-72b-chat")
+    s_test.info("流式生成完成",
+                stage=Stage.LLM_GENERATE,
+                status=Status.SUCCESS,
+                duration_ms=2345.67,
+                model="qwen-72b-chat",
+                total_tokens=896,
+                input_tokens=512,
+                output_tokens=384,
+                tokens_per_second=163.8)
+    reset_context()
+
+    # ===== 解析所有 JSON 日志，按 request_id 检索 =====
+    log_capture.seek(0)
+    log_lines = log_capture.getvalue().strip().split('\n')
+    log_entries = []
+    for line in log_lines:
+        if line.strip():
+            try:
+                entry = json.loads(line)
+                log_entries.append(entry)
+            except json.JSONDecodeError:
+                pass
+
+    check(f"共捕获 {len(log_entries)} 条 JSON 日志", len(log_entries) >= 8,
+          f"实际 {len(log_entries)} 条")
+
+    # 模拟 jq 语义：按同一个 request_id 过滤（顶级字段或 ctx）
+    def filter_by_request_id(entries, rid):
+        """模拟 jq: .[] | select(.request_id == $rid)"""
+        results = []
+        for e in entries:
+            ctx = e.get('ctx', {})
+            e_rid = e.get('request_id') or ctx.get('request_id')
+            if e_rid == rid:
+                results.append(e)
+        return results
+
+    chain_entries = filter_by_request_id(log_entries, request_id)
+    check(f"request_id={request_id[:12]}... 跨 4 阶段共检索到 {len(chain_entries)} 条日志",
+          len(chain_entries) >= 8, f"实际 {len(chain_entries)} 条")
+
+    # 按 stage 分组，断言每个阶段都有记录
+    stages_found = {}
+    for e in chain_entries:
+        stage = e.get('stage')
+        if stage:
+            stages_found.setdefault(stage, []).append(e)
+
+    expected_stages = {Stage.FILE_UPLOAD, Stage.FILE_PARSE, Stage.FILE_INSERT,
+                      Stage.RETRIEVAL, Stage.LLM_GENERATE}
+    check(f"4 大阶段 {expected_stages} 全部有日志",
+          set(stages_found.keys()) >= expected_stages,
+          f"缺失: {expected_stages - set(stages_found.keys())}")
+
+    # 断言每个阶段的关键字段
+    # FILE_UPLOAD 阶段
+    upload_entries = stages_found.get(Stage.FILE_UPLOAD, [])
+    check(f"FILE_UPLOAD 有 start + success 2 条日志", len(upload_entries) >= 2)
+    upload_success = next((e for e in upload_entries
+                          if e.get('status') == Status.SUCCESS), None)
+    check("FILE_UPLOAD success 有 duration_ms",
+          upload_success and upload_success.get('duration_ms') == 234.56)
+    check("FILE_UPLOAD success 有 file_id",
+          upload_success and upload_success.get('file_id') == file_id)
+
+    # FILE_INSERT 阶段
+    insert_entries = stages_found.get(Stage.FILE_INSERT, [])
+    check("FILE_INSERT 有 success 日志", len(insert_entries) >= 1)
+    insert_success = insert_entries[0]
+    check("FILE_INSERT 有 chunks_count",
+          insert_success.get('chunks_count') == 42)
+    check("FILE_INSERT ctx 中 request_id 正确",
+          insert_success['ctx'].get('request_id') == request_id)
+
+    # RETRIEVAL 阶段
+    retrieval_entries = stages_found.get(Stage.RETRIEVAL, [])
+    check("RETRIEVAL 有 start + success 2 条日志", len(retrieval_entries) >= 2)
+    retrieval_success = next((e for e in retrieval_entries
+                             if e.get('status') == Status.SUCCESS), None)
+    check("RETRIEVAL success 有 retrieval_docs_count",
+          retrieval_success and retrieval_success.get('retrieval_docs_count') == 10)
+    check("RETRIEVAL success 有 source_docs_count",
+          retrieval_success and retrieval_success.get('source_docs_count') == 10)
+
+    # LLM_GENERATE 阶段
+    llm_entries = stages_found.get(Stage.LLM_GENERATE, [])
+    check("LLM_GENERATE 有 start + first_token + success 3 条日志", len(llm_entries) >= 3)
+    llm_success = next((e for e in llm_entries
+                       if e.get('status') == Status.SUCCESS), None)
+    check("LLM_GENERATE success 有 model",
+          llm_success and llm_success.get('model') == "qwen-72b-chat")
+    check("LLM_GENERATE success 有 total_tokens",
+          llm_success and llm_success.get('total_tokens') == 896)
+    check("LLM_GENERATE success 有 duration_ms",
+          llm_success and llm_success.get('duration_ms') == 2345.67)
+    check("LLM_GENERATE success 有 tokens_per_second",
+          llm_success and llm_success.get('tokens_per_second') == 163.8)
+
+    # 断言同一个 request_id 贯穿所有阶段
+    all_rids = set()
+    for e in chain_entries:
+        ctx = e.get('ctx', {})
+        rid = e.get('request_id') or ctx.get('request_id')
+        all_rids.add(rid)
+    check(f"所有 {len(chain_entries)} 条日志的 request_id 完全一致（只有 1 个唯一值）",
+          len(all_rids) == 1 and request_id in all_rids,
+          f"唯一 request_id 数量: {len(all_rids)}")
+
+    # 断言 JSON 格式符合契约（顶级字段完整）
+    sample_entry = chain_entries[0]
+    required_top_level = {'timestamp', 'level', 'logger', 'pid', 'module',
+                         'function', 'line', 'ctx', 'message'}
+    check(f"JSON 顶级字段包含 {required_top_level}",
+          set(sample_entry.keys()) >= required_top_level,
+          f"缺失: {required_top_level - set(sample_entry.keys())}")
+
+    check("ctx 中包含 request_id",
+          sample_entry['ctx'].get('request_id') == request_id)
+
+    # 清理
+    capture_handler.close()
+    test_logger.removeHandler(capture_handler)
+    reset_context()
+
+
 async def main():
     print("=" * 60)
     print("全链路 Request ID 与 Schema 验证")
@@ -256,6 +483,7 @@ async def main():
     await test_3_stream_lifecycle()
     test_4_log_schema_compliance()
     test_5_error_classification()
+    await test_6_real_log_json_chain()
 
     print("\n" + "=" * 60)
     print(f"结果：✅ 通过 {PASS}  |  ❌ 失败 {FAIL}")
