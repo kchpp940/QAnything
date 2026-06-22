@@ -873,7 +873,6 @@ async def local_doc_chat(req: request):
 
         async def _generate_raw_answer(response):
             debug_logger.info("start generate...")
-            debug_logger.info("start generate...")
             async for resp, next_history in local_doc_qa.get_knowledge_based_answer(model=model,
                                                                                     max_token=max_token,
                                                                                     kb_ids=kb_ids,

@@ -1,7 +1,7 @@
 import uuid
 import time
 from contextvars import ContextVar, Token
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 
 class LogSchema:
@@ -248,3 +248,24 @@ def get_elapsed_ms() -> Optional[float]:
 
 def reset_context() -> None:
     _ctx.reset()
+
+
+def get_log_schema_fields() -> set:
+    return {v for k, v in LogSchema.__dict__.items()
+            if not k.startswith('_') and isinstance(v, str)}
+
+
+def is_valid_log_field(field: str) -> bool:
+    return field in get_log_schema_fields()
+
+
+def validate_log_fields(fields: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    valid = {}
+    extra = {}
+    schema = get_log_schema_fields()
+    for k, v in fields.items():
+        if k in schema:
+            valid[k] = v
+        else:
+            extra[k] = v
+    return valid, extra

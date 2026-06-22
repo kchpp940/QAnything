@@ -8,7 +8,10 @@ import os
 import sys
 from typing import Dict, Any, Optional, Tuple
 
-from qanything_kernel.utils.request_context import get_context, get_request_id, ErrorCategory
+from qanything_kernel.utils.request_context import (
+    get_context, get_request_id, ErrorCategory,
+    validate_log_fields, get_log_schema_fields, LogSchema
+)
 
 
 process_type = 'MainProcess' if 'SANIC_WORKER_NAME' not in os.environ else os.environ['SANIC_WORKER_NAME']
@@ -63,7 +66,7 @@ class StructuredJsonFormatter(Formatter):
 
         error_info = getattr(record, 'error_info', None)
         if error_info:
-            log_obj['error'] = error_info
+            log_obj[LogSchema.ERROR] = error_info
 
         extra = {k: v for k, v in record.__dict__.items()
                  if k not in self.RESERVED_ATTRS
@@ -81,18 +84,18 @@ class StructuredJsonFormatter(Formatter):
                         if k not in log_obj:
                             log_obj[k] = v
                 else:
-                    log_obj['message'] = msg
+                    log_obj[LogSchema.MESSAGE] = msg
             except (json.JSONDecodeError, ValueError):
-                log_obj['message'] = msg
+                log_obj[LogSchema.MESSAGE] = msg
 
         if record.exc_info:
-            if not log_obj.get('error'):
-                log_obj['error'] = {}
+            if not log_obj.get(LogSchema.ERROR):
+                log_obj[LogSchema.ERROR] = {}
             exc_type, exc_value, _ = record.exc_info
-            log_obj['error'].update({
+            log_obj[LogSchema.ERROR].update({
                 'type': exc_type.__name__ if exc_type else None,
                 'message': str(exc_value) if exc_value else None,
-                'stacktrace': self.formatException(record.exc_info),
+                LogSchema.STACKTRACE: self.formatException(record.exc_info),
             })
 
         if hasattr(record, 'stack_info') and record.stack_info:
@@ -120,23 +123,28 @@ class StructuredLogger:
              error: Optional[BaseException] = None,
              error_category: Optional[str] = None,
              **fields: Any) -> None:
-        structured = {}
+        raw_fields = {}
         if stage:
-            structured['stage'] = stage
+            raw_fields[LogSchema.STAGE] = stage
         if status is not None:
-            structured['status'] = status
+            raw_fields[LogSchema.STATUS] = status
         if duration_ms is not None:
-            structured['duration_ms'] = round(duration_ms, 2)
-        if fields:
-            structured.update(fields)
+            raw_fields[LogSchema.DURATION_MS] = round(duration_ms, 2)
+
+        valid_fields, extra_fields = validate_log_fields(fields)
+        raw_fields.update(valid_fields)
+
+        structured = dict(raw_fields)
+        if extra_fields:
+            structured['extra_fields'] = extra_fields
 
         error_info = None
         if error is not None:
             error_info = {
-                'category': error_category or self._classify_error(error),
+                LogSchema.ERROR_CATEGORY: error_category or self._classify_error(error),
                 'type': type(error).__name__,
-                'message': str(error),
-                'stacktrace': ''.join(traceback.format_exception(
+                LogSchema.ERROR_MSG: str(error),
+                LogSchema.STACKTRACE: ''.join(traceback.format_exception(
                     type(error), error, error.__traceback__
                 )),
             }
@@ -149,13 +157,17 @@ class StructuredLogger:
 
     @staticmethod
     def _classify_error(err: BaseException) -> str:
-        import mysql.connector.errors as mysql_errs
+        try:
+            import mysql.connector.errors as mysql_errs
+            mysql_error_types = (mysql_errs.Error, mysql_errs.InterfaceError)
+        except (ImportError, AttributeError):
+            mysql_error_types = ()
         err_name = type(err).__name__.lower()
         err_msg = str(err).lower()
 
         if 'timeout' in err_name or 'timeout' in err_msg:
             return ErrorCategory.TIMEOUT_ERROR
-        if 'mysql' in err_name or isinstance(err, (mysql_errs.Error, mysql_errs.InterfaceError)):
+        if 'mysql' in err_name or isinstance(err, mysql_error_types):
             return ErrorCategory.DB_ERROR
         if 'milvus' in err_name:
             return ErrorCategory.VECTOR_DB_ERROR
