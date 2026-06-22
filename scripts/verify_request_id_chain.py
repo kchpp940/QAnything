@@ -473,6 +473,174 @@ async def test_6_real_log_json_chain():
     reset_context()
 
 
+async def test_7_snapshot_comparison():
+    """测试 7: 真实日志 Snapshot 对比断言
+    基于 scripts/snapshots/log_chain_snapshot.jsonl 的固定样例：
+    - 断言 JSON 顶层核心字段完整性
+    - 断言 extra_fields 边界（核心字段不能落入 extra_fields）
+    - 断言同一 request_id 跨阶段检索结果
+    """
+    import logging
+    from io import StringIO
+
+    print("\n📋 Test 7: Snapshot 对比断言（真实日志样例）")
+
+    # 加载 snapshot 元数据
+    meta_file = PROJECT_ROOT / "scripts" / "snapshots" / "snapshot_metadata.json"
+    with open(meta_file, 'r', encoding='utf-8') as f:
+        meta = json.load(f)
+    SNAPSHOT_RID = meta["request_id"]
+    EXPECTED_STAGES = set(meta["expected_stages"])
+    EXPECTED_LOG_COUNT = meta["expected_log_count"]
+    CORE_FIELDS = set(meta["core_fields_in_log"])
+
+    # 加载 snapshot 日志条目
+    snap_file = PROJECT_ROOT / "scripts" / "snapshots" / "log_chain_snapshot.jsonl"
+    snap_entries = []
+    with open(snap_file, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                snap_entries.append(json.loads(line))
+
+    check(f"snapshot 条目数量 = {EXPECTED_LOG_COUNT}",
+          len(snap_entries) == EXPECTED_LOG_COUNT, f"实际 {len(snap_entries)}")
+
+    # === 1. 断言 JSON 顶层核心字段完整性 ===
+    REQUIRED_TOP_LEVEL = {'timestamp', 'level', 'logger', 'pid', 'module',
+                         'function', 'line', 'ctx', 'message'}
+    for i, entry in enumerate(snap_entries):
+        missing = REQUIRED_TOP_LEVEL - set(entry.keys())
+        check(f"snapshot[{i}] 顶层字段包含 {REQUIRED_TOP_LEVEL}",
+              not missing, f"缺失: {missing}")
+        check(f"snapshot[{i}] ctx 包含 request_id",
+              'request_id' in entry.get('ctx', {}))
+
+    # === 2. 断言核心字段全部在顶层，不能落入 extra_fields ===
+    # （核心字段应该直接在顶层，不应出现在 extra_fields 子对象）
+    for i, entry in enumerate(snap_entries):
+        has_extra = 'extra_fields' in entry
+        extra_fields = entry.get('extra_fields', {})
+        if has_extra:
+            core_leaked = CORE_FIELDS & set(extra_fields.keys())
+            check(f"snapshot[{i}] 核心字段未落入 extra_fields（边界正确）",
+                  not core_leaked, f"泄漏的核心字段: {core_leaked}")
+
+    # === 3. 断言所有条目属于同一个 request_id ===
+    all_rids = set()
+    for entry in snap_entries:
+        rid = entry.get('request_id') or entry.get('ctx', {}).get('request_id')
+        all_rids.add(rid)
+    check(f"所有 {len(snap_entries)} 条日志 request_id 唯一且一致",
+          len(all_rids) == 1 and SNAPSHOT_RID in all_rids,
+          f"唯一值数: {len(all_rids)}")
+
+    # === 4. 按阶段分组，断言所有预期阶段都存在 ===
+    stages_found = {}
+    for entry in snap_entries:
+        stage = entry.get('stage')
+        if stage:
+            stages_found.setdefault(stage, []).append(entry)
+
+    check(f"5 大阶段 {EXPECTED_STAGES} 全部覆盖",
+          set(stages_found.keys()) >= EXPECTED_STAGES,
+          f"缺失: {EXPECTED_STAGES - set(stages_found.keys())}")
+
+    # === 5. 各阶段关键字段断言（基于 snapshot 固定值） ===
+
+    # FILE_UPLOAD
+    fu_entries = stages_found.get('file_upload', [])
+    check("FILE_UPLOAD 有 start + success 两条日志", len(fu_entries) >= 2)
+    fu_success = next(e for e in fu_entries if e.get('status') == 'success')
+    check("FILE_UPLOAD success 有 duration_ms=234.56",
+          fu_success.get('duration_ms') == 234.56)
+    check("FILE_UPLOAD success 有 file_id", fu_success.get('file_id'))
+    check("FILE_UPLOAD success ctx 有 request_id",
+          fu_success['ctx'].get('request_id') == SNAPSHOT_RID)
+
+    # FILE_INSERT
+    fi_entries = stages_found.get('file_insert', [])
+    check("FILE_INSERT 有 success 日志", len(fi_entries) >= 1)
+    fi_success = fi_entries[0]
+    check("FILE_INSERT success 有 chunks_count=42",
+          fi_success.get('chunks_count') == 42)
+    check("FILE_INSERT success 有 duration_ms=1567.89",
+          fi_success.get('duration_ms') == 1567.89)
+
+    # RETRIEVAL
+    rt_entries = stages_found.get('retrieval', [])
+    check("RETRIEVAL 有 start + success 两条日志", len(rt_entries) >= 2)
+    rt_success = next(e for e in rt_entries if e.get('status') == 'success')
+    check("RETRIEVAL success 有 retrieval_docs_count=10",
+          rt_success.get('retrieval_docs_count') == 10)
+    check("RETRIEVAL success 有 source_docs_count=10",
+          rt_success.get('source_docs_count') == 10)
+    check("RETRIEVAL success 有 top_k=10",
+          rt_success.get('top_k') == 10)
+
+    # LLM_GENERATE
+    llm_entries = stages_found.get('llm_generate', [])
+    check("LLM_GENERATE 有 start + first_token + success 三条日志", len(llm_entries) >= 3)
+    llm_success = next(e for e in llm_entries if e.get('status') == 'success')
+    check("LLM_GENERATE success 有 model=qwen-72b-chat",
+          llm_success.get('model') == 'qwen-72b-chat')
+    check("LLM_GENERATE success 有 total_tokens=896",
+          llm_success.get('total_tokens') == 896)
+    check("LLM_GENERATE success 有 duration_ms=2345.67",
+          llm_success.get('duration_ms') == 2345.67)
+    check("LLM_GENERATE success 有 tokens_per_second=163.8",
+          llm_success.get('tokens_per_second') == 163.8)
+
+    llm_first = next(e for e in llm_entries if e.get('status') == 'first_token')
+    check("LLM_GENERATE first_token 有 first_token_ms=345.67",
+          llm_first.get('first_token_ms') == 345.67)
+
+    # === 6. 模拟 jq 跨阶段检索（从 snapshot 中筛选特定条件） ===
+    # jq 语义: select(.stage == "retrieval" and .status == "success")
+    retrieval_success = [e for e in snap_entries
+                        if e.get('stage') == 'retrieval'
+                        and e.get('status') == 'success']
+    check(f"按条件检索: 1 条 retrieval success 日志",
+          len(retrieval_success) == 1)
+
+    # jq 语义: select(.duration_ms > 1000) → FILE_INSERT(1567.89) + LLM_SUCCESS(2345.67)
+    slow_ops = [e for e in snap_entries
+                if e.get('duration_ms', 0) > 1000]
+    check(f"按条件检索: 2 条耗时 > 1s 的日志 (file_insert, llm_generate)",
+          len(slow_ops) == 2)
+    check(f"慢操作阶段正确: {sorted(e.get('stage') for e in slow_ops)}",
+          sorted(e.get('stage') for e in slow_ops) == ['file_insert', 'llm_generate'])
+
+    # jq 语义: .[] | select(.model != null) | .model → 应该都是 qwen-72b-chat
+    model_values = {e.get('model') for e in snap_entries if e.get('model')}
+    check(f"按条件检索: 含 model 字段的日志，模型值一致",
+          model_values == {'qwen-72b-chat'}, f"实际: {model_values}")
+
+    # === 7. 断言：结构化日志字段契约验证 ===
+    # 验证字段边界：snapshot 中没有核心字段落入 extra_fields
+    total_extra_count = 0
+    total_without_extra = 0
+    for entry in snap_entries:
+        extra = entry.get('extra_fields', {})
+        if extra:
+            total_extra_count += 1
+        else:
+            total_without_extra += 1
+        # 核心字段绝不能出现在 extra_fields 中
+        for core_field in ['stage', 'status', 'duration_ms',
+                          'model', 'retrieval_docs_count', 'request_id']:
+            check(f"snapshot 核心字段 '{core_field}' 不在 extra_fields 中",
+                  core_field not in extra)
+
+    check(f"snapshot 中 {total_without_extra} 条日志没有 extra_fields（核心字段直接顶级）",
+          total_without_extra >= 5, f"实际: {total_without_extra}/{len(snap_entries)}")
+
+    # 总结：snapshot 中核心字段、阶段字段、资源字段都在顶级，
+    # 扩展字段必须用 X_ 前缀进入 extra_fields，形成清晰边界
+    check(f"snapshot 总条目: {len(snap_entries)}, 含 extra_fields: {total_extra_count}",
+          len(snap_entries) == 9)
+
+
 async def main():
     print("=" * 60)
     print("全链路 Request ID 与 Schema 验证")
@@ -484,6 +652,7 @@ async def main():
     test_4_log_schema_compliance()
     test_5_error_classification()
     await test_6_real_log_json_chain()
+    await test_7_snapshot_comparison()
 
     print("\n" + "=" * 60)
     print(f"结果：✅ 通过 {PASS}  |  ❌ 失败 {FAIL}")

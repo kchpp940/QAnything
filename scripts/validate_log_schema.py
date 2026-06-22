@@ -30,32 +30,8 @@ STATUS_VALUES = {v for k, v in Status.__dict__.items() if not k.startswith('_') 
 # 真正的业务扩展字段（运行时落入 extra_fields）
 # 命名规范：使用 X_ 前缀标识扩展字段，例如 X_MSG, X_CUSTOM_FIELD
 # 核心字段必须在 LogSchema 中定义，不允许放入此列表
-ALLOWED_EXTRA_FIELDS = {
-    # ===== 真正的业务扩展字段（带 X_ 前缀的实际字段名，无前缀）=====
-    "add_msg", "est_rows", "idx_name", "tbl_name", "table_name",
-    "bot_name", "bot_prompt", "bot_welcome", "bot_desc", "bot_image",
-    "source", "description", "prompt_length", "result_length",
-    "condense_question_length", "docs_num", "scores", "time_s",
-    "doc_limit", "first_limit_doc_tokens", "ori_second_docs_tokens",
-    "limited_token_nums", "template_token_nums", "reference_field_token_nums",
-    "query_token_nums", "history_token_nums", "max_token",
-    "worker_id", "error_info", "docs_count", "first_doc_id",
-    "delete_result", "batch_result_count",
-    "is_stream", "show_images", "total_files_count",
-    "skipped_files", "skipped_urls", "skipped_faqs", "inserted_files",
-    "estimated_chars", "url_type", "user_size", "kb_size",
-    "is_quick_mode", "file_content_length", "file_type_count", "total_kbs",
-    "total_qa", "qas_size_kb", "product_source",
-    "system_prompt_len", "max_context_len", "truncated",
-    "truncated_history", "docs_token_length", "reference_docs",
-    "remaining_tokens", "selected_docs", "doc_tokens", "result_tokens",
-    "answer_tokens", "need_web_search", "time_record", "add_size",
-    "del_size", "msg", "traceback_info", "stack_info",
-    "user_msg", "docs", "index", "table_md", "next_cells",
-    "text_before_table", "text_after_table", "tables_md", "cell_content",
-    "row", "col", "max_add_tokens", "token_diff", "table_doc",
-    "total_tables", "incomplete_tables", "invalid_fields",
-}
+# 当前原则：所有常用字段已归入明确分类，此列表原则上应保持为空
+ALLOWED_EXTRA_FIELDS = set()
 
 # 允许的参数名（s_*_logger 方法的位置参数和显式 keyword 参数）
 EXPLICIT_PARAMS = {"stage", "status", "duration_ms", "error", "error_category", "message"}

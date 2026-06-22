@@ -69,6 +69,9 @@ class LogSchema:
     CHUNKS_COUNT = "chunks_count"
     REQUEST_SOURCE = "request_source"
     VALID_FILES_COUNT = "valid_files_count"
+    TOTAL_KB_SIZE = "total_kbs"
+    INVALID_FIELDS = "invalid_fields"
+    MAX_NEW_TOKENS = "max_new_tokens"
     # ===== 从业务扩展提升的核心字段 =====
     KB_IDS = "kb_ids"
     TIMESTAMP = "timestamp"
@@ -145,104 +148,104 @@ class LogSchema:
     TOTAL_TIME = "total_time"
 
     # ===== 业务扩展字段（允许落入 extra_fields）=====
-    X_ADD_MSG = "add_msg"
-    X_EST_ROWS = "est_rows"
-    X_IDX_NAME = "idx_name"
-    X_TBL_NAME = "tbl_name"
-    X_TABLE_NAME = "table_name"
-    X_BOT_NAME = "bot_name"
-    X_BOT_PROMPT = "bot_prompt"
-    X_BOT_WELCOME = "bot_welcome"
-    X_BOT_DESC = "bot_desc"
-    X_BOT_IMAGE = "bot_image"
-    X_SOURCE = "source"
-    X_DESCRIPTION = "description"
-    X_PROMPT_LENGTH = "prompt_length"
-    X_RESULT_LENGTH = "result_length"
-    X_CONDENSE_QUESTION_LENGTH = "condense_question_length"
-    X_DOCS_NUM = "docs_num"
-    X_SCORES = "scores"
-    X_TIME_S = "time_s"
-    X_DOC_LIMIT = "doc_limit"
-    X_FIRST_LIMIT_DOC_TOKENS = "first_limit_doc_tokens"
-    X_ORI_SECOND_DOCS_TOKENS = "ori_second_docs_tokens"
-    X_LIMITED_TOKEN_NUMS = "limited_token_nums"
-    X_TEMPLATE_TOKEN_NUMS = "template_token_nums"
-    X_REFERENCE_FIELD_TOKEN_NUMS = "reference_field_token_nums"
-    X_QUERY_TOKEN_NUMS = "query_token_nums"
-    X_HISTORY_TOKEN_NUMS = "history_token_nums"
-    X_MAX_TOKEN = "max_token"
-    X_WORKER_ID = "worker_id"
-    X_ERROR_INFO = "error_info"
-    X_DOCS_COUNT = "docs_count"
-    X_FIRST_DOC_ID = "first_doc_id"
-    X_DELETE_RESULT = "delete_result"
-    X_BATCH_RESULT_COUNT = "batch_result_count"
-    X_RETRY_COUNT = "retry_count"
-    X_MAX_RETRIES = "max_retries"
-    X_EXPR = "expr"
-    X_IS_STREAM = "is_stream"
-    X_SHOW_IMAGES = "show_images"
-    X_TOTAL_FILES_COUNT = "total_files_count"
-    X_SKIPPED_FILES = "skipped_files"
-    X_SKIPPED_URLS = "skipped_urls"
-    X_SKIPPED_FAQS = "skipped_faqs"
-    X_INSERTED_FILES = "inserted_files"
-    X_ESTIMATED_CHARS = "estimated_chars"
-    X_URL_TYPE = "url_type"
-    X_USER_SIZE = "user_size"
-    X_KB_SIZE = "kb_size"
-    X_IS_QUICK_MODE = "is_quick_mode"
-    X_FILE_CONTENT_LENGTH = "file_content_length"
-    X_FILE_TYPE_COUNT = "file_type_count"
-    X_TOTAL_KB = "total_kb"
-    X_TOTAL_QA = "total_qa"
-    X_QAS_SIZE_KB = "qas_size_kb"
-    X_PRODUCT_SOURCE = "product_source"
-    X_SYSTEM_PROMPT_LEN = "system_prompt_len"
-    X_MAX_CONTEXT_LEN = "max_context_len"
-    X_TRUNCATED = "truncated"
-    X_TRUNCATED_HISTORY = "truncated_history"
-    X_DOCS_TOKEN_LENGTH = "docs_token_length"
-    X_REFERENCE_DOCS = "reference_docs"
-    X_REMAINING_TOKENS = "remaining_tokens"
-    X_SELECTED_DOCS = "selected_docs"
-    X_DOC_TOKENS = "doc_tokens"
-    X_RESULT_TOKENS = "result_tokens"
-    X_ANSWER_TOKENS = "answer_tokens"
-    X_NEED_WEB_SEARCH = "need_web_search"
-    X_TIME_RECORD = "time_record"
-    X_ADD_SIZE = "add_size"
-    X_DEL_SIZE = "del_size"
-    X_MSG = "msg"
-    X_TRACEBACK_INFO = "traceback_info"
-    X_STACK_INFO = "stack_info"
-    X_USER_MSG = "user_msg"
-    X_DOCS = "docs"
-    X_INDEX = "index"
-    X_TABLE_MD = "table_md"
-    X_NEXT_CELLS = "next_cells"
-    X_TEXT_BEFORE_TABLE = "text_before_table"
-    X_TEXT_AFTER_TABLE = "text_after_table"
-    X_TABLES_MD = "tables_md"
-    X_CELL_CONTENT = "cell_content"
-    X_ROW = "row"
-    X_COL = "col"
-    X_MAX_ADD_TOKENS = "max_add_tokens"
-    X_TOKEN_DIFF = "token_diff"
-    X_TABLE_DOC = "table_doc"
-    X_TOTAL_TABLES = "total_tables"
-    X_INCOMPLETE_TABLES = "incomplete_tables"
-    X_MISSING_PARAMS = "missing_params"
-    X_NOT_EXIST_KB_IDS = "not_exist_kb_ids"
-    X_KB_IDS_INVALID = "kb_ids_invalid"
-    X_EXIST_FILES = "exist_files"
-    X_NEW_FILES = "new_files"
-    X_EXIST_FAQ_KB_IDS = "exist_faq_kb_ids"
-    X_FAQS_COUNT = "faqs_count"
-    X_CONTENT_LENGTH = "content_length"
-    X_FILE_INFO = "file_info"
-    X_INVALID_FIELDS = "invalid_fields"
+    ADD_MSG = "add_msg"
+    EST_ROWS = "est_rows"
+    IDX_NAME = "idx_name"
+    TBL_NAME = "tbl_name"
+    TABLE_NAME = "table_name"
+    BOT_NAME = "bot_name"
+    BOT_PROMPT = "bot_prompt"
+    BOT_WELCOME = "bot_welcome"
+    BOT_DESC = "bot_desc"
+    BOT_IMAGE = "bot_image"
+    SOURCE = "source"
+    DESCRIPTION = "description"
+    PROMPT_LENGTH = "prompt_length"
+    RESULT_LENGTH = "result_length"
+    CONDENSE_QUESTION_LENGTH = "condense_question_length"
+    DOCS_NUM = "docs_num"
+    SCORES = "scores"
+    TIME_S = "time_s"
+    DOC_LIMIT = "doc_limit"
+    FIRST_LIMIT_DOC_TOKENS = "first_limit_doc_tokens"
+    ORI_SECOND_DOCS_TOKENS = "ori_second_docs_tokens"
+    LIMITED_TOKEN_NUMS = "limited_token_nums"
+    TEMPLATE_TOKEN_NUMS = "template_token_nums"
+    REFERENCE_FIELD_TOKEN_NUMS = "reference_field_token_nums"
+    QUERY_TOKEN_NUMS = "query_token_nums"
+    HISTORY_TOKEN_NUMS = "history_token_nums"
+    MAX_TOKEN = "max_token"
+    WORKER_ID = "worker_id"
+    ERROR_INFO = "error_info"
+    DOCS_COUNT = "docs_count"
+    FIRST_DOC_ID = "first_doc_id"
+    DELETE_RESULT = "delete_result"
+    BATCH_RESULT_COUNT = "batch_result_count"
+    RETRY_COUNT = "retry_count"
+    MAX_RETRIES = "max_retries"
+    EXPR = "expr"
+    IS_STREAM = "is_stream"
+    SHOW_IMAGES = "show_images"
+    TOTAL_FILES_COUNT = "total_files_count"
+    SKIPPED_FILES = "skipped_files"
+    SKIPPED_URLS = "skipped_urls"
+    SKIPPED_FAQS = "skipped_faqs"
+    INSERTED_FILES = "inserted_files"
+    ESTIMATED_CHARS = "estimated_chars"
+    URL_TYPE = "url_type"
+    USER_SIZE = "user_size"
+    KB_SIZE = "kb_size"
+    IS_QUICK_MODE = "is_quick_mode"
+    FILE_CONTENT_LENGTH = "file_content_length"
+    FILE_TYPE_COUNT = "file_type_count"
+    TOTAL_KB = "total_kb"
+    TOTAL_QA = "total_qa"
+    QAS_SIZE_KB = "qas_size_kb"
+    PRODUCT_SOURCE = "product_source"
+    SYSTEM_PROMPT_LEN = "system_prompt_len"
+    MAX_CONTEXT_LEN = "max_context_len"
+    TRUNCATED = "truncated"
+    TRUNCATED_HISTORY = "truncated_history"
+    DOCS_TOKEN_LENGTH = "docs_token_length"
+    REFERENCE_DOCS = "reference_docs"
+    REMAINING_TOKENS = "remaining_tokens"
+    SELECTED_DOCS = "selected_docs"
+    DOC_TOKENS = "doc_tokens"
+    RESULT_TOKENS = "result_tokens"
+    ANSWER_TOKENS = "answer_tokens"
+    NEED_WEB_SEARCH = "need_web_search"
+    TIME_RECORD = "time_record"
+    ADD_SIZE = "add_size"
+    DEL_SIZE = "del_size"
+    MSG = "msg"
+    TRACEBACK_INFO = "traceback_info"
+    STACK_INFO = "stack_info"
+    USER_MSG = "user_msg"
+    DOCS = "docs"
+    INDEX = "index"
+    TABLE_MD = "table_md"
+    NEXT_CELLS = "next_cells"
+    TEXT_BEFORE_TABLE = "text_before_table"
+    TEXT_AFTER_TABLE = "text_after_table"
+    TABLES_MD = "tables_md"
+    CELL_CONTENT = "cell_content"
+    ROW = "row"
+    COL = "col"
+    MAX_ADD_TOKENS = "max_add_tokens"
+    TOKEN_DIFF = "token_diff"
+    TABLE_DOC = "table_doc"
+    TOTAL_TABLES = "total_tables"
+    INCOMPLETE_TABLES = "incomplete_tables"
+    MISSING_PARAMS = "missing_params"
+    NOT_EXIST_KB_IDS = "not_exist_kb_ids"
+    KB_IDS_INVALID = "kb_ids_invalid"
+    EXIST_FILES = "exist_files"
+    NEW_FILES = "new_files"
+    EXIST_FAQ_KB_IDS = "exist_faq_kb_ids"
+    FAQS_COUNT = "faqs_count"
+    CONTENT_LENGTH = "content_length"
+    FILE_INFO = "file_info"
+    INVALID_FIELDS = "invalid_fields"
 
     # ===== 分层分类集合 =====
     CORE_TRACKING_FIELDS = {
@@ -254,21 +257,29 @@ class LogSchema:
         MODEL, TOKENS_PER_SECOND, OUTPUT_TOKENS, INPUT_TOKENS, TOTAL_TOKENS,
         RETRIEVAL_DOCS_COUNT, SOURCE_DOCS_COUNT, FIRST_TOKEN_MS,
         STREAMING, RERANK, HYBRID_SEARCH, TOP_K, CHUNK_SIZE,
+        DOCS_NUM, DOC_LIMIT, DOCS_COUNT, FIRST_DOC_ID,
     }
 
     CORE_RESOURCE_FIELDS = {
         KB_NAME, FILE_NAME, KB_IDS, FILE_IDS, KB_IDS_COUNT, FILE_SIZE,
         PAGES_COUNT, CHUNKS_COUNT, VALID_FILES_COUNT, TOTAL_FILES,
         SUCCESS_COUNT, SKIPPED_COUNT, FAILED_COUNT, QUERY,
-        REQUEST_SOURCE, SUB_STAGE,
+        REQUEST_SOURCE, SUB_STAGE, SKIPPED_FILES, SKIPPED_URLS,
+        SKIPPED_FAQS, INSERTED_FILES, ESTIMATED_CHARS, URL_TYPE,
+        FILE_CONTENT_LENGTH, FILE_TYPE_COUNT, TOTAL_QA, QAS_SIZE_KB,
+        TOTAL_KB_SIZE,
+    }
+
+    HTTP_REQUEST_FIELDS = {
+        METHOD, PATH, CLIENT_IP, USER_AGENT, STATUS_CODE, RESPONSE_SIZE,
     }
 
     DB_FIELDS = {
         SQL_QUERY, SQL_PARAMS, DB_ERRNO, DB_POOL_SIZE, FREE_CNX, USED_CNX,
         POOL_SIZE, DATABASE, DATABASE_NAME, ANY_KB_ID, TIME_RANGE,
         BATCH_INDEX, BATCH_COUNT, USER_NAME, DOC_ID, DOC_COUNT,
-        DOC_IDS_COUNT, FAQ_ID, TOTAL_DELETED, TIMESTAMP,
-        MYSQL_ERRNO,
+        DOC_IDS_COUNT, FAQ_ID, TOTAL_DELETED, TIMESTAMP, MYSQL_ERRNO,
+        EST_ROWS, IDX_NAME, TBL_NAME, TABLE_NAME, SOURCE, DESCRIPTION,
     }
 
     VECTOR_DB_FIELDS = {
@@ -287,8 +298,18 @@ class LogSchema:
         CHUNKS_NUMBER, IMAGE_ID, NOS_KEY,
     }
 
+    BOT_FIELDS = {
+        BOT_NAME, BOT_PROMPT, BOT_WELCOME, BOT_DESC, BOT_IMAGE,
+    }
+
+    VALIDATION_FIELDS = {
+        MISSING_PARAMS, NOT_EXIST_KB_IDS, KB_IDS_INVALID,
+        EXIST_FILES, NEW_FILES, EXIST_FAQ_KB_IDS, FAQS_COUNT,
+        CONTENT_LENGTH, INVALID_FIELDS,
+    }
+
     LLM_FIELDS = {
-        QUERIES, SCORE, METADATA, RESULT, TRACEBACK, PID,
+        QUERIES, SCORE, SCORES, METADATA, RESULT, TRACEBACK, PID,
         ORIGINAL_LEN, FINAL_LEN, RETRIEVER_SEARCH_TIME_S,
         DOCS_LEN, QUERY_TOKENS, CONDENSE_QUESTION, FORMATTED_CHAT_HISTORY,
         WEB_CHUNK_SIZE, TOTAL_IMAGES_NUMBER, ORIGINAL, REPLACED,
@@ -296,39 +317,32 @@ class LogSchema:
         TABLE_DOC_ID, TABLE_DOC_TOKENS, TOKEN_NUMS, TOKEN_WINDOW,
         OFFCUT_TOKEN, LIMITED_TOKEN, ROLLBACK_LENGTH, RERANK_TIME,
         LLM_TIME, PREPROCESS_TIME, RETRIEVE_TIME, TOTAL_TIME,
+        PROMPT_LENGTH, RESULT_LENGTH, CONDENSE_QUESTION_LENGTH,
+        FIRST_LIMIT_DOC_TOKENS, LIMITED_TOKEN_NUMS, TEMPLATE_TOKEN_NUMS,
+        REFERENCE_FIELD_TOKEN_NUMS, QUERY_TOKEN_NUMS, HISTORY_TOKEN_NUMS,
+        MAX_TOKEN, MAX_NEW_TOKENS, DOC_TOKENS, RESULT_TOKENS, ANSWER_TOKENS,
+        DOCS_TOKEN_LENGTH, REMAINING_TOKENS, SELECTED_DOCS, REFERENCE_DOCS,
+        SYSTEM_PROMPT_LEN, MAX_CONTEXT_LEN, MAX_ADD_TOKENS,
+        TOTAL_TABLES, INCOMPLETE_TABLES, TABLE_DOC, TABLE_MD,
+        TABLES_MD, TEXT_BEFORE_TABLE, TEXT_AFTER_TABLE,
+        NEXT_CELLS, CELL_CONTENT, ROW, COL, TOKEN_DIFF,
+        TRUNCATED, TRUNCATED_HISTORY, NEED_WEB_SEARCH,
+        ORI_SECOND_DOCS_TOKENS,
+    }
+
+    DEBUG_PERF_FIELDS = {
+        FUNC_NAME, IS_QUICK, MODE, ERROR_CODE, ERROR_MSG, STACKTRACE,
+        MESSAGE, ERROR, TIME_S, TIME_RECORD, ADD_SIZE, DEL_SIZE,
+        TRACEBACK_INFO, STACK_INFO, WORKER_ID, BATCH_RESULT_COUNT,
+        DELETE_RESULT, IS_STREAM, SHOW_IMAGES, TOTAL_FILES_COUNT,
+        PRODUCT_SOURCE, USER_SIZE, KB_SIZE, USER_MSG, MSG,
+        DOCS, INDEX, ADD_MSG, ERROR_INFO, IS_QUICK_MODE,
     }
 
     # 真正的扩展字段（以 X_ 前缀标识，落入 extra_fields）
-    BUSINESS_EXTENSION_FIELDS = {
-        X_ADD_MSG, X_EST_ROWS, X_IDX_NAME, X_TBL_NAME, X_TABLE_NAME,
-        X_BOT_NAME, X_BOT_PROMPT, X_BOT_WELCOME, X_BOT_DESC, X_BOT_IMAGE,
-        X_SOURCE, X_DESCRIPTION, X_PROMPT_LENGTH, X_RESULT_LENGTH,
-        X_CONDENSE_QUESTION_LENGTH, X_DOCS_NUM, X_SCORES, X_TIME_S,
-        X_DOC_LIMIT, X_FIRST_LIMIT_DOC_TOKENS, X_ORI_SECOND_DOCS_TOKENS,
-        X_LIMITED_TOKEN_NUMS, X_TEMPLATE_TOKEN_NUMS, X_REFERENCE_FIELD_TOKEN_NUMS,
-        X_QUERY_TOKEN_NUMS, X_HISTORY_TOKEN_NUMS, X_MAX_TOKEN,
-        X_WORKER_ID, X_ERROR_INFO, X_DOCS_COUNT, X_FIRST_DOC_ID,
-        X_DELETE_RESULT, X_BATCH_RESULT_COUNT,
-        X_IS_STREAM, X_SHOW_IMAGES, X_TOTAL_FILES_COUNT,
-        X_SKIPPED_FILES, X_SKIPPED_URLS, X_SKIPPED_FAQS, X_INSERTED_FILES,
-        X_ESTIMATED_CHARS, X_URL_TYPE, X_USER_SIZE, X_KB_SIZE,
-        X_IS_QUICK_MODE, X_FILE_CONTENT_LENGTH, X_FILE_TYPE_COUNT,
-        X_TOTAL_KB, X_TOTAL_QA, X_QAS_SIZE_KB, X_PRODUCT_SOURCE,
-        X_SYSTEM_PROMPT_LEN, X_MAX_CONTEXT_LEN, X_TRUNCATED,
-        X_TRUNCATED_HISTORY, X_DOCS_TOKEN_LENGTH, X_REFERENCE_DOCS,
-        X_REMAINING_TOKENS, X_SELECTED_DOCS, X_DOC_TOKENS, X_RESULT_TOKENS,
-        X_ANSWER_TOKENS, X_NEED_WEB_SEARCH, X_TIME_RECORD, X_ADD_SIZE,
-        X_DEL_SIZE, X_MSG, X_TRACEBACK_INFO, X_STACK_INFO, X_USER_MSG,
-        X_DOCS, X_INDEX, X_TABLE_MD, X_NEXT_CELLS, X_TEXT_BEFORE_TABLE,
-        X_TEXT_AFTER_TABLE, X_TABLES_MD, X_CELL_CONTENT, X_ROW, X_COL,
-        X_MAX_ADD_TOKENS, X_TOKEN_DIFF, X_TABLE_DOC, X_TOTAL_TABLES,
-        X_INCOMPLETE_TABLES, X_MISSING_PARAMS, X_NOT_EXIST_KB_IDS,
-        X_KB_IDS_INVALID, X_EXIST_FILES, X_NEW_FILES, X_EXIST_FAQ_KB_IDS,
-        X_FAQS_COUNT, X_CONTENT_LENGTH, X_INVALID_FIELDS,
-        ERROR_CODE, ERROR_MSG, STACKTRACE,
-        FUNC_NAME, IS_QUICK, MODE, METHOD, PATH, CLIENT_IP,
-        USER_AGENT, STATUS_CODE, RESPONSE_SIZE, MESSAGE, ERROR,
-    }
+    # 原则：新增字段必须先归入明确分类，只有临时/调试字段允许放此处
+    # 使用方式：代码中传入 X_ 前缀，如 X_MSG, X_BOT_NAME, X_CUSTOM_FIELD
+    BUSINESS_EXTENSION_FIELDS = set()
 
     @classmethod
     def is_core_field(cls, field: str) -> bool:
@@ -341,11 +355,15 @@ class LogSchema:
         return (field in cls.CORE_TRACKING_FIELDS or
                 field in cls.CORE_METRICS_FIELDS or
                 field in cls.CORE_RESOURCE_FIELDS or
+                field in cls.HTTP_REQUEST_FIELDS or
                 field in cls.DB_FIELDS or
                 field in cls.VECTOR_DB_FIELDS or
                 field in cls.SEARCH_ENGINE_FIELDS or
                 field in cls.FILE_PROCESSING_FIELDS or
+                field in cls.BOT_FIELDS or
+                field in cls.VALIDATION_FIELDS or
                 field in cls.LLM_FIELDS or
+                field in cls.DEBUG_PERF_FIELDS or
                 field in cls.BUSINESS_EXTENSION_FIELDS)
 
     @classmethod

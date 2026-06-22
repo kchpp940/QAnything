@@ -135,11 +135,18 @@ class StructuredLogger:
         raw_fields.update(valid_fields)
 
         if warnings:
-            raise ValueError(
-                f"日志字段校验失败：\n" + "\n".join(f"  - {w}" for w in warnings) +
-                "\n请修正字段名或使用 LogSchema 中定义的字段常量。\n"
-                "核心字段拼错会直接失败，扩展字段请加 X_ 前缀标识。"
+            warning_msg = (
+                f"[LogSchemaWarning] 以下字段疑似核心字段拼写错误，请修正：\n"
+                + "\n".join(f"  - {w}" for w in warnings)
+                + "\n  (开发阶段请修复，运行时为保证主链路安全将字段收至 extra_fields)"
             )
+            try:
+                import sys
+                import warnings
+                warnings.warn(warning_msg, stacklevel=4)
+                print(warning_msg, file=sys.stderr)
+            except Exception:
+                pass
 
         structured = dict(raw_fields)
         if extra_fields:

@@ -1,0 +1,21 @@
+{
+  "request_id": "REQSAMPLE0123456789",
+  "expected_stages": [
+    "file_upload",
+    "file_parse",
+    "file_insert",
+    "retrieval",
+    "llm_generate"
+  ],
+  "expected_log_count": 9,
+  "core_fields_in_log": [
+    "request_id",
+    "stage",
+    "status",
+    "duration_ms",
+    "model",
+    "tokens",
+    "retrieval_docs_count"
+  ],
+  "extra_fields_boundary": "扩展字段必须进入 extra_fields 子对象"
+}
