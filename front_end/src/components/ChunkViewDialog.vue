@@ -124,8 +124,8 @@ import { h } from 'vue';
 import { PlusCircleOutlined, MinusCircleOutlined } from '@ant-design/icons-vue';
 import { useChunkView } from '@/store/useChunkView';
 import { getLanguage } from '@/language';
-import { downLoad, resultControl } from '@/utils/utils';
-import urlResquest from '@/services/urlConfig';
+import { downLoad } from '@/utils/utils';
+import { api } from '@/services/api';
 import { message } from 'ant-design-vue';
 import { useChatSetting } from '@/store/useChatSetting';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
@@ -277,13 +277,16 @@ const save = async (key: string) => {
   isShowLoading.value = true;
   message.warn('正在更新……');
   try {
-    await resultControl(
-      await urlResquest.updateDocCompleted({
-        chunk_size: chatSettingFormActive.value.chunkSize,
-        doc_id: key,
-        update_content: editableData.value[key].editContent,
-      })
-    );
+    await api.knowledge.updateChunks({
+      file_id: fileId.value,
+      kb_id: kbId.value,
+      chunks: [
+        {
+          chunk_id: key,
+          content: editableData.value[key].editContent,
+        },
+      ],
+    });
     message.success('修改成功');
     editableData.value[key].content = editableData.value[key].editContent;
     Object.assign(chunkData.value.filter(item => key === item.key)[0], editableData.value[key]);
@@ -319,24 +322,22 @@ const narrowHandle = () => {
 const getChunks = async (kbId: string, fileId: string) => {
   loading.value = true;
   try {
-    const res = (await resultControl(
-      await urlResquest.getDocCompleted({
-        kb_id: kbId,
-        file_id: fileId,
-        page_id: paginationConfig.value.pageNum,
-        page_limit: paginationConfig.value.pageSize,
-      })
-    )) as any;
+    const res = await api.knowledge.getDocCompleted({
+      kb_id: kbId,
+      file_id: fileId,
+      page: paginationConfig.value.pageNum,
+      page_limit: paginationConfig.value.pageSize,
+    });
     chunkId.value = (paginationConfig.value.pageNum - 1) * paginationConfig.value.pageSize + 1;
-    paginationConfig.value.total = res.total_count;
+    paginationConfig.value.total = res.total;
     chunkData.value = [];
-    filePath.value = res.file_path;
-    res.chunks.forEach((item: any) => {
+    filePath.value = res.filePath;
+    res.chunks.forEach(item => {
       chunkData.value.push({
-        key: item.chunk_id,
+        key: item.chunkId,
         id: chunkId.value++,
-        content: item.page_content,
-        editContent: item.page_content,
+        content: item.content,
+        editContent: item.content,
       });
     });
   } catch (e) {
@@ -411,14 +412,14 @@ const handleChatSource = file => {
 async function queryFile(file) {
   try {
     setSourceUrl(null);
-    const res: any = await resultControl(await urlResquest.getFile({ file_id: file.file_id }));
+    const res = await api.knowledge.getFileBase64({ file_id: file.file_id });
     const suffix = file.file_name.split('.').pop();
     const b64Type = getB64Type(suffix);
     console.log('b64Type', b64Type);
     setSourceType(suffix);
-    setSourceUrl(`data:${b64Type};base64,${res.file_base64}`);
+    setSourceUrl(`data:${b64Type};base64,${res.base64}`);
     if (suffix === 'txt' || suffix === 'md' || suffix === 'csv' || suffix === 'eml') {
-      const decodedTxt = atob(res.file_base64);
+      const decodedTxt = atob(res.base64);
       const correctStr = decodeURIComponent(escape(decodedTxt));
       setTextContent(correctStr);
     }

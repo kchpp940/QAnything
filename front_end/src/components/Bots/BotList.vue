@@ -9,7 +9,7 @@
     <div class="bot-item" v-for="item in botList" :key="item.id" @click="botEdit(item)">
       <div class="top-info">
         <img class="avator" src="@/assets/bots/bot-avatar.png" alt="avator" />
-        <span class="name">{{ item.bot_name }}</span>
+        <span class="name">{{ item.name }}</span>
         <a-dropdown
           @click.stop
           :trigger="['click']"
@@ -42,8 +42,7 @@
 import { useBots } from '@/store/useBots';
 import { useBotsChat } from '@/store/useBotsChat';
 import routeController from '@/controller/router';
-import urlResquest from '@/services/urlConfig';
-import { resultControl } from '@/utils/utils';
+import { api } from '@/services/api';
 import { message } from 'ant-design-vue';
 import moment from 'moment';
 import { getLanguage } from '@/language/index';
@@ -61,16 +60,16 @@ const botEdit = item => {
   setTabIndex(0);
   setCurBot(item);
   setQaList([]);
-  changePage(`/bots/${item.bot_id}/edit`);
+  changePage(`/bots/${item.id}/edit`);
 };
 
 const deleteBot = async data => {
   try {
-    await resultControl(await urlResquest.deleteBot({ bot_id: data.bot_id }));
+    await api.bot.deleteBot({ bot_id: data.id });
     emits('getBotList');
     message.success(bots.deletedSucessfully);
   } catch (e) {
-    message.error(e.msg || '删除失败，请重试');
+    message.error((e as { msg?: string }).msg || '删除失败，请重试');
   }
 };
 </script>

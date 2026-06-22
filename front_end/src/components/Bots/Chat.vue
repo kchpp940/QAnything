@@ -231,8 +231,8 @@ import html2canvas from 'html2canvas';
 import { getLanguage } from '@/language/index';
 import { useLanguage } from '@/store/useLanguage';
 import { userId, userPhone } from '@/services/urlConfig';
-import urlResquest from '@/services/urlConfig';
-import { ChatInfoClass, resultControl, throttle } from '@/utils/utils';
+import { ChatInfoClass, throttle } from '@/utils/utils';
+import { api } from '@/services/api';
 import { useChatSetting } from '@/store/useChatSetting';
 import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
@@ -363,12 +363,10 @@ const stopChat = () => {
 // Mention 的 配置项
 const mentionOptions = ref<string[]>([]);
 const getMentionOptions = async () => {
-  const res: any = await resultControl(
-    await urlResquest.getTags({
-      kb_ids: props.botInfo.kb_ids,
-    })
-  );
-  mentionOptions.value = res.tags;
+  const res = await api.knowledge.getTags({
+    kb_ids: props.botInfo.kb_ids,
+  });
+  mentionOptions.value = Array.from(new Set(Object.values(res).flat()));
 };
 onMounted(() => {
   getMentionOptions();
@@ -641,15 +639,15 @@ const handleChatSource = file => {
 async function queryFile(file) {
   try {
     setSourceUrl(null);
-    const res: any = await resultControl(await urlResquest.getFile({ file_id: file.file_id }));
+    const res = await api.knowledge.getFileBase64({ file_id: file.file_id });
     console.log('queryFile', res);
     const suffix = file.file_name.split('.').pop();
     const b64Type = getB64Type(suffix);
     console.log('b64Type', b64Type);
     setSourceType(suffix);
-    setSourceUrl(`data:${b64Type};base64,${res.base64_content}`);
+    setSourceUrl(`data:${b64Type};base64,${res.base64}`);
     if (suffix === 'txt') {
-      const decodedTxt = atob(res.base64_content);
+      const decodedTxt = atob(res.base64);
       const correctStr = decodeURIComponent(escape(decodedTxt));
       console.log('decodedTxt', correctStr);
       setTextContent(correctStr);

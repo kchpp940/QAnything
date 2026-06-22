@@ -38,7 +38,7 @@
 import { useKnowledgeModal } from '@/store/useKnowledgeModal';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
 import UploadInput from '@/components/UploadInput.vue';
-import urlResquest from '@/services/urlConfig';
+import { api } from '@/services/api';
 import { useOptiionList } from '@/store/useOptiionList';
 import { getLanguage } from '@/language/index';
 import { useChatSetting } from '@/store/useChatSetting';
@@ -81,14 +81,13 @@ const handleOk = async () => {
 };
 
 const senRequest = async params => {
-  let response = await urlResquest.uploadUrl({
+  const result = await api.upload.uploadUrl({
     chunk_size: chatSettingFormActive.value.chunkSize,
     kb_id: currentId.value,
     url: params.text,
     mode: 'strong',
   });
-  let data = response?.data;
-  return data;
+  return result;
 };
 
 onBeforeUnmount(() => {

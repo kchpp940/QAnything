@@ -11,8 +11,8 @@
     v-for="(item, index) in list"
     :key="index"
     :class="{
-      active: selectList.includes(item.kb_id),
-      'card-option-active': currentId === item.kb_id,
+      active: selectList.includes(item.id),
+      'card-option-active': currentId === item.id,
     }"
     class="card"
     :style="props.style"
@@ -39,13 +39,13 @@
       </template>
       <div class="content">
         <div class="title">
-          <div v-show="!item.edit" class="normal">
-            <p class="title-text">{{ item.kb_name }}</p>
+          <div v-show="!editingIds.has(item.id)" class="normal">
+            <p class="title-text">{{ item.name }}</p>
           </div>
 
-          <div v-show="item.edit" class="editing">
+          <div v-show="editingIds.has(item.id)" class="editing">
             <p class="title-text">
-              <a-input v-model:value="item.kb_name" type="text"></a-input>
+              <a-input v-model:value="editingName" type="text"></a-input>
             </p>
             <span class="icon-box">
               <SvgIcon class="edit" name="card-confirm" @click.stop="ok(item)"></SvgIcon>
@@ -59,13 +59,12 @@
   </div>
 </template>
 <script lang="ts" setup>
-import { IKnowledgeItem } from '@/utils/types';
+import type { IKnowledgeBase } from '@/services/api';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
-import urlResquest from '@/services/urlConfig';
-import { resultControl } from '@/utils/utils';
 import { message } from 'ant-design-vue';
 import { pageStatus } from '@/utils/enum';
 import { getLanguage } from '@/language/index';
+import { api } from '@/services/api';
 
 const common = getLanguage().common;
 // import { useDebounceFn } from '@vueuse/core';
@@ -74,7 +73,7 @@ const { showDeleteModal, selectList, currentId } = storeToRefs(useKnowledgeBase(
 
 const props = defineProps({
   list: {
-    type: Array<IKnowledgeItem>,
+    type: Array<IKnowledgeBase>,
     require: true,
     default: () => [],
   },
@@ -88,16 +87,19 @@ const props = defineProps({
   },
 });
 
+const editingIds = ref<Set<string>>(new Set());
+
 //点击编辑时候 记录标题 如果取消,展示oldValue
 const oldValue = ref('');
+const editingName = ref('');
 
 //选择知识库
-const selectKnowledgeBase = (item: IKnowledgeItem) => {
-  if (item.edit) {
+const selectKnowledgeBase = (item: IKnowledgeBase) => {
+  if (editingIds.value.has(item.id)) {
     //如果正在编辑知识库名字 此时点击知识库卡片不做操作
     return;
   }
-  const id = item.kb_id;
+  const id = item.id;
   console.log('点击知识库');
   if (selectList.value.includes(id)) {
     const index = selectList.value.findIndex(Iitem => {
@@ -113,54 +115,50 @@ const selectKnowledgeBase = (item: IKnowledgeItem) => {
 };
 
 //管理知识库
-const manage = item => {
-  setCurrentId(item.kb_id);
-  setCurrentKbName(item.kb_name);
+const manage = (item: IKnowledgeBase) => {
+  setCurrentId(item.id);
+  setCurrentKbName(item.name);
   setDefault(pageStatus.optionlist);
 };
 
 //删除知识库
-const deleteKnowledgeBase = (item: IKnowledgeItem) => {
+const deleteKnowledgeBase = (item: IKnowledgeBase) => {
   setShowDeleteModal(!showDeleteModal.value);
-  setCurrentId(item.kb_id);
-  console.log(`删除${item.kb_id}`);
+  setCurrentId(item.id);
+  console.log(`删除${item.id}`);
 };
 
 //修改知识库标题
-const editKnowledgeBase = (item: IKnowledgeItem) => {
-  console.log(`编辑${item.kb_id}`);
-  setCurrentId(item.kb_id);
-  oldValue.value = item.kb_name;
-  item.edit = !item.edit;
+const editKnowledgeBase = (item: IKnowledgeBase) => {
+  console.log(`编辑${item.id}`);
+  setCurrentId(item.id);
+  oldValue.value = item.name;
+  editingName.value = item.name;
+  editingIds.value.add(item.id);
 };
 
 //确定修改
-const ok = async (item: IKnowledgeItem) => {
+const ok = async (item: IKnowledgeBase) => {
   try {
-    await resultControl(
-      await urlResquest.kbConfig({ kb_id: item.kb_id, new_kb_name: item.kb_name })
-    );
+    await api.knowledge.renameKb({ kb_id: item.id, new_kb_name: editingName.value });
     oldValue.value = '';
-    item.edit = !item.edit;
+    editingIds.value.delete(item.id);
     message.success(common.renameSucceeded);
   } catch (err) {
     message.error(err.msg || common.renameFailed);
   }
 };
 //取消修改
-const close = (item: IKnowledgeItem) => {
+const close = (item: IKnowledgeBase) => {
   console.log('取消修改', item);
-  item.kb_name = oldValue.value;
   oldValue.value = '';
-  item.edit = !item.edit;
+  editingIds.value.delete(item.id);
 };
 
 // 筛出不含_QUICK的list
 const list = computed(() => {
-  return props.list.map(item => {
-    if (!item.kb_id.includes('_QUICK')) {
-      return item;
-    }
+  return props.list.filter(item => {
+    return !item.id.includes('_QUICK');
   });
 });
 </script>

@@ -17,8 +17,8 @@ import { message } from 'ant-design-vue';
 // import { IFileListItem } from '@/utils/types';
 import { useKnowledgeModal } from '@/store/useKnowledgeModal';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
-import urlResquest from '@/services/urlConfig';
 import { getLanguage } from '@/language/index';
+import { api } from '@/services/api';
 
 const home = getLanguage().home;
 const { setFileList } = useKnowledgeModal();
@@ -51,14 +51,12 @@ const newId = ref('');
 const update = async () => {
   console.log('updata');
   try {
-    const res: any = await urlResquest.createKb({ kb_name: home.defaultName });
-    if (+res.code === 200) {
-      newId.value = res.data.kb_id;
-      setCurrentId(res.data.kb_id);
-      setCurrentKbName(res.kb_name);
-      setModalVisible(true);
-      getList();
-    }
+    const res = await api.knowledge.createKb({ kb_name: home.defaultName });
+    newId.value = res.id;
+    setCurrentId(res.id);
+    setCurrentKbName(res.name || home.defaultName);
+    setModalVisible(true);
+    getList();
   } catch (e) {
     setFileList([]);
     message.error(e.msg);

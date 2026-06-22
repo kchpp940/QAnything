@@ -6,6 +6,9 @@ import {
 } from './common.adapter';
 import type {
   IGetQAInfoResult,
+  IGetQAOverviewResult,
+  IGetKbStatusResult,
+  IKbFileStatusCount,
   IQARecord,
   IQARecordRaw,
   IStatisticsOverview,
@@ -51,6 +54,61 @@ export function adaptStatisticsOverview(raw: IStatisticsOverviewRaw): IStatistic
       date: ensureString((item as Record<string, unknown>)?.date),
       count: ensureNumber((item as Record<string, unknown>)?.count, 0),
     })),
+    raw,
+  };
+}
+
+function adaptStatusCount(raw: Record<string, unknown>): IKbFileStatusCount {
+  return {
+    green: ensureNumber(raw.green, 0),
+    yellow: ensureNumber(raw.yellow, 0),
+    red: ensureNumber(raw.red, 0),
+    gray: ensureNumber(raw.gray, 0),
+  };
+}
+
+export function adaptKbStatusByDate(
+  raw: IGetKbStatusResult['raw'],
+  userKey: string
+): IGetKbStatusResult {
+  const status = raw.status ?? {};
+  const byDateRaw = status[userKey] as unknown as Record<string, Record<string, number>> | undefined;
+
+  const byDate: IGetKbStatusResult['byDate'] = [];
+  if (byDateRaw && typeof byDateRaw === 'object') {
+    Object.entries(byDateRaw).forEach(([date, fileStatus]) => {
+      byDate.push({
+        date: ensureString(date),
+        fileStatus: adaptStatusCount(fileStatus as Record<string, unknown>),
+      });
+    });
+  }
+
+  return {
+    byUser: { green: 0, yellow: 0, red: 0, gray: 0 },
+    byDate,
+    raw,
+  };
+}
+
+export function adaptQAOverviewByDay(
+  raw: IGetQAOverviewResult['raw']
+): IGetQAOverviewResult {
+  const byDayRaw = raw.qa_infos_by_day ?? {};
+  const byDate: IGetQAOverviewResult['byDate'] = [];
+
+  if (byDayRaw && typeof byDayRaw === 'object') {
+    Object.entries(byDayRaw).forEach(([date, count]) => {
+      byDate.push({
+        date: ensureString(date),
+        count: ensureNumber(count, 0),
+      });
+    });
+  }
+
+  return {
+    byDate,
+    total: ensureNumber(raw.total_count, 0),
     raw,
   };
 }

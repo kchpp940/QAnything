@@ -7,14 +7,6 @@
  * @Description:
  */
 
-export interface IKnowledgeItem {
-  kb_id: string;
-  kb_name: string;
-  isFaq?: boolean;
-  createTime?: any;
-  edit?: boolean;
-}
-
 export interface IDataSourceItem {
   dataSource?: string; //数据来源
   detailDataSource?: string; //详细来源信息

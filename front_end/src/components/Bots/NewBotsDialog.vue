@@ -73,8 +73,7 @@
 <script lang="ts" setup>
 import { useBots } from '@/store/useBots';
 import { useBotsChat } from '@/store/useBotsChat';
-import urlResquest from '@/services/urlConfig';
-import { resultControl } from '@/utils/utils';
+import { api } from '@/services/api';
 import { message } from 'ant-design-vue';
 import routeController from '@/controller/router';
 import { getLanguage } from '@/language/index';
@@ -100,32 +99,30 @@ const formState = reactive<FormState>({
 
 const getBotInfo = async botId => {
   try {
-    const res: any = await resultControl(await urlResquest.queryBotInfo({ bot_id: botId }));
-    setCurBot(res[0]);
+    const bot = await api.bot.getBot({ bot_id: botId });
+    if (bot) setCurBot(bot);
   } catch (e) {
-    message.error(e.msg || '获取Bot信息失败');
+    message.error((e as { msg?: string }).msg || '获取Bot信息失败');
   }
 };
 
 const onFinish = async (values: any) => {
   console.log('Success:', values);
   try {
-    const res: any = await resultControl(
-      await urlResquest.createBot({
-        bot_name: values.name,
-        description: values.introduction,
-      })
-    );
-    await getBotInfo(res.bot_id);
+    const result = (await api.bot.createBot({
+      bot_name: values.name,
+      description: values.introduction,
+    })) as { bot_id: string };
+    await getBotInfo(result.bot_id);
     message.success(bots.creationSuccessful);
     setTabIndex(0);
     setQaList([]);
     formState.name = '';
     formState.introduction = '';
     selectedPrebot.value = null;
-    changePage(`/bots/${res.bot_id}/edit`);
+    changePage(`/bots/${result.bot_id}/edit`);
   } catch (e) {
-    message.error(e.msg || '创建失败');
+    message.error((e as { msg?: string }).msg || '创建失败');
   }
   setNewBotsVisible(false);
 };

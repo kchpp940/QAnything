@@ -16,11 +16,11 @@
 </template>
 
 <script setup lang="ts">
-import { formatDate, getLastDaysRange, resultControl } from '@/utils/utils';
-import urlConfig from '@/services/urlConfig';
+import { formatDate, getLastDaysRange } from '@/utils/utils';
 import LineEchart, { type IChartList } from '@/views/Statistics/components/lineEchart.vue';
 import { message } from 'ant-design-vue';
 import { useUser } from '@/store/useUser';
+import { api, type IKbStatusByDate } from '@/services/api';
 
 const { userInfo } = useUser();
 
@@ -30,12 +30,11 @@ const qaLoading = ref(false);
 
 const chatQAChartList = ref<IChartList[]>([]);
 
-const handleQAInfo = (infos: object) => {
-  const infosArr = Object.entries(infos);
+const handleQAInfo = (byDate: Array<{ date: string; count: number }>) => {
   chatQAChartList.value.push({
-    data: infosArr.map(item => ({
-      name: item[0],
-      value: item[1],
+    data: byDate.map(item => ({
+      name: item.date,
+      value: item.count,
     })),
   });
 };
@@ -45,16 +44,13 @@ const getQAInfo = async () => {
   qaLoading.value = true;
   const { time_start, time_end } = getLastDaysRange(30);
   try {
-    const res: any = await resultControl(
-      await urlConfig.getQAInfo({
-        time_start,
-        time_end,
-        only_need_count: true,
-      })
-    );
-    handleQAInfo(res.qa_infos_by_day);
+    const result = await api.statistics.getQAOverviewByDay({
+      time_start,
+      time_end,
+    });
+    handleQAInfo(result.byDate);
   } catch (e) {
-    message.error(e.msg || '出错了');
+    message.error((e as { msg?: string }).msg || '出错了');
   } finally {
     qaLoading.value = false;
   }
@@ -62,16 +58,8 @@ const getQAInfo = async () => {
 
 // 以下是kb图表的处理
 
-type FileStatus = 'green' | 'yellow' | 'red' | 'gray';
-
-interface IKbInfo {
-  date: string;
-  fileStatus: { [K in FileStatus]: number };
-  fileTypes?: any;
-}
-
 // 处理后的知识库信息
-const kbInfoData = ref<IKbInfo[]>([]);
+const kbInfoData = ref<IKbStatusByDate[]>([]);
 
 // 图表的信息
 const kbChartList = ref<IChartList[]>([]);
@@ -79,25 +67,21 @@ const kbChartList = ref<IChartList[]>([]);
 const kbLoading = ref(true);
 
 // 处理知识库信息
-const handleKbInfo = (infos: any[]) => {
-  for (let i in infos) {
-    const date = i;
-    const fileStatus = infos[i];
-    kbInfoData.value.push({ date, fileStatus });
-  }
+const handleKbInfo = (byDate: IKbStatusByDate[]) => {
+  kbInfoData.value = byDate;
   handleKbChartList(kbInfoData.value);
 };
 
 // 处理表格的信息
-const handleKbChartList = (kbInfoData: IKbInfo[]) => {
+const handleKbChartList = (kbInfoData: IKbStatusByDate[]) => {
   const listType = [
     {
-      type: 'green',
+      type: 'green' as const,
       color: '#91CC75',
       name: '成功',
     },
     {
-      type: 'red',
+      type: 'red' as const,
       color: '#EE6666',
       name: '失败',
     },
@@ -119,10 +103,11 @@ const handleKbChartList = (kbInfoData: IKbInfo[]) => {
 // 获取知识库相关信息
 const getKbInfo = async () => {
   try {
-    const res: any = await resultControl(await urlConfig.getKbInfo({ by_date: true }));
-    handleKbInfo(res.status[`user__${userInfo.phoneNumber}`]);
+    const userKey = `user__${userInfo.phoneNumber}`;
+    const result = await api.statistics.getKbStatusByDate({}, userKey);
+    handleKbInfo(result.byDate);
   } catch (e) {
-    message.error(e.msg || '出错了');
+    message.error((e as { msg?: string }).msg || '出错了');
   } finally {
     kbLoading.value = false;
   }

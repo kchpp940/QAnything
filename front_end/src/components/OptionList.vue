@@ -235,13 +235,11 @@
   </a-config-provider>
 </template>
 <script lang="ts" setup>
-import urlResquest from '@/services/urlConfig';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
 import { useKnowledgeModal } from '@/store/useKnowledgeModal';
 import { useChunkView } from '@/store/useChunkView';
 import { useOptiionList } from '@/store/useOptiionList';
 import { pageStatus } from '@/utils/enum';
-import { resultControl } from '@/utils/utils';
 import { message, Modal } from 'ant-design-vue';
 import { getLanguage } from '@/language';
 import LoadingImg from '@/components/LoadingImg.vue';
@@ -251,6 +249,7 @@ import FileUploadDialog from '@/components/FileUploadDialog.vue';
 // import { PlusOutlined } from '@ant-design/icons-vue';
 import Tags from '@/components/Tags.vue';
 import TagsInput from '@/components/TagsInput.vue';
+import { api } from '@/services/api';
 
 const { setDefault } = useKnowledgeBase();
 const { currentKbName, currentId } = storeToRefs(useKnowledgeBase());
@@ -408,37 +407,24 @@ const tagConfirm = async (
   id: string[] | string,
   newTags: Array<string>
 ) => {
-  // TODO 调用接口
   if (type === 'file') {
     console.log(type, id, newTags);
-    await resultControl(
-      await urlResquest.updateTags({
-        tags: newTags,
-        file_ids: id,
-        is_replace: true,
-      })
-    );
+    await api.knowledge.updateTags({
+      file_tags: [{ file_id: id as string, tags: newTags }],
+    });
     message.success('成功修改标签');
   } else if (type === 'fileBatch') {
-    await resultControl(
-      await urlResquest.updateTags({
-        tags: newTags,
-        file_ids: id,
-        is_replace: false,
-      })
-    );
+    await api.knowledge.updateTags({
+      file_tags: (id as string[]).map(fileId => ({ file_id: fileId, tags: newTags })),
+    });
     message.success('成功批量添加标签');
     selectedKeys.value.clear();
     await getDetails();
   } else if (type === 'kb') {
     console.log(type, id, newTags);
-    await resultControl(
-      await urlResquest.updateTags({
-        tags: newTags,
-        kb_id: id,
-        is_replace: false,
-      })
-    );
+    await api.knowledge.updateTags({
+      kb_tags: [{ kb_id: id as string, tags: newTags }],
+    });
     message.success('成功为所有文件添加标签');
     await getDetails();
   }
@@ -490,9 +476,7 @@ const viewItem = async item => {
 
 const confirm = async () => {
   try {
-    await resultControl(
-      await urlResquest.deleteFile({ file_ids: [optionItem.fileId], kb_id: currentId.value })
-    );
+    await api.knowledge.deleteFiles({ file_ids: [optionItem.fileId], kb_id: currentId.value });
     message.success('删除成功');
     await getDetails();
     if (kbPageNum.value !== 1 && dataSource.value.length === 0) {
@@ -512,12 +496,10 @@ const deleteQaItem = item => {
 
 const qaConfirm = async () => {
   try {
-    await resultControl(
-      await urlResquest.deleteFile({
-        kb_id: `${currentId.value}_FAQ`,
-        file_ids: [qaOptionItem.faqId],
-      })
-    );
+    await api.knowledge.deleteFiles({
+      kb_id: `${currentId.value}_FAQ`,
+      file_ids: [qaOptionItem.faqId],
+    });
     message.success('删除成功');
     await getFaqList();
     if (pageNum.value !== 1 && faqList.value.length === 0) {
@@ -564,7 +546,7 @@ const clearUpload = () => {
     // cancelText: common.cancel,
     async onOk() {
       try {
-        await resultControl(await urlResquest.clearUpload({ status: 'gray', kb_ids: [] }));
+        await api.knowledge.clearUpload({ status: 'gray', kb_ids: [] });
         message.success('操作成功');
         getDetails();
       } catch (e) {

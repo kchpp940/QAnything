@@ -25,9 +25,9 @@
       :rows="6"
     />
     <div class="title">{{ bots.associatedKb }}<span>*</span></div>
-    <div v-for="(item, index) in curBot.kb_ids" :key="item" class="knowedge-item knowledge-info">
+    <div v-for="(item, index) in curBot?.kbIds" :key="item" class="knowedge-item knowledge-info">
       <img class="knowledge-icon" src="@/assets/bots/knowledge.png" alt="knowledge" />
-      <div class="kb-name">{{ curBot.kb_names[index] }}</div>
+      <div class="kb-name">{{ (curBot?.raw?.kb_names as string[])?.[index] }}</div>
       <img
         class="remove-icon"
         src="@/assets/bots/remove.png"
@@ -53,8 +53,7 @@
 </template>
 <script lang="ts" setup>
 import { useBots } from '@/store/useBots';
-import urlResquest from '@/services/urlConfig';
-import { resultControl } from '@/utils/utils';
+import { api } from '@/services/api';
 import { message } from 'ant-design-vue';
 import { getLanguage } from '@/language/index';
 import ChatSettingForm from '@/components/ChatSettingForm.vue';
@@ -76,72 +75,73 @@ const matches: any = computed(() => roleSetting.value.match(/[^a-zA-Z\s]|\p{P}|\
 
 onMounted(() => {
   console.log('curBot', curBot.value);
-  name.value = curBot.value.bot_name;
-  welcomeMessage.value = curBot.value.welcome_message;
-  roleSetting.value = curBot.value.prompt_setting;
+  name.value = curBot.value!.name;
+  welcomeMessage.value = curBot.value!.raw?.welcome_message as string;
+  roleSetting.value = curBot.value!.raw?.prompt_setting as string;
 });
 
 const getBotInfo = async botId => {
   try {
-    const res: any = await resultControl(await urlResquest.queryBotInfo({ bot_id: botId }));
-    console.log('getBotInfo', res);
-    setCurBot(res[0]);
+    const bot = await api.bot.getBot({ bot_id: botId });
+    console.log('getBotInfo', bot);
+    if (bot) {
+      setCurBot(bot);
+      name.value = bot.name;
+      welcomeMessage.value = bot.raw?.welcome_message as string;
+      roleSetting.value = bot.raw?.prompt_setting as string;
+    }
   } catch (e) {
-    message.error(e.msg || '获取Bot信息失败');
+    message.error((e as { msg?: string }).msg || '获取Bot信息失败');
   }
 };
 
 const saveBotInfo = async () => {
   try {
-    await resultControl(
-      await urlResquest.updateBot({
-        bot_id: curBot.value.bot_id,
-        bot_name: name.value,
-        prompt_setting: roleSetting.value,
-        welcome_message: welcomeMessage.value,
-        only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-        networking: chatSettingFormActive.value.capabilities.networkSearch,
-        api_base: chatSettingFormActive.value.apiBase,
-        api_key: chatSettingFormActive.value.apiKey,
-        api_context_length: chatSettingFormActive.value.apiContextLength,
-        top_p: chatSettingFormActive.value.top_P,
-        temperature: chatSettingFormActive.value.temperature,
-        top_k: chatSettingFormActive.value.top_K,
-        model: chatSettingFormActive.value.apiModelName,
-        max_token: chatSettingFormActive.value.maxToken,
-        hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-        chunk_size: chatSettingFormActive.value.chunkSize,
-        rerank: chatSettingFormActive.value.capabilities.rerank,
-      })
-    );
-    await getBotInfo(curBot.value.bot_id);
+    await api.bot.updateBot({
+      bot_id: curBot.value!.id,
+      bot_name: name.value,
+      prompt_setting: roleSetting.value,
+      welcome_message: welcomeMessage.value,
+      only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
+      networking: chatSettingFormActive.value.capabilities.networkSearch,
+      api_base: chatSettingFormActive.value.apiBase,
+      api_key: chatSettingFormActive.value.apiKey,
+      api_context_length: chatSettingFormActive.value.apiContextLength,
+      top_p: chatSettingFormActive.value.top_P,
+      temperature: chatSettingFormActive.value.temperature,
+      top_k: chatSettingFormActive.value.top_K,
+      model: chatSettingFormActive.value.apiModelName,
+      max_token: chatSettingFormActive.value.maxToken,
+      hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
+      chunk_size: chatSettingFormActive.value.chunkSize,
+      rerank: chatSettingFormActive.value.capabilities.rerank,
+    });
+    await getBotInfo(curBot.value!.id);
   } catch (e) {
     console.log('error--', e);
-    message.error(e.msg || '保存失败，请重试');
+    message.error((e as { msg?: string }).msg || '保存失败，请重试');
   }
 };
 
 const removeKb = async data => {
-  let kbIds = curBot.value.kb_ids;
+  let kbIds = [...curBot.value!.kbIds];
   console.log('removeKb', data, kbIds);
   kbIds = kbIds.filter(item => item != data);
   try {
-    await resultControl(
-      await urlResquest.updateBot({
-        bot_id: curBot.value.bot_id,
-        kb_ids: kbIds,
-      })
-    );
-    getBotInfo(curBot.value.bot_id);
+    await api.bot.updateBot({
+      bot_id: curBot.value!.id,
+      kb_ids: kbIds,
+    });
+    getBotInfo(curBot.value!.id);
     knowledgeList.value = knowledgeList.value.map(item => {
-      if (item.kb_id === data) {
+      if (item.id === data) {
         item.state = item.state === 0 ? 1 : 0;
       }
       return item;
     });
     message.success(bots.removalSucessful);
   } catch (e) {
-    message.error(e.msg || '请求失败');
+    message.error((e as { msg?: string }).msg || '请求失败');
   }
 };
 

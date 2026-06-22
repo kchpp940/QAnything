@@ -21,13 +21,13 @@
         <div class="content">
           <div
             class="knowledge-item"
-            v-for="item in knowledgeList.filter(item => regex.test(item.kb_nmame))"
-            :key="item.kbId"
+            v-for="item in knowledgeList.filter(item => regex.test(item.name))"
+            :key="item.id"
           >
             <img src="@/assets/bots/knowledge.png" alt="knowledge" />
             <div class="detail-info">
-              <div class="kb-name">{{ item.kb_name }}</div>
-              <!-- <div class="kb-time">{{ bots.creationTime }} {{ item.time }}</div> -->
+              <div class="kb-name">{{ item.name }}</div>
+              <!-- <div class="kb-time">{{ bots.creationTime }} {{ item.createTime }}</div> -->
             </div>
             <div
               :class="['button', `button-${item.state}`, `button-${common.type}-${item.state}`]"
@@ -43,8 +43,7 @@
 <script lang="ts" setup>
 import { useBots } from '@/store/useBots';
 import { useHeader } from '@/store/useHeader';
-import urlResquest from '@/services/urlConfig';
-import { resultControl } from '@/utils/utils';
+import { api } from '@/services/api';
 import routeController from '@/controller/router';
 import { message } from 'ant-design-vue';
 import { getLanguage } from '@/language/index';
@@ -60,57 +59,53 @@ const regex = computed(() => new RegExp(knowledge.value, 'i'));
 
 const getBotInfo = async botId => {
   try {
-    const res: any = await resultControl(await urlResquest.queryBotInfo({ bot_id: botId }));
-    setCurBot(res[0]);
+    const bot = await api.bot.getBot({ bot_id: botId });
+    if (bot) setCurBot(bot);
   } catch (e) {
-    message.error(e.msg || '获取Bot信息失败');
+    message.error((e as { msg?: string }).msg || '获取Bot信息失败');
   }
 };
 
 const bindKb = async data => {
-  const kbIds = curBot.value.kb_ids;
-  kbIds.push(data.kb_id);
+  const kbIds = [...curBot.value!.kbIds];
+  kbIds.push(data.id);
   console.log('kbIds', kbIds);
   try {
-    await resultControl(
-      await urlResquest.updateBot({
-        bot_id: curBot.value.bot_id,
-        kb_ids: kbIds,
-      })
-    );
-    getBotInfo(curBot.value.bot_id);
+    await api.bot.updateBot({
+      bot_id: curBot.value!.id,
+      kb_ids: kbIds,
+    });
+    getBotInfo(curBot.value!.id);
     knowledgeList.value = knowledgeList.value.map(item => {
-      if (item.kb_id === data.kb_id) {
+      if (item.id === data.id) {
         item.state = item.state === 0 ? 1 : 0;
       }
       return item;
     });
   } catch (e) {
-    message.error(e.msg || '请求失败');
+    message.error((e as { msg?: string }).msg || '请求失败');
   }
 };
 
 const removeKb = async data => {
-  let kbIds = curBot.value.kb_ids;
+  let kbIds = [...curBot.value!.kbIds];
   console.log('removeKb', data, kbIds);
-  kbIds = kbIds.filter(item => item != data.kb_id);
+  kbIds = kbIds.filter(item => item != data.id);
   try {
-    await resultControl(
-      await urlResquest.updateBot({
-        bot_id: curBot.value.bot_id,
-        kb_ids: kbIds,
-      })
-    );
-    getBotInfo(curBot.value.bot_id);
+    await api.bot.updateBot({
+      bot_id: curBot.value!.id,
+      kb_ids: kbIds,
+    });
+    getBotInfo(curBot.value!.id);
     knowledgeList.value = knowledgeList.value.map(item => {
-      if (item.kb_id === data.kb_id) {
+      if (item.id === data.id) {
         item.state = item.state === 0 ? 1 : 0;
       }
       return item;
     });
     message.success(bots.removalSucessful);
   } catch (e) {
-    message.error(e.msg || '请求失败');
+    message.error((e as { msg?: string }).msg || '请求失败');
   }
 };
 

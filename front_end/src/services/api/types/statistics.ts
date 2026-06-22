@@ -62,3 +62,47 @@ export interface IStatisticsOverview {
   qaTrend: Array<{ date: string; count: number }>;
   raw: IStatisticsOverviewRaw;
 }
+
+export interface IKbFileStatusCount {
+  green: number;
+  yellow: number;
+  red: number;
+  gray: number;
+}
+
+export interface IGetKbStatusParams {
+  by_date?: boolean;
+}
+
+export interface IGetKbStatusRawResponse {
+  status?: Record<string, IKbFileStatusCount | Record<string, IKbFileStatusCount>>;
+  [key: string]: unknown;
+}
+
+export interface IKbStatusByDate {
+  date: string;
+  fileStatus: IKbFileStatusCount;
+}
+
+export interface IGetKbStatusResult {
+  byUser: IKbFileStatusCount;
+  byDate: IKbStatusByDate[];
+  raw: IGetKbStatusRawResponse;
+}
+
+export interface IGetQAOverviewRawResponse {
+  qa_infos_by_day?: Record<string, number>;
+  total_count?: number;
+  [key: string]: unknown;
+}
+
+export interface IQADayCount {
+  date: string;
+  count: number;
+}
+
+export interface IGetQAOverviewResult {
+  byDate: IQADayCount[];
+  total: number;
+  raw: IGetQAOverviewRawResponse;
+}

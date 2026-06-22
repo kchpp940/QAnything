@@ -22,6 +22,16 @@ export interface ICreateKbParams {
   is_quick?: boolean;
 }
 
+export interface ICreateKbResult {
+  id: string;
+  name: string;
+  raw: {
+    kb_id?: string;
+    kb_name?: string;
+    [key: string]: unknown;
+  };
+}
+
 export interface IRenameKbParams extends IBaseKbParams {
   new_kb_name: string;
 }
@@ -147,6 +157,8 @@ export interface IChunkRaw {
 export interface IGetDocCompletedParams {
   file_id: string;
   kb_id?: string;
+  page?: number;
+  page_limit?: number;
 }
 
 export interface IGetDocCompletedResponse {
@@ -174,6 +186,14 @@ export interface IDocChunksResult {
   chunks: IChunk[];
   pagesInfo: IChunkLocation[][];
   pageSizes: Array<{ page_w: number; page_h: number }>;
+  total: number;
+  filePath: string;
+  raw: {
+    chunks?: IChunkRaw[];
+    total_count?: number;
+    file_path?: string;
+    [key: string]: unknown;
+  };
 }
 
 export interface IUpdateChunksParams {

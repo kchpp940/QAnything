@@ -234,6 +234,7 @@ import html2canvas from 'html2canvas';
 import { getLanguage } from '@/language/index';
 import { useLanguage } from '@/store/useLanguage';
 import urlResquest from '@/services/urlConfig';
+import { api } from '@/services/api';
 import { ChatInfoClass, resultControl } from '@/utils/utils';
 import ChatInfoPanel from '@/components/ChatInfoPanel.vue';
 import HighLightMarkDown from '@/components/HighLightMarkDown.vue';
@@ -430,12 +431,10 @@ const beforeSend = title => {
 // Mention 的 配置项
 const mentionOptions = ref<string[]>([]);
 const getMentionOptions = async () => {
-  const res: any = await resultControl(
-    await urlResquest.getTags({
-      kb_ids: props.botInfo.kb_ids,
-    })
-  );
-  mentionOptions.value = res.tags;
+  const res = await api.knowledge.getTags({
+    kb_ids: props.botInfo.kb_ids,
+  });
+  mentionOptions.value = Array.from(new Set(Object.values(res).flat()));
 };
 onMounted(() => {
   getMentionOptions();
@@ -479,7 +478,7 @@ const send = async () => {
 
   const sendData = {
     user_id: props.virtualUserId,
-    user_info: userInfo.phoneNumber,
+    kb_ids: props.botInfo.kb_ids,
     bot_id: props.botInfo.bot_id,
     history: history.value,
     question: q,
@@ -506,18 +505,13 @@ const send = async () => {
     chatInfoClass.addChatSetting(chatSettingFormActive.value);
     addAnswer(q);
     try {
-      const res: any = await resultControl(
-        await urlResquest.sendQuestion(sendData, { signal: ctrl.signal })
-      );
-      if (res.code === 200) {
-        QA_List.value[QA_List.value.length - 1].answer = res?.source_documents.length
-          ? common.searchCompleted
-          : common.searchNotFound;
-        QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
-      }
-    } catch (e) {
+      const res = await api.chat.sendQuestion(sendData, { signal: ctrl.signal });
+      QA_List.value[QA_List.value.length - 1].answer = res.sources.length
+        ? common.searchCompleted
+        : common.searchNotFound;
+      QA_List.value[QA_List.value.length - 1].source = res.sources.map(s => s.raw);
+    } catch (e: any) {
       console.log('出错', e);
-      // message.error(e.msg || '出错了');
       QA_List.value[QA_List.value.length - 1].answer = e.msg || 'error';
     }
     // 无论成不成功,结束后的操作
@@ -723,15 +717,15 @@ const handleChatSource = file => {
 async function queryFile(file) {
   try {
     setSourceUrl(null);
-    const res: any = await resultControl(await urlResquest.getFile({ file_id: file.file_id }));
+    const res = await api.knowledge.getFileBase64({ file_id: file.file_id });
     console.log('queryFile', res);
     const suffix = file.file_name.split('.').pop();
     const b64Type = getB64Type(suffix);
     console.log('b64Type', b64Type);
     setSourceType(suffix);
-    setSourceUrl(`data:${b64Type};base64,${res.file_base64}`);
+    setSourceUrl(`data:${b64Type};base64,${res.base64}`);
     if (suffix === 'txt' || suffix === 'md' || suffix === 'csv' || suffix === 'eml') {
-      const decodedTxt = atob(res.file_base64);
+      const decodedTxt = atob(res.base64);
       const correctStr = decodeURIComponent(escape(decodedTxt));
       console.log('decodedTxt', correctStr);
       setTextContent(correctStr);

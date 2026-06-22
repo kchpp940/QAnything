@@ -14,22 +14,7 @@ import { api, IKnowledgeBase } from '@/services/api';
 
 const common = getLanguage().common;
 
-export interface IKnowledgeItem {
-  kb_id: string;
-  kb_name: string;
-  isFaq?: boolean;
-  createTime?: unknown;
-  edit?: boolean;
-}
-
-function toLegacyItem(kb: IKnowledgeBase): IKnowledgeItem {
-  return {
-    kb_id: kb.id,
-    kb_name: kb.name,
-    isFaq: kb.isFaq,
-    createTime: kb.createTime,
-  };
-}
+export type { IKnowledgeBase } from '@/services/api';
 
 export const useKnowledgeBase = defineStore(
   'knowledgeBase',
@@ -56,7 +41,7 @@ export const useKnowledgeBase = defineStore(
       currentKbName.value = id;
     };
 
-    const knowledgeBaseList = ref<Array<IKnowledgeItem>>([]);
+    const knowledgeBaseList = ref<Array<IKnowledgeBase>>([]);
     const setKnowledgeBaseList = list => {
       knowledgeBaseList.value = list;
     };
@@ -75,7 +60,7 @@ export const useKnowledgeBase = defineStore(
       try {
         const list = await api.knowledge.getKbList();
         if (list.length > 0) {
-          setKnowledgeBaseList(list.map(toLegacyItem));
+          setKnowledgeBaseList(list);
           setDefault(pageStatus.normal);
 
           if (!selectList.value.length) {

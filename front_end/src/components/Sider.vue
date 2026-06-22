@@ -75,10 +75,9 @@ import SvgIcon from '@/components/SvgIcon.vue';
 import { getLanguage } from '@/language';
 // import { message } from 'ant-design-vue';
 // import { useKnowledgeModal } from '@/store/useKnowledgeModal';
-import { resultControl } from '@/utils/utils';
-import urlResquest from '@/services/urlConfig';
 import { IChatItemInfo, IFileListItem } from '@/utils/types';
 import { useUploadFiles } from '@/store/useUploadFiles';
+import { api } from '@/services/api';
 // import urlResquest from '@/services/urlConfig';
 // import { pageStatus } from '@/utils/enum';
 // import { resultControl } from '@/utils/utils';
@@ -141,10 +140,8 @@ const quickClickHandle = async (type: 0 | 1, cardData?: IHistoryList) => {
   }
   if (type === 0) {
     // 新建对话，需要创建对话（知识库）并跳转到新对话
-    const res: any = await resultControl(
-      await urlResquest.createKb({ kb_name: '未命名对话', is_quick: true })
-    );
-    kbId.value = res.kb_id;
+    const res = await api.knowledge.createKb({ kb_name: '未命名对话', is_quick: true });
+    kbId.value = res.id;
     QA_List.value = [];
     // 当前对话id为新建的historyId
     chatId.value = addHistoryList('未命名对话');

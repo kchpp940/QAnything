@@ -2,8 +2,7 @@
 // import urlResquest from '@/services/urlConfig';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
 import { IChatItem, IFileListItem } from '@/utils/types';
-import { resultControl } from '@/utils/utils';
-import urlResquest from '@/services/urlConfig';
+import { api } from '@/services/api';
 
 const { currentId } = storeToRefs(useKnowledgeBase());
 
@@ -91,9 +90,7 @@ export const useQuickStart = defineStore(
     const renameHistory = (historyId: number, title: string) => {
       historyList.value.forEach(async item => {
         if (item.historyId === historyId) {
-          await resultControl(
-            await urlResquest.kbConfig({ kb_id: kbId.value, new_kb_name: title })
-          );
+          await api.knowledge.renameKb({ kb_id: kbId.value, new_kb_name: title });
           item.title = title;
         }
       });

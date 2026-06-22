@@ -14,11 +14,11 @@
       <template #content>
         <div class="tools-box">
           <ul>
-            <li @click="manage({ kb_name: cardData.title, kb_id: cardData.kbId })">
+            <li @click="manage(cardData.kbId, cardData.title)">
               <SvgIcon class="edit" name="icon-manage"></SvgIcon>
               <span class="tool-name">{{ common.manage }}</span>
             </li>
-            <li @click="deleteKnowledgeBase({ kb_name: cardData.title, kb_id: cardData.kbId })">
+            <li @click="deleteKnowledgeBase(cardData.kbId, cardData.title)">
               <SvgIcon class="delete" name="delete"></SvgIcon>
               <span class="tool-name">{{ common.delete }}</span>
             </li>
@@ -36,7 +36,6 @@
 
 <script setup lang="ts">
 import { pageStatus } from '@/utils/enum';
-import { IKnowledgeItem } from '@/utils/types';
 
 import { IHistoryList, useQuickStart } from '@/store/useQuickStart';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
@@ -61,18 +60,20 @@ const props = defineProps<IProps>();
 const { cardData } = toRefs(props);
 
 // 管理知识库
-const manage = (item: IKnowledgeItem) => {
-  setCurrentId(item.kb_id);
-  setCurrentKbName(item.kb_name);
+const manage = (id: string | undefined, name: string) => {
+  if (!id) return;
+  setCurrentId(id);
+  setCurrentKbName(name);
   setDefault(pageStatus.optionlist);
 };
 
 // 删除知识库
-const deleteKnowledgeBase = (item: IKnowledgeItem) => {
+const deleteKnowledgeBase = (id: string | undefined, name: string) => {
+  if (!id) return;
   deleteChatId.value = cardData.value.historyId;
   setShowDeleteModal(!showDeleteModal.value);
-  setCurrentId(item.kb_id);
-  console.log(`删除${item.kb_id}`);
+  setCurrentId(id);
+  console.log(`删除${id}`);
 };
 </script>
 

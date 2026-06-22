@@ -11,15 +11,15 @@
     <div
       v-for="(item, index) in props.list"
       :key="index"
-      :class="{ active: selectList.includes(item.kb_id) }"
+      :class="{ active: selectList.includes(item.id) }"
       class="card"
       :style="props.style"
       @click="selectKnowledgeBase(item)"
     >
       <div class="title">
         <div class="normal">
-          <p class="title-text">{{ item.kb_name }}</p>
-          <span v-show="selectList.includes(item.kb_id)" class="icon-box">
+          <p class="title-text">{{ item.name }}</p>
+          <span v-show="selectList.includes(item.id)" class="icon-box">
             <SvgIcon class="edit" name="edit" @click.stop="editKnowledge(item)"></SvgIcon>
             <SvgIcon class="delete" name="delete" @click.stop="deleteKnowledgeBase(item)"></SvgIcon>
           </span>
@@ -36,12 +36,12 @@
 <script lang="ts" setup>
 // import { Empty } from 'ant-design-vue';
 // const simpleImage = Empty.PRESENTED_IMAGE_SIMPLE;
-import { IKnowledgeItem } from '@/utils/types';
+import type { IKnowledgeBase } from '@/services/api';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
 import { useKnowledgeModal } from '@/store/useKnowledgeModal';
-import urlResquest from '@/services/urlConfig';
 import { getStatus } from '@/utils/utils';
 import { message } from 'ant-design-vue';
+import { api } from '@/services/api';
 const { setModalVisible, setModalTitle, setFileList } = useKnowledgeModal();
 const { modalVisible } = storeToRefs(useKnowledgeModal());
 
@@ -51,7 +51,7 @@ const { currentId, selectList, showDeleteModal } = storeToRefs(useKnowledgeBase(
 
 const props = defineProps({
   list: {
-    type: Array<IKnowledgeItem>,
+    type: Array<IKnowledgeBase>,
     require: true,
     default: () => [],
   },
@@ -66,8 +66,8 @@ const props = defineProps({
 });
 
 //选择知识库
-const selectKnowledgeBase = (item: IKnowledgeItem) => {
-  const id = item.kb_id;
+const selectKnowledgeBase = (item: IKnowledgeBase) => {
+  const id = item.id;
   console.log('点击知识库');
   if (selectList.value.includes(id)) {
     const index = selectList.value.findIndex(Iitem => {
@@ -83,37 +83,32 @@ const selectKnowledgeBase = (item: IKnowledgeItem) => {
 };
 
 //编辑知识库
-const editKnowledge = async (item: IKnowledgeItem) => {
+const editKnowledge = async (item: IKnowledgeBase) => {
   console.log('编辑知识库');
-  setCurrentId(item.kb_id);
+  setCurrentId(item.id);
   //获取当前id的知识库 详细信息
   await getDetails();
-  setCurrentKbName(item.kb_name);
+  setCurrentKbName(item.name);
   setModalTitle('编辑知识库');
   setModalVisible(!modalVisible.value);
 };
 
 //删除知识库
-const deleteKnowledgeBase = (item: IKnowledgeItem) => {
-  setCurrentId(item.kb_id);
+const deleteKnowledgeBase = (item: IKnowledgeBase) => {
+  setCurrentId(item.id);
   setShowDeleteModal(!showDeleteModal.value);
   console.log(showDeleteModal.value);
-  console.log(`删除${item.kb_id}`);
+  console.log(`删除${item.id}`);
 };
 
 const getDetails = async () => {
   try {
-    const res: any = await urlResquest.fileList({ kb_id: currentId.value });
+    const res = await api.knowledge.getFileList({ kb_id: currentId.value });
     console.log('filelist-res', res);
-    if (+res.code === 200) {
-      res.data.details.forEach((item: any) => {
-        item.errorText = getStatus(item);
-      });
-
-      setFileList(res.data.details);
-    } else {
-      message.error('获取知识库详情失败');
-    }
+    res.files.forEach(item => {
+      item.raw.errorText = getStatus(item.raw);
+    });
+    setFileList(res.files.map(item => item.raw as any));
   } catch (error) {
     message.error(error.msg || '获取知识库详情失败');
   }

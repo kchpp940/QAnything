@@ -15,8 +15,7 @@
 import BotsHome from '@/components/Bots/BotsHome.vue';
 import BotList from '@/components/Bots/BotList.vue';
 import { useBots } from '@/store/useBots';
-import urlResquest from '@/services/urlConfig';
-import { resultControl } from '@/utils/utils';
+import { api } from '@/services/api';
 import { message } from 'ant-design-vue';
 import { LoadingOutlined } from '@ant-design/icons-vue';
 
@@ -33,10 +32,10 @@ const indicator = h(LoadingOutlined, {
 
 const getBotList = async () => {
   try {
-    const res: any = await resultControl(await urlResquest.queryBotInfo());
-    renderData(res, res.length, 0, 10);
+    const { bots } = await api.bot.getBotList();
+    renderData(bots, bots.length, 0, 10);
   } catch (e) {
-    message.error(e.msg || '获取Bot列表失败');
+    message.error((e as { msg?: string }).msg || '获取Bot列表失败');
   }
   isLoading.value = false;
 };

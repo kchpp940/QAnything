@@ -1,5 +1,6 @@
 import { post } from './base';
 import {
+  adaptCreateKb,
   adaptDocChunks,
   adaptFaqList,
   adaptFileBase64,
@@ -10,6 +11,7 @@ import {
 import type {
   IClearUploadParams,
   ICreateKbParams,
+  ICreateKbResult,
   IDeleteFileParams,
   IDeleteKbParams,
   IDocChunksResult,
@@ -50,8 +52,9 @@ export const knowledgeApi = {
     return adaptKnowledgeBaseList(data as Parameters<typeof adaptKnowledgeBaseList>[0]);
   },
 
-  async createKb(params: ICreateKbParams): Promise<unknown> {
-    return post(URL.CREATE_KB, params, { showLoading: true });
+  async createKb(params: ICreateKbParams): Promise<ICreateKbResult> {
+    const data = await post(URL.CREATE_KB, params, { showLoading: true });
+    return adaptCreateKb(data as Parameters<typeof adaptCreateKb>[0]);
   },
 
   async deleteKb(params: IDeleteKbParams): Promise<unknown> {

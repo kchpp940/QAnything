@@ -169,8 +169,7 @@
 import { apiBase } from '@/services';
 import { useOptiionList } from '@/store/useOptiionList';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
-import urlResquest from '@/services/urlConfig';
-import { resultControl } from '@/utils/utils';
+import { api } from '@/services/api';
 import { message } from 'ant-design-vue';
 import { getLanguage } from '@/language/index';
 // import { PlusOutlined } from '@ant-design/icons-vue';
@@ -249,12 +248,10 @@ function clearFormState() {
 
 const delFaq = async () => {
   try {
-    await resultControl(
-      await urlResquest.deleteFile({
-        kb_id: `${currentId.value}_FAQ`,
-        file_ids: [editQaSet.value?.faqId],
-      })
-    );
+    await api.knowledge.deleteFiles({
+      kb_id: `${currentId.value}_FAQ`,
+      file_ids: [editQaSet.value?.faqId],
+    });
   } catch (e) {
     message.error(e.msg || '删除失败');
   }
@@ -275,14 +272,11 @@ const onFinish = async (values: any) => {
         nos_key: null,
       },
     ];
-    const res: any = await resultControl(
-      await urlResquest.uploadFaqs({
-        kb_id: `${currentId.value}_FAQ`,
-        faqs: faqs,
-        chunk_size: chatSettingFormActive.value.chunkSize.toString(),
-      })
-    );
-    console.log(res);
+    await api.upload.uploadFaqs({
+      kb_id: `${currentId.value}_FAQ`,
+      faqs: faqs,
+      chunk_size: chatSettingFormActive.value.chunkSize.toString(),
+    });
     message.success('上传成功');
   } catch (e) {
     message.error(e.msg || '获取Bot信息失败');

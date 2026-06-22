@@ -1,9 +1,9 @@
 //新建、编辑知识库弹窗信息
 import { IUrlListItem, IFileListItem } from '@/utils/types';
-import urlResquest from '@/services/urlConfig';
 import message from 'ant-design-vue/es/message';
 import { getStatus } from '@/utils/utils';
 import { getLanguage } from '@/language/index';
+import { api } from '@/services/api';
 
 const home = getLanguage().home;
 const common = getLanguage().common;
@@ -47,14 +47,15 @@ export const useKnowledgeModal = defineStore('knowledgeModal', () => {
   //获取文件列表
   const getFileList = async (kb_id: string) => {
     try {
-      const res: any = await urlResquest.fileList({ kb_id });
-      if (res.code == 200) {
-        res.data.details.forEach((item: any) => {
-          item.errorText = getStatus(item);
-        });
-
-        setFileList(res.data.details);
-      }
+      const res = await api.knowledge.getFileList({ kb_id });
+      setFileList(res.files.map(item => {
+        const fileItem = {
+          ...item.raw,
+          bytes: item.bytes ?? 0,
+        } as unknown as IFileListItem;
+        fileItem.errorText = getStatus(fileItem);
+        return fileItem;
+      }));
     } catch (e) {
       console.log(e);
       message.error(e.msg || common.error);

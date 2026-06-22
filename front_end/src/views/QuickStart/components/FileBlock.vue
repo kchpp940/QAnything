@@ -36,10 +36,10 @@
 <script setup lang="ts">
 import { IFileListItem } from '@/utils/types';
 import SvgIcon from '@/components/SvgIcon.vue';
-import { formatFileSize, parseFileName, resultControl } from '@/utils/utils';
+import { formatFileSize, parseFileName } from '@/utils/utils';
 import LoadingImg from '@/components/LoadingImg.vue';
-import urlResquest from '@/services/urlConfig';
 import { useChatSource } from '@/store/useChatSource';
+import { api } from '@/services/api';
 import message from 'ant-design-vue/es/message';
 
 const { setChatSourceVisible, setSourceType, setSourceUrl, setTextContent } = useChatSource();
@@ -117,15 +117,13 @@ const getDetail = () => {
       clearInterval(timer.value);
       timer.value = null;
     } else {
-      const res = (await resultControl(
-        await urlResquest.fileList({
-          kb_id: kbId.value,
-          file_id: fileData.value.file_id,
-        })
-      )) as any;
-      fileData.value.status = res.details[0]?.status || 'red';
-      if (res.details[0]?.status === 'yellow') {
-        fileProgress.value = parseInt(res.details[0]?.msg.match(/\d+/)[0], 10);
+      const res = await api.knowledge.getFileList({
+        kb_id: kbId.value,
+        file_id: fileData.value.file_id,
+      });
+      fileData.value.status = res.files[0]?.raw.status || 'red';
+      if (res.files[0]?.raw.status === 'yellow') {
+        fileProgress.value = parseInt(res.files[0]?.raw.msg.match(/\d+/)[0], 10);
       }
     }
   }, 1000);
@@ -189,13 +187,13 @@ const handleChatSource = file => {
 async function queryFile(file) {
   try {
     setSourceUrl(null);
-    const res: any = await resultControl(await urlResquest.getFile({ file_id: file.file_id }));
+    const res = await api.knowledge.getFileBase64({ file_id: file.file_id });
     const suffix = file.file_name.split('.').pop();
     const b64Type = getB64Type(suffix);
     setSourceType(suffix);
-    setSourceUrl(`data:${b64Type};base64,${res.file_base64}`);
+    setSourceUrl(`data:${b64Type};base64,${res.base64}`);
     if (suffix === 'txt' || suffix === 'md') {
-      const decodedTxt = atob(res.file_base64);
+      const decodedTxt = atob(res.base64);
       const correctStr = decodeURIComponent(escape(decodedTxt));
       setTextContent(correctStr);
       setChatSourceVisible(true);

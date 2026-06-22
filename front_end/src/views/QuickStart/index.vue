@@ -255,6 +255,7 @@ import { message } from 'ant-design-vue';
 import { fetchEventSource } from '@microsoft/fetch-event-source';
 import { apiBase } from '@/services';
 import urlResquest, { userId, userPhone } from '@/services/urlConfig';
+import { api } from '@/services/api';
 import { useChat } from '@/store/useChat';
 import html2canvas from 'html2canvas';
 import { ChatInfoClass, formatTimestamp, resultControl } from '@/utils/utils';
@@ -418,7 +419,7 @@ const myCopy = (item: IChatItem) => {
 const deleteFile = async (file_id: string, kb_id: string) => {
   console.log(file_id);
   try {
-    await resultControl(await urlResquest.deleteFile({ file_ids: [file_id], kb_id }));
+    await api.knowledge.deleteFiles({ file_ids: [file_id], kb_id });
     message.success('删除成功');
     const index: number = uploadFileListQuick.value.findIndex(item => item.file_id === file_id);
     if (index !== -1) {
@@ -485,8 +486,8 @@ const beforeSend = async title => {
       title = title.substring(0, 100);
     }
     // 创建知识库
-    const res: any = await resultControl(await urlResquest.createKb({ kb_name: title }));
-    kbId.value = res.kb_id;
+    const res = await api.knowledge.createKb({ kb_name: title });
+    kbId.value = res.id;
     // 当前对话id为新建的historyId
     chatId.value = addHistoryList(title);
     updateHistoryList(title, chatId.value, kbId.value);
@@ -520,6 +521,7 @@ const send = async () => {
   ctrl = new AbortController();
 
   const sendData = {
+    user_id: userId,
     kb_ids: [kbId.value],
     history: history.value,
     question: q,
@@ -546,16 +548,14 @@ const send = async () => {
     chatInfoClass.addChatSetting(chatSettingFormActive.value);
     addAnswer(q);
     try {
-      const res: any = await resultControl(await urlResquest.sendQuestion(sendData));
-      if (res.code === 200) {
-        QA_List.value[QA_List.value.length - 1].answer = res?.source_documents.length
-          ? common.searchCompleted
-          : common.searchNotFound;
-        QA_List.value[QA_List.value.length - 1].source = res?.source_documents;
-      }
-    } catch (e) {
+      const res = await api.chat.sendQuestion(sendData);
+      QA_List.value[QA_List.value.length - 1].answer = res.sources.length
+        ? common.searchCompleted
+        : common.searchNotFound;
+      QA_List.value[QA_List.value.length - 1].source = res.sources.map(s => s.raw);
+    } catch (e: any) {
       message.error(e.msg || '出错了');
-      QA_List.value[QA_List.value.length - 1].answer = e || 'error';
+      QA_List.value[QA_List.value.length - 1].answer = e.msg || 'error';
     }
     // 无论成不成功,结束后的操作
     showLoading.value = false;
@@ -679,37 +679,34 @@ const shareChat = async () => {
   if (chatId.value === null) return;
   try {
     // 创建机器人
-    const { bot_id } = (await resultControl(
-      await urlResquest.createBot({
-        bot_name: 'bot-' + formatTimestamp(Date.now()),
-        description: '来源: 快速开始创建-' + formatTimestamp(Date.now()),
-      })
-    )) as any;
+    const result = (await api.bot.createBot({
+      bot_name: 'bot-' + formatTimestamp(Date.now()),
+      description: '来源: 快速开始创建-' + formatTimestamp(Date.now()),
+    })) as { bot_id: string };
+    const { bot_id } = result;
     // 将知识库变为现在这个
-    await resultControl(
-      await urlResquest.updateBot({
-        bot_id,
-        kb_ids: [kbId.value],
-        only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
-        networking: chatSettingFormActive.value.capabilities.networkSearch,
-        api_base: chatSettingFormActive.value.apiBase,
-        api_key: chatSettingFormActive.value.apiKey,
-        api_context_length: chatSettingFormActive.value.apiContextLength,
-        top_p: chatSettingFormActive.value.top_P,
-        temperature: chatSettingFormActive.value.temperature,
-        top_k: chatSettingFormActive.value.top_K,
-        model: chatSettingFormActive.value.apiModelName,
-        max_token: chatSettingFormActive.value.maxToken,
-        hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
-        chunk_size: chatSettingFormActive.value.chunkSize,
-        rerank: chatSettingFormActive.value.capabilities.rerank,
-      })
-    );
+    await api.bot.updateBot({
+      bot_id,
+      kb_ids: [kbId.value],
+      only_need_search_results: chatSettingFormActive.value.capabilities.onlySearch,
+      networking: chatSettingFormActive.value.capabilities.networkSearch,
+      api_base: chatSettingFormActive.value.apiBase,
+      api_key: chatSettingFormActive.value.apiKey,
+      api_context_length: chatSettingFormActive.value.apiContextLength,
+      top_p: chatSettingFormActive.value.top_P,
+      temperature: chatSettingFormActive.value.temperature,
+      top_k: chatSettingFormActive.value.top_K,
+      model: chatSettingFormActive.value.apiModelName,
+      max_token: chatSettingFormActive.value.maxToken,
+      hybrid_search: chatSettingFormActive.value.capabilities.mixedSearch,
+      chunk_size: chatSettingFormActive.value.chunkSize,
+      rerank: chatSettingFormActive.value.capabilities.rerank,
+    });
     setCopyUrlVisible(true);
     const { origin, pathname } = window.location;
     setWebUrl(`${origin + pathname}#/bots/${bot_id}/share`);
   } catch (e) {
-    message.error(e?.msg || '分享失败');
+    message.error((e as { msg?: string })?.msg || '分享失败');
   }
 };
 //
@@ -827,13 +824,13 @@ const handleChatSource = file => {
 async function queryFile(file) {
   try {
     setSourceUrl(null);
-    const res: any = await resultControl(await urlResquest.getFile({ file_id: file.file_id }));
+    const res = await api.knowledge.getFileBase64({ file_id: file.file_id });
     const suffix = file.file_name.split('.').pop();
     const b64Type = getB64Type(suffix);
     setSourceType(suffix);
-    setSourceUrl(`data:${b64Type};base64,${res.file_base64}`);
+    setSourceUrl(`data:${b64Type};base64,${res.base64}`);
     if (suffix === 'txt' || suffix === 'md' || suffix === 'csv' || suffix === 'eml') {
-      const decodedTxt = atob(res.file_base64);
+      const decodedTxt = atob(res.base64);
       const correctStr = decodeURIComponent(escape(decodedTxt));
       setTextContent(correctStr);
       setChatSourceVisible(true);

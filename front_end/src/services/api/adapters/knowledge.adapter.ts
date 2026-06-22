@@ -12,6 +12,7 @@ import {
 } from './common.adapter';
 import type {
   IDocChunksResult,
+  ICreateKbResult,
   IFileBase64Result,
   IFileListResult,
   IFaqFile,
@@ -38,6 +39,18 @@ export function adaptKnowledgeBase(raw: IKnowledgeBaseRaw): IKnowledgeBase {
 
 export function adaptKnowledgeBaseList(rawList: IKnowledgeBaseRaw[] | undefined): IKnowledgeBase[] {
   return ensureArray(rawList).map(adaptKnowledgeBase);
+}
+
+export function adaptCreateKb(raw: {
+  kb_id?: string;
+  kb_name?: string;
+  [key: string]: unknown;
+}): ICreateKbResult {
+  return {
+    id: raw.kb_id ?? '',
+    name: raw.kb_name ?? '',
+    raw,
+  };
 }
 
 export function adaptKbFile(raw: IKbFileRaw): IKbFile {
@@ -129,6 +142,8 @@ export function adaptChunk(raw: IChunkRaw): IChunk {
 
 export function adaptDocChunks(raw: {
   chunks?: IChunkRaw[];
+  total_count?: number;
+  file_path?: string;
   [key: string]: unknown;
 }): IDocChunksResult {
   const chunks = ensureArray(raw.chunks).map(adaptChunk);
@@ -168,6 +183,9 @@ export function adaptDocChunks(raw: {
     chunks,
     pagesInfo: pagesInfoArr,
     pageSizes: sizeArr,
+    total: raw.total_count ?? chunks.length,
+    filePath: raw.file_path ?? '',
+    raw,
   };
 }
 

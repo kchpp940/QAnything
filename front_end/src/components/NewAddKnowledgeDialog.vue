@@ -111,9 +111,9 @@ import SvgIcon from './SvgIcon.vue';
 import UploadList from '@/components/UploadList.vue';
 import UPloadInput from '@/components/UploadInput.vue';
 // import { fileStatus } from '@/utils/enum';
-import { getStatus, resultControl } from '@/utils/utils';
+import { getStatus } from '@/utils/utils';
 import { IFileListItem } from '@/utils/types';
-import urlResquest from '@/services/urlConfig';
+import { api } from '@/services/api';
 import { message } from 'ant-design-vue';
 import { getLanguage } from '@/language/index';
 import { useLanguage } from '@/store/useLanguage';
@@ -241,18 +241,14 @@ const uplolad = () => {
     if (file.status == 'loading') {
       try {
         // 上传模式，soft：文件名重复的文件不再上传，strong：文件名重复的文件强制上传
-        const param = { files: file.file, kb_id: newId.value, mode: 'strong' };
+        const param = { file: file.file, kb_id: newId.value, mode: 'strong' };
         console.log(param);
-        const res = await urlResquest.uploadFile(param, {
-          headers: {
-            'Content-Type': 'multipart/form-data',
-          },
-        });
-        if (+res.code === 200 && res.data[0].status !== 'red' && res.data[0].status !== 'yellow') {
-          fileList.value[index].status = res.data[0].status;
-          fileList.value[index].file_id = res.data[0].file_id;
+        const result = await api.upload.uploadFile(param);
+        if (result.status !== 'red' && result.status !== 'yellow') {
+          fileList.value[index].status = result.status;
+          fileList.value[index].file_id = result.fileId;
         } else {
-          fileList.value[index].status = res.data[0].status;
+          fileList.value[index].status = result.status;
           fileList.value[index].errorText = '上传失败';
         }
       } catch (e) {
@@ -272,13 +268,9 @@ const deleteFile = async (item: IFileListItem, index: number) => {
 
   if (item.file_id) {
     try {
-      const res = await urlResquest.deleteFile({ file_ids: [item.file_id], kb_id: newId.value });
-      if (+res.code === 200) {
-        fileList.value.splice(index, 1);
-        message.success('删除成功');
-      } else {
-        message.error('删除失败');
-      }
+      await api.knowledge.deleteFiles({ file_ids: [item.file_id], kb_id: newId.value });
+      fileList.value.splice(index, 1);
+      message.success('删除成功');
     } catch (e) {
       message.error(e.msg || '删除失败');
     }
@@ -315,9 +307,10 @@ const handleOk = async () => {
     if (knowledgeName.value !== currentKbName.value) {
       //修改修改知识库名字
       try {
-        await resultControl(
-          await urlResquest.kbConfig({ kbId: newId.value, kbName: knowledgeName.value })
-        );
+        await api.knowledge.renameKb({
+          kb_id: newId.value,
+          new_kb_name: knowledgeName.value,
+        });
         confirmLoading.value = false;
         reset();
       } catch (e) {
@@ -346,12 +339,10 @@ const addKnowledge = async () => {
   }
   //获取到知识库id后  赋值给newId
   try {
-    const res: any = await resultControl(
-      await urlResquest.createKb({ kbName: knowledgeName.value })
-    );
-    if (res && res.kbId) {
+    const res = await api.knowledge.createKb({ kb_name: knowledgeName.value });
+    if (res && res.id) {
       console.log(res);
-      newId.value = res.kbId;
+      newId.value = res.id;
     }
   } catch (e) {
     message.error(e.msg || common.error);

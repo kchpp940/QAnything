@@ -24,14 +24,13 @@
   </a-config-provider>
 </template>
 <script lang="ts" setup>
-import urlResquest from '@/services/urlConfig';
-import { resultControl } from '@/utils/utils';
 import { message } from 'ant-design-vue';
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
 import { getLanguage } from '@/language/index';
 import { useOptiionList } from '@/store/useOptiionList';
 import { useKnowledgeModal } from '@/store/useKnowledgeModal';
 import { pageStatus } from '@/utils/enum';
+import { api } from '@/services/api';
 
 const { getList, setCurrentId, setCurrentKbName, setDefault } = useKnowledgeBase();
 const { selectList } = storeToRefs(useKnowledgeBase());
@@ -47,7 +46,7 @@ const kb_name = ref('');
 // const emits = defineEmits(['add']);
 
 const createKb = async (isFaq = false) => {
-  return await resultControl(await urlResquest.createKb({ kb_name: kb_name.value, is_faq: isFaq }));
+  return await api.knowledge.createKb({ kb_name: kb_name.value, is_faq: isFaq });
 };
 
 // 0是文档集，1是问答集
@@ -60,12 +59,11 @@ const addKb = async () => {
   }
 
   try {
-    const res: any = await createKb(addType.value !== '0');
-    // const res: any = await resultControl(await urlResquest.createKb({ kb_name: kb_name.value }));
+    const res = await createKb(addType.value !== '0');
     kb_name.value = '';
-    setCurrentId(res?.kb_id);
-    setCurrentKbName(res?.kb_name);
-    selectList.value.push(res?.kb_id);
+    setCurrentId(res?.id);
+    setCurrentKbName(res?.name);
+    selectList.value.push(res?.id);
     await getList();
     addType.value === '0'
       ? setModalVisible(!modalVisible.value)

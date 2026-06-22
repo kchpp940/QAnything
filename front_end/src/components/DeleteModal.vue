@@ -31,10 +31,10 @@
 </template>
 <script lang="ts" setup>
 import { useKnowledgeBase } from '@/store/useKnowledgeBase';
-import urlResquest from '@/services/urlConfig';
 import { message } from 'ant-design-vue';
 import { getLanguage } from '@/language/index';
 import { useQuickStart } from '@/store/useQuickStart';
+import { api } from '@/services/api';
 
 const common = getLanguage().common;
 // import { resultControl } from '@/utils/utils';
@@ -46,27 +46,22 @@ const confirmLoading = ref<boolean>(false);
 const handleOk = async () => {
   confirmLoading.value = true;
   try {
-    const res = await Promise.race([
-      await urlResquest.deleteKB({ kb_ids: [currentId.value] }),
-      await urlResquest.deleteKB({ kb_ids: [currentId.value + '_FAQ'] }),
+    await Promise.all([
+      api.knowledge.deleteKb({ kb_ids: [currentId.value] }),
+      api.knowledge.deleteKb({ kb_ids: [currentId.value + '_FAQ'] }),
     ]);
-    if (res.code === 200) {
-      const index = selectList.value.findIndex(item => {
-        return item === currentId.value;
-      });
-      if (index != -1) {
-        selectList.value.splice(index, 1);
-      }
-      setShowDeleteModal(false);
-      confirmLoading.value = false;
-      message.success('删除成功');
-      clearChatList(deleteChatId.value);
-      deleteChatId.value = null;
-      await getList();
-    } else {
-      confirmLoading.value = false;
-      message.error('删除失败');
+    const index = selectList.value.findIndex(item => {
+      return item === currentId.value;
+    });
+    if (index != -1) {
+      selectList.value.splice(index, 1);
     }
+    setShowDeleteModal(false);
+    confirmLoading.value = false;
+    message.success('删除成功');
+    clearChatList(deleteChatId.value);
+    deleteChatId.value = null;
+    await getList();
   } catch (e) {
     console.log(e);
     confirmLoading.value = false;
