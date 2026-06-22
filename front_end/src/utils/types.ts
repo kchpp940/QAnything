@@ -5,8 +5,26 @@
  * @LastEditTime: 2024-08-05 16:36:28
  * @FilePath: front_end/src/utils/types.ts
  * @Description:
+ *
+ * ==================== ⚠️ 逐步废弃中 / PARTIALLY DEPRECATED ====================
+ *
+ * 本文件中与接口响应相关的类型已迁移到 `@/services/api/types/`，
+ * 新代码请直接从 `@/services/api` 导入对应的规范化业务对象类型。
+ *
+ * 已迁移对照：
+ *   IDataSourceItem  →  @/services/api/types/chat       IDataSource
+ *   IChatItem        →  @/services/api/types/chat       IChatItem
+ *   ITimeInfo        →  @/services/api/types/chat       ITimeInfo
+ *   ITokenInfo       →  @/services/api/types/chat       ITokenInfo
+ *   IChatSetting     →  @/services/api/types/chat       IChatSetting
+ *   IFileListItem    →  @/services/api/types/knowledge  IKbFile
+ *   IUrlListItem     →  @/services/api/types/upload     IUploadTask
+ *
+ * store 和组件必须消费 adapter 后的规范化业务对象，禁止直接依赖原始响应结构。
+ * =============================================================================
  */
 
+/** @deprecated 请改用 `@/services/api/types/chat` 中的 `IDataSource` */
 export interface IDataSourceItem {
   dataSource?: string; //数据来源
   detailDataSource?: string; //详细来源信息
@@ -18,6 +36,7 @@ export interface IDataSourceItem {
   showDetailDataSource?: boolean; //是否展示详细来源信息
 }
 
+/** @deprecated 请改用 `@/services/api/types/chat` 中的 `IChatItem` */
 export interface IChatItem {
   type: 'ai' | 'user'; //区别用户提问 和ai回复
   question?: string; //问题
@@ -44,6 +63,7 @@ export interface IHistoryList {
 }
 
 // 对话的耗时信息
+/** @deprecated 请改用 `@/services/api/types/chat` 中的 `ITimeInfo` */
 export interface ITimeInfo {
   preprocess: number;
   condense_q_chain: number;
@@ -58,6 +78,7 @@ export interface ITimeInfo {
 }
 
 // 对话的耗token信息
+/** @deprecated 请改用 `@/services/api/types/chat` 中的 `ITokenInfo` */
 export interface ITokenInfo {
   total_tokens: number; // 外层显示
   prompt_tokens: number; // 外层显示
@@ -77,6 +98,7 @@ export interface IChatItemInfo {
 export type inputStatus = 'default' | 'inputing' | 'parsing' | 'success' | 'defeat' | 'hover';
 
 //url类型约束
+/** @deprecated 请改用 `@/services/api/types/upload` 中的 `IUploadTask` */
 export interface IUrlListItem {
   status: inputStatus;
   text: string;
@@ -85,6 +107,7 @@ export interface IUrlListItem {
 }
 
 //上传文件
+/** @deprecated 请改用 `@/services/api/types/knowledge` 中的 `IKbFile` */
 export interface IFileListItem {
   file?: File; // 这个只有在上传时候加，接收没有这个
   file_name: string;
@@ -109,6 +132,7 @@ type ICapabilities = {
   rerank: boolean;
 };
 
+/** @deprecated 请改用 `@/services/api/types/chat` 中的 `IChatSetting` */
 export interface IChatSetting {
   /* 模型类型，string为自定义名称，不用传 */
   modelType: 'openAI' | 'ollama' | '自定义模型配置' | string;

@@ -9,10 +9,12 @@
     "build": "vite build",
     "serve": "vite preview --port 5052",
     "lint-staged": "lint-staged",
+    "check-api-boundary": "node scripts/check-api-boundary.mjs",
+    "type-check": "tsc --noEmit --skipLibCheck",
     "cdn-test": "bash ./cicdn.sh test",
     "cdn-prod": "bash ./cicdn.sh prod",
     "auto": "node ./autoHandle/create.js",
-    "prebuild": "node writeVersion.js",
+    "prebuild": "node writeVersion.js && node scripts/check-api-boundary.mjs",
     "predev": "node writeVersion.js"
   },
   "dependencies": {
@@ -48,8 +50,9 @@
     }
   },
   "lint-staged": {
-    "src/**/*.{js,vue}": [
+    "src/**/*.{ts,tsx,js,vue}": [
       "eslint",
+      "node scripts/check-api-boundary.mjs",
       "git add"
     ]
   },

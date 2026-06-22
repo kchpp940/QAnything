@@ -5,6 +5,28 @@
  * @LastEditTime: 2024-07-31 20:21:13
  * @FilePath: front_end/src/services/urlConfig.ts
  * @Description:
+ *
+ * ==================== ⚠️ 已废弃 / DEPRECATED ====================
+ *
+ * 此文件为旧接口入口，仅作为兼容层保留，禁止在新代码中直接使用。
+ *
+ * 用户上下文（userId / userPhone / getUserContext / injectUserContext）
+ *   → 请改用：`@/utils/session`
+ *
+ * API 请求（知识库、聊天、Bot、统计、上传等所有 urlResquest.xxx 调用）
+ *   → 请改用：`@/services/api` 中对应的业务域 client：
+ *     - 知识库：`api.knowledge.getKbList / createKb / renameKb / deleteKb / ...`
+ *     - 聊天：  `api.chat.sendQuestion / getTags / updateTags`
+ *     - Bot：   `api.bot.createBot / updateBot / getBot / getBotList / deleteBot`
+ *     - 统计：  `api.statistics.getQAList / exportQA / getQAOverviewByDay / getKbStatusByDate`
+ *     - 上传：  `api.upload.uploadFile / uploadUrl / uploadFaqs`
+ *
+ * 响应类型和字段适配已收口在 `@/services/api/types` 与 `@/services/api/adapters`。
+ * store 和组件必须消费 adapter 后的规范化业务对象，禁止直接依赖原始响应结构。
+ *
+ * ESLint `no-restricted-imports` 已将此文件列为 error。
+ * 预提交扫描脚本 `scripts/check-api-boundary.mjs` 也会拦截新的引用。
+ * ================================================================
  */
 import { useUser } from '@/store/useUser';
 
