@@ -19,8 +19,7 @@ from qanything_kernel.core.retriever.parent_retriever import ParentRetriever
 from qanything_kernel.utils.general_utils import (get_time, clear_string, get_time_async, num_tokens,
                                                   cosine_similarity, clear_string_is_equal, num_tokens_embed,
                                                   num_tokens_rerank, deduplicate_documents, replace_image_references)
-from qanything_kernel.utils.custom_log import debug_logger, qa_logger, rerank_logger, embed_logger, s_debug_logger, s_rerank_logger, s_embed_logger, s_qa_logger
-from qanything_kernel.utils.request_context import set_context, update_extra, Stage
+from qanything_kernel.utils.custom_log import debug_logger, qa_logger, rerank_logger
 from qanything_kernel.core.chains.condense_q_chain import RewriteQuestionChain
 from qanything_kernel.core.tools.web_search_tool import duckduckgo_search
 import copy
@@ -77,97 +76,67 @@ class LocalDocQA:
 
     @get_time
     def get_web_search(self, queries, top_k):
-        s_debug_logger.stage_start(Stage.RETRIEVAL, "Start web search", sub_stage="web_search", queries=queries, top_k=top_k)
-        method_start = time.perf_counter()
-        try:
-            query = queries[0]
-            web_content, web_documents = duckduckgo_search(query, top_k)
-            source_documents = []
-            for idx, doc in enumerate(web_documents):
-                if 'title' not in doc.metadata:
-                    continue
-                doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
-                s_debug_logger.info("web search doc", metadata=doc.metadata)
-                file_name = re.sub(r'[\uFF01-\uFF5E\u3000-\u303F]', '', doc.metadata['title'])
-                doc.metadata['file_name'] = file_name + '.web'
-                doc.metadata['file_url'] = doc.metadata['source']
-                doc.metadata['embed_version'] = self.embeddings.embed_version
-                doc.metadata['score'] = 1 - (idx / len(web_documents))
-                doc.metadata['file_id'] = 'websearch' + str(idx)
-                doc.metadata['headers'] = {"新闻标题": file_name}
-                if 'description' in doc.metadata:
-                    desc_doc = Document(page_content=doc.metadata['description'], metadata=doc.metadata)
-                    source_documents.append(desc_doc)
-                source_documents.append(doc)  # 先插入description，再插入原文
-            duration_ms = (time.perf_counter() - method_start) * 1000
-            s_debug_logger.stage_success(Stage.RETRIEVAL, "Web search succeeded",
-                                          sub_stage="web_search",
-                                          duration_ms=duration_ms,
-                                          result_count=len(source_documents))
-            return web_content, source_documents
-        except Exception as e:
-            duration_ms = (time.perf_counter() - method_start) * 1000
-            s_debug_logger.stage_fail(Stage.RETRIEVAL, "Web search failed",
-                                       sub_stage="web_search",
-                                       error=e,
-                                       duration_ms=duration_ms)
-            raise
+        query = queries[0]
+        web_content, web_documents = duckduckgo_search(query, top_k)
+        source_documents = []
+        for idx, doc in enumerate(web_documents):
+            if 'title' not in doc.metadata:
+                continue
+            doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
+            debug_logger.info(f"web search doc: {doc.metadata}")
+            file_name = re.sub(r'[\uFF01-\uFF5E\u3000-\u303F]', '', doc.metadata['title'])
+            doc.metadata['file_name'] = file_name + '.web'
+            doc.metadata['file_url'] = doc.metadata['source']
+            doc.metadata['embed_version'] = self.embeddings.embed_version
+            doc.metadata['score'] = 1 - (idx / len(web_documents))
+            doc.metadata['file_id'] = 'websearch' + str(idx)
+            doc.metadata['headers'] = {"新闻标题": file_name}
+            if 'description' in doc.metadata:
+                desc_doc = Document(page_content=doc.metadata['description'], metadata=doc.metadata)
+                source_documents.append(desc_doc)
+            source_documents.append(doc)  # 先插入description，再插入原文
+        return web_content, source_documents
 
     def web_page_search(self, query, top_k=None):
         # 防止get_web_search调用失败，需要try catch
         try:
             web_content, source_documents = self.get_web_search([query], top_k)
         except Exception as e:
-            s_debug_logger.error("web search error", stacktrace=traceback.format_exc(), error=e)
-            s_debug_logger.exception("web_page_search exception", error=e, query=query, top_k=top_k)
+            debug_logger.error(f"web search error: {traceback.format_exc()}")
             return []
 
         return source_documents
 
     @get_time_async
     async def get_source_documents(self, query, retriever: ParentRetriever, kb_ids, time_record, hybrid_search, top_k):
-        s_debug_logger.stage_start(Stage.RETRIEVAL, "Start retrieval", query=query, kb_ids=kb_ids, top_k=top_k, hybrid_search=hybrid_search)
-        method_start = time.perf_counter()
-        try:
-            source_documents = []
-            start_time = time.perf_counter()
+        source_documents = []
+        start_time = time.perf_counter()
+        query_docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
+                                                             hybrid_search=hybrid_search, top_k=top_k)
+        if len(query_docs) == 0:
+            debug_logger.warning("MILVUS SEARCH ERROR, RESTARTING MILVUS CLIENT!")
+            retriever.vectorstore_client = VectorStoreMilvusClient()
+            debug_logger.warning("MILVUS CLIENT RESTARTED!")
             query_docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
-                                                                 hybrid_search=hybrid_search, top_k=top_k)
-            if len(query_docs) == 0:
-                s_debug_logger.warning("MILVUS SEARCH ERROR, RESTARTING MILVUS CLIENT!")
-                retriever.vectorstore_client = VectorStoreMilvusClient()
-                s_debug_logger.warning("MILVUS CLIENT RESTARTED!")
-                query_docs = await retriever.get_retrieved_documents(query, partition_keys=kb_ids, time_record=time_record,
-                                                                        hybrid_search=hybrid_search, top_k=top_k)
-            end_time = time.perf_counter()
-            time_record['retriever_search'] = round(end_time - start_time, 2)
-            s_debug_logger.info("retriever_search time", time_s=time_record['retriever_search'])
-            # debug_logger.info(f"query_docs num: {len(query_docs)}, query_docs: {query_docs}")
-            for idx, doc in enumerate(query_docs):
-                if retriever.mysql_client.is_deleted_file(doc.metadata['file_id']):
-                    s_debug_logger.warning("file is deleted", file_id=doc.metadata['file_id'])
-                    continue
-                doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
-                doc.metadata['embed_version'] = self.embeddings.embed_version
-                if 'score' not in doc.metadata:
-                    doc.metadata['score'] = 1 - (idx / len(query_docs))  # TODO 这个score怎么获取呢
-                source_documents.append(doc)
-            s_debug_logger.info("embed scores", scores=[doc.metadata['score'] for doc in source_documents])
-            # if cosine_thresh:
-            #     source_documents = [item for item in source_documents if float(item.metadata['score']) > cosine_thresh]
+                                                                    hybrid_search=hybrid_search, top_k=top_k)
+        end_time = time.perf_counter()
+        time_record['retriever_search'] = round(end_time - start_time, 2)
+        debug_logger.info(f"retriever_search time: {time_record['retriever_search']}s")
+        # debug_logger.info(f"query_docs num: {len(query_docs)}, query_docs: {query_docs}")
+        for idx, doc in enumerate(query_docs):
+            if retriever.mysql_client.is_deleted_file(doc.metadata['file_id']):
+                debug_logger.warning(f"file_id: {doc.metadata['file_id']} is deleted")
+                continue
+            doc.metadata['retrieval_query'] = query  # 添加查询到文档的元数据中
+            doc.metadata['embed_version'] = self.embeddings.embed_version
+            if 'score' not in doc.metadata:
+                doc.metadata['score'] = 1 - (idx / len(query_docs))  # TODO 这个score怎么获取呢
+            source_documents.append(doc)
+        debug_logger.info(f"embed scores: {[doc.metadata['score'] for doc in source_documents]}")
+        # if cosine_thresh:
+        #     source_documents = [item for item in source_documents if float(item.metadata['score']) > cosine_thresh]
 
-            duration_ms = (time.perf_counter() - method_start) * 1000
-            s_debug_logger.stage_success(Stage.RETRIEVAL, "Retrieval succeeded",
-                                          duration_ms=duration_ms,
-                                          retriever_search_time_s=time_record['retriever_search'],
-                                          result_count=len(source_documents))
-            return source_documents
-        except Exception as e:
-            duration_ms = (time.perf_counter() - method_start) * 1000
-            s_debug_logger.stage_fail(Stage.RETRIEVAL, "Retrieval failed",
-                                       error=e,
-                                       duration_ms=duration_ms)
-            raise
+        return source_documents
 
     def reprocess_source_documents(self, custom_llm: OpenAILLM, query: str,
                                    source_docs: List[Document],
@@ -182,15 +151,16 @@ class LocalDocQA:
             [f"<reference>[{idx + 1}]</reference>" for idx in range(len(source_docs))]))
         limited_token_nums = custom_llm.token_window - custom_llm.max_token - custom_llm.offcut_token - query_token_num - history_token_num - template_token_num - reference_field_token_num
 
-        s_debug_logger.info("token configuration",
-                            token_window=custom_llm.token_window,
-                            max_token=custom_llm.max_token,
-                            offcut_token=custom_llm.offcut_token,
-                            limited_token_nums=limited_token_nums,
-                            template_token_nums=template_token_num,
-                            reference_field_token_nums=reference_field_token_num,
-                            query_token_nums=query_token_num,
-                            history_token_nums=history_token_num)
+        debug_logger.info(f"=============================================")
+        debug_logger.info(f"token_window = {custom_llm.token_window}")
+        debug_logger.info(f"max_token = {custom_llm.max_token}")
+        debug_logger.info(f"offcut_token = {custom_llm.offcut_token}")
+        debug_logger.info(f"limited token nums: {limited_token_nums}")
+        debug_logger.info(f"template token nums: {template_token_num}")
+        debug_logger.info(f"reference_field token nums: {reference_field_token_num}")
+        debug_logger.info(f"query token nums: {query_token_num}")
+        debug_logger.info(f"history token nums: {history_token_num}")
+        debug_logger.info(f"=============================================")
 
         tokens_msg = """
         token_window = {custom_llm.token_window}, max_token = {custom_llm.max_token},       
@@ -227,7 +197,7 @@ class LocalDocQA:
             else:
                 break
 
-        s_debug_logger.info("new_source_docs token nums", token_nums=custom_llm.num_tokens_from_docs(new_source_docs))
+        debug_logger.info(f"new_source_docs token nums: {custom_llm.num_tokens_from_docs(new_source_docs)}")
         return new_source_docs, limited_token_nums, tokens_msg
 
     def generate_prompt(self, query, source_docs, prompt_template):
@@ -283,13 +253,13 @@ class LocalDocQA:
 
         if len(docs) > 1 and num_tokens_rerank(query) <= 300:
             try:
-                s_rerank_logger.info("use rerank", docs_num=len(docs))
+                debug_logger.info(f"use rerank, rerank docs num: {len(docs)}")
                 docs = await self.rerank.arerank_documents(query, docs)
                 if len(docs) > 1:
                     docs = [doc for doc in docs if doc.metadata['score'] >= 0.28]
                 return docs
             except Exception as e:
-                s_rerank_logger.error("rerank error", query_tokens=num_tokens_rerank(query), error=e)
+                debug_logger.error(f"query tokens: {num_tokens_rerank(query)}, rerank error: {e}")
                 embed1 = await self.embeddings.aembed_query(query)
                 for doc in docs:
                     embed2 = await self.embeddings.aembed_query(doc.page_content)
@@ -305,7 +275,7 @@ class LocalDocQA:
     async def prepare_source_documents(self, custom_llm: OpenAILLM, retrieval_documents: List[Document],
                                        limited_token_nums: int, rerank: bool):
         return retrieval_documents, retrieval_documents
-        s_debug_logger.info("retrieval_documents len", docs_len=len(retrieval_documents))
+        debug_logger.info(f"retrieval_documents len: {len(retrieval_documents)}")
         try:
             new_docs = self.aggregate_documents(retrieval_documents, limited_token_nums, custom_llm, rerank)
             if new_docs:
@@ -324,10 +294,10 @@ class LocalDocQA:
 
             # source_documents = self.incomplete_table(source_documents, limited_token_nums, custom_llm)
         except Exception as e:
-            s_debug_logger.error("aggregate_documents error", error=e, stacktrace=traceback.format_exc())
+            debug_logger.error(f"aggregate_documents error w/ {e}: {traceback.format_exc()}")
             source_documents = retrieval_documents
 
-        s_debug_logger.info("source_documents len", docs_len=len(source_documents))
+        debug_logger.info(f"source_documents len: {len(source_documents)}")
         return source_documents, retrieval_documents
 
     async def calculate_relevance_optimized(
@@ -462,7 +432,7 @@ class LocalDocQA:
                     HumanMessage(content=msg[0]),
                     AIMessage(content=msg[1]),
                 ]
-            s_debug_logger.info("formatted_chat_history", formatted_chat_history=formatted_chat_history)
+            debug_logger.info(f"formatted_chat_history: {formatted_chat_history}")
 
             rewrite_q_chain = RewriteQuestionChain(model_name=model, openai_api_base=api_base, openai_api_key=api_key)
             full_prompt = rewrite_q_chain.condense_q_prompt.format(
@@ -475,9 +445,8 @@ class LocalDocQA:
                     chat_history=formatted_chat_history,
                     question=query
                 )
-            s_debug_logger.info(
-                "Subtract formatted_chat_history", original_len=len(chat_history) * 2,
-                final_len=len(formatted_chat_history))
+            debug_logger.info(
+                f"Subtract formatted_chat_history: {len(chat_history) * 2} -> {len(formatted_chat_history)}")
             try:
                 t1 = time.perf_counter()
                 condense_question = await rewrite_q_chain.condense_q_chain.ainvoke(
@@ -490,9 +459,9 @@ class LocalDocQA:
                 # 时间保留两位小数
                 time_record['condense_q_chain'] = round(t2 - t1, 2)
                 time_record['rewrite_completion_tokens'] = custom_llm.num_tokens_from_messages([condense_question])
-                s_debug_logger.info("condense_q_chain time", time_s=time_record['condense_q_chain'])
+                debug_logger.info(f"condense_q_chain time: {time_record['condense_q_chain']}s")
             except Exception as e:
-                s_debug_logger.error("condense_q_chain error", error=e)
+                debug_logger.error(f"condense_q_chain error: {e}")
                 condense_question = query
             # 生成prompt
             # full_prompt = condense_q_prompt.format_messages(
@@ -500,7 +469,7 @@ class LocalDocQA:
             #     question=query
             # )
             # qa_logger.info(f"condense_q_chain full_prompt: {full_prompt}, condense_question: {condense_question}")
-            s_debug_logger.info("condense_question", condense_question=condense_question)
+            debug_logger.info(f"condense_question: {condense_question}")
             time_record['rewrite_prompt_tokens'] = custom_llm.num_tokens_from_messages([full_prompt, condense_question])
             # 判断两个字符串是否相似：只保留中文，英文和数字
             if clear_string(condense_question) != clear_string(query):
@@ -554,30 +523,30 @@ class LocalDocQA:
         if rerank and len(source_documents) > 1 and num_tokens_rerank(query) <= 300:
             try:
                 t1 = time.perf_counter()
-                s_rerank_logger.info("use rerank", docs_num=len(source_documents))
+                debug_logger.info(f"use rerank, rerank docs num: {len(source_documents)}")
                 source_documents = await self.rerank.arerank_documents(condense_question, source_documents)
                 t2 = time.perf_counter()
                 time_record['rerank'] = round(t2 - t1, 2)
                 # 过滤掉低分的文档
-                s_rerank_logger.info("rerank step1", docs_num=len(source_documents),
-                                     scores=[doc.metadata['score'] for doc in source_documents])
+                debug_logger.info(f"rerank step1 num: {len(source_documents)}")
+                debug_logger.info(f"rerank step1 scores: {[doc.metadata['score'] for doc in source_documents]}")
                 if len(source_documents) > 1:
                     if filtered_documents := [doc for doc in source_documents if doc.metadata['score'] >= 0.28]:
                         source_documents = filtered_documents
-                    s_rerank_logger.info("rerank step2", docs_num=len(source_documents))
+                    debug_logger.info(f"rerank step2 num: {len(source_documents)}")
                     saved_docs = [source_documents[0]]
                     for doc in source_documents[1:]:
-                        s_rerank_logger.info("rerank doc score", score=doc.metadata['score'])
+                        debug_logger.info(f"rerank doc score: {doc.metadata['score']}")
                         relative_difference = (saved_docs[0].metadata['score'] - doc.metadata['score']) / saved_docs[0].metadata['score']
                         if relative_difference > 0.5:
                             break
                         else:
                             saved_docs.append(doc)
                     source_documents = saved_docs
-                    s_rerank_logger.info("rerank step3", docs_num=len(source_documents))
+                    debug_logger.info(f"rerank step3 num: {len(source_documents)}")
             except Exception as e:
                 time_record['rerank'] = 0.0
-                s_rerank_logger.error("rerank error", query=query, kb_ids=kb_ids, error=e, stacktrace=traceback.format_exc())
+                debug_logger.error(f"query {query}: kb_ids: {kb_ids}, rerank error: {traceback.format_exc()}")
 
         # es检索+milvus检索结果最多可能是2k
         source_documents = source_documents[:top_k]
@@ -594,7 +563,7 @@ class LocalDocQA:
         for doc in source_documents:
             if doc.metadata['file_name'].endswith('.faq') and clear_string_is_equal(
                     doc.metadata['faq_dict']['question'], query):
-                s_debug_logger.info("match faq question", query=query)
+                debug_logger.info(f"match faq question: {query}")
                 if only_need_search_results:
                     yield source_documents, None
                     return
@@ -634,7 +603,7 @@ class LocalDocQA:
             if len(retrieval_documents) < len(source_documents):
                 # 重新处理后文档数量减少，说明由于tokens不足而被裁切
                 if len(retrieval_documents) == 0:  # 说明被裁切后文档数量为0
-                    s_debug_logger.error("limited_token_nums too small", limited_token_nums=limited_token_nums, web_chunk_size=web_chunk_size)
+                    debug_logger.error(f"limited_token_nums: {limited_token_nums} < {web_chunk_size}!")
                     res = (
                         f"抱歉，由于留给相关文档使用的token数量不足(docs_available_token_nums: {limited_token_nums} < 文本分片大小: {web_chunk_size})，"
                         f"\n无法保证回答质量，请在模型配置中提高【总Token数量】或减少【输出Tokens数量】或减少【上下文消息数量】再继续提问。"
@@ -660,7 +629,7 @@ class LocalDocQA:
                 if doc.metadata.get('images', []):
                     total_images_number += len(doc.metadata['images'])
                     doc.page_content = replace_image_references(doc.page_content, doc.metadata['file_id'])
-            s_debug_logger.info("total_images_number", total_images_number=total_images_number)
+            debug_logger.info(f"total_images_number: {total_images_number}")
 
             t2 = time.perf_counter()
             time_record['reprocess'] = round(t2 - t1, 2)
@@ -748,12 +717,12 @@ class LocalDocQA:
                         print()
                         for image in doc['document'].metadata.get('images', []):
                             image_str = replace_image_references(image, doc['document'].metadata['file_id'])
-                            s_debug_logger.info("image_str replacement", original=image, replaced=image_str)
+                            debug_logger.info(f"image_str: {image} -> {image_str}")
                             show_images.append(image_str + '\n')
-                    s_debug_logger.info("show_images", show_images=show_images)
+                    debug_logger.info(f"show_images: {show_images}")
                     time_record['obtain_images'] = round(time.perf_counter() - last_return_time, 2)
                     time2 = time.perf_counter()
-                    s_debug_logger.info("obtain_images time", time_s=time2 - time1)
+                    debug_logger.info(f"obtain_images time: {time2 - time1}s")
                     time_record["obtain_images_time"] = round(time2 - time1, 2)
                     if len(show_images) > 1:
                         response['show_images'] = show_images
@@ -850,7 +819,7 @@ class LocalDocQA:
         first_doc_tokens = custom_llm.num_tokens_from_docs([first_completed_doc])
         if first_doc_tokens + ori_second_docs_tokens > limited_token_nums:
             if len(ori_first_docs) == 1:
-                s_debug_logger.info("first_file_docs number is one")
+                debug_logger.info(f"first_file_docs number is one")
                 return new_docs
             # 获取first_file_dict['doc_ids']的最小值和最大值
             doc_limit = [min(first_file_dict['doc_ids']), max(first_file_dict['doc_ids'])]
@@ -859,24 +828,16 @@ class LocalDocQA:
             first_completed_doc_limit.metadata['score'] = first_file_dict['score']
             first_doc_tokens = custom_llm.num_tokens_from_docs([first_completed_doc_limit])
             if first_doc_tokens + ori_second_docs_tokens > limited_token_nums:
-                s_debug_logger.info("token check first_limit exceed",
-                                    doc_limit=doc_limit,
-                                    first_limit_doc_tokens=first_doc_tokens,
-                                    ori_second_docs_tokens=ori_second_docs_tokens,
-                                    limited_token_nums=limited_token_nums)
+                debug_logger.info(
+                    f"first_limit_doc_tokens {doc_limit}: {first_doc_tokens} + ori_second_docs_tokens: {ori_second_docs_tokens} > limited_token_nums: {limited_token_nums}")
                 return new_docs
             else:
-                s_debug_logger.info("token check first_limit fit",
-                                    doc_limit=doc_limit,
-                                    first_limit_doc_tokens=first_doc_tokens,
-                                    ori_second_docs_tokens=ori_second_docs_tokens,
-                                    limited_token_nums=limited_token_nums)
+                debug_logger.info(
+                    f"first_limit_doc_tokens {doc_limit}: {first_doc_tokens} + ori_second_docs_tokens: {ori_second_docs_tokens} <= limited_token_nums: {limited_token_nums}")
                 new_docs.append(first_completed_doc_limit_with_figure)
         else:
-            s_debug_logger.info("token check first doc fit",
-                                first_doc_tokens=first_doc_tokens,
-                                ori_second_docs_tokens=ori_second_docs_tokens,
-                                limited_token_nums=limited_token_nums)
+            debug_logger.info(
+                f"first_doc_tokens: {first_doc_tokens} + ori_second_docs_tokens: {ori_second_docs_tokens} <= limited_token_nums: {limited_token_nums}")
             new_docs.append(first_completed_doc_with_figure)
         if second_file_dict:
             second_completed_doc, second_completed_doc_with_figure = self.get_completed_document(second_file_dict['file_id'])
@@ -884,7 +845,7 @@ class LocalDocQA:
             second_doc_tokens = custom_llm.num_tokens_from_docs([second_completed_doc])
             if first_doc_tokens + second_doc_tokens > limited_token_nums:
                 if len(ori_second_docs) == 1:
-                    s_debug_logger.info("second_file_docs number is one")
+                    debug_logger.info(f"second_file_docs number is one")
                     new_docs.extend(ori_second_docs)
                     return new_docs
                 doc_limit = [min(second_file_dict['doc_ids']), max(second_file_dict['doc_ids'])]
@@ -893,25 +854,17 @@ class LocalDocQA:
                 second_completed_doc_limit.metadata['score'] = second_file_dict['score']
                 second_doc_tokens = custom_llm.num_tokens_from_docs([second_completed_doc_limit])
                 if first_doc_tokens + second_doc_tokens > limited_token_nums:
-                    s_debug_logger.info("token check second_limit exceed",
-                                        first_doc_tokens=first_doc_tokens,
-                                        doc_limit=doc_limit,
-                                        second_limit_doc_tokens=second_doc_tokens,
-                                        limited_token_nums=limited_token_nums)
+                    debug_logger.info(
+                        f"first_doc_tokens: {first_doc_tokens} + second_limit_doc_tokens {doc_limit}: {second_doc_tokens} > limited_token_nums: {limited_token_nums}")
                     new_docs.extend(ori_second_docs)
                     return new_docs
                 else:
-                    s_debug_logger.info("token check second_limit fit",
-                                        first_doc_tokens=first_doc_tokens,
-                                        doc_limit=doc_limit,
-                                        second_limit_doc_tokens=second_doc_tokens,
-                                        limited_token_nums=limited_token_nums)
+                    debug_logger.info(
+                        f"first_doc_tokens: {first_doc_tokens} + second_limit_doc_tokens {doc_limit}: {second_doc_tokens} <= limited_token_nums: {limited_token_nums}")
                     new_docs.append(second_completed_doc_limit_with_figure)
             else:
-                s_debug_logger.info("token check second doc fit",
-                                    first_doc_tokens=first_doc_tokens,
-                                    second_doc_tokens=second_doc_tokens,
-                                    limited_token_nums=limited_token_nums)
+                debug_logger.info(
+                    f"first_doc_tokens: {first_doc_tokens} + second_doc_tokens: {second_doc_tokens} <= limited_token_nums: {limited_token_nums}")
                 new_docs.append(second_completed_doc_with_figure)
         return new_docs
 
@@ -946,14 +899,13 @@ class LocalDocQA:
                                       doc.metadata.get('table_doc_id', None) == table_doc_id]
                 subtract_table_doc_tokens = custom_llm.num_tokens_from_docs(current_table_docs)
                 if current_doc_tokens + table_doc_tokens - subtract_table_doc_tokens > limited_token_nums:
-                    s_debug_logger.info("Add table_doc_tokens exceed limit",
-                                        table_doc_tokens=table_doc_tokens,
-                                        limited_token_nums=limited_token_nums)
+                    debug_logger.info(
+                        f"Add table_doc_tokens: {table_doc_tokens} > limited_token_nums: {limited_token_nums}")
                     new_docs.append(doc)
                     verified_table_ids.append(table_doc_id)
                     continue
                 else:
-                    s_debug_logger.info("Incomplete table_doc", table_doc_id=table_doc_id)
+                    debug_logger.info(f"Incomplete table_doc: {table_doc_id}")
                     new_docs.append(table_doc)
                     existing_table_ids.append(table_doc_id)
                     current_doc_tokens = current_doc_tokens + table_doc_tokens - subtract_table_doc_tokens

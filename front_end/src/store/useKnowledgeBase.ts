@@ -7,20 +7,33 @@
  * @Description:
  */
 
-import { IKnowledgeItem } from '@/utils/types';
 import { pageStatus } from '@/utils/enum';
-// import { resultControl } from '@/utils/utils';
 import message from 'ant-design-vue/es/message';
-
-import urlResquest from '@/services/urlConfig';
 import { getLanguage } from '@/language/index';
+import { api, IKnowledgeBase } from '@/services/api';
 
 const common = getLanguage().common;
+
+export interface IKnowledgeItem {
+  kb_id: string;
+  kb_name: string;
+  isFaq?: boolean;
+  createTime?: unknown;
+  edit?: boolean;
+}
+
+function toLegacyItem(kb: IKnowledgeBase): IKnowledgeItem {
+  return {
+    kb_id: kb.id,
+    kb_name: kb.name,
+    isFaq: kb.isFaq,
+    createTime: kb.createTime,
+  };
+}
 
 export const useKnowledgeBase = defineStore(
   'knowledgeBase',
   () => {
-    // 当前操作的知识库id
     const currentId = ref('');
     const setCurrentId = (id: string) => {
       currentId.value = id;
@@ -33,63 +46,49 @@ export const useKnowledgeBase = defineStore(
       }
     );
 
-    //选中的知识库id
     const selectList = ref<string[]>([]);
     const setSelectList = list => {
       selectList.value = list;
     };
 
-    // 当前操作的知识库名字
     const currentKbName = ref('');
     const setCurrentKbName = (id: string) => {
       currentKbName.value = id;
     };
 
-    //获取到的知识库列表
     const knowledgeBaseList = ref<Array<IKnowledgeItem>>([]);
     const setKnowledgeBaseList = list => {
       knowledgeBaseList.value = list;
     };
 
-    //需要判断是否有知识库 如果没有知识库 展示default内容
     const showDefault = ref(pageStatus.initing);
     const setDefault = str => {
       showDefault.value = str;
     };
 
-    //是否展示删除弹窗
     const showDeleteModal = ref(false);
     const setShowDeleteModal = (flag: boolean) => {
       showDeleteModal.value = flag;
     };
 
-    //获取知识库列表
     const getList = async () => {
       try {
-        const res: any = await urlResquest.kbList();
-        if (+res.code === 200) {
-          if (res?.data?.length > 0) {
-            // const list = res.data.filter(item => !/.*_FAQ$/.test(item.kb_name));
-            const list = res.data;
-            setKnowledgeBaseList(list);
-            setDefault(pageStatus.normal);
+        const list = await api.knowledge.getKbList();
+        if (list.length > 0) {
+          setKnowledgeBaseList(list.map(toLegacyItem));
+          setDefault(pageStatus.normal);
 
-            if (!selectList.value.length) {
-              selectList.value.push(list[0]?.kb_id);
-            }
-          } else {
-            setKnowledgeBaseList([]);
-            setDefault(pageStatus.default);
+          if (!selectList.value.length) {
+            selectList.value.push(list[0]?.id);
           }
-        } else if (+res.code === 500) {
+        } else {
           setKnowledgeBaseList([]);
           setDefault(pageStatus.default);
-          message.error(res.msg || common.error);
         }
       } catch (e) {
         setKnowledgeBaseList([]);
         setDefault(pageStatus.default);
-        message.error(e.msg || common.error);
+        message.error((e as { msg?: string }).msg || common.error);
       }
     };
 

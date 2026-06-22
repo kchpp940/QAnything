@@ -1,4 +1,10 @@
 import { useRouter } from 'vue-router';
+import { message } from 'ant-design-vue';
+import {
+  api,
+  IBot,
+  IKnowledgeBase,
+} from '@/services/api';
 
 export const useBots = defineStore('useBots', () => {
   const route = useRouter();
@@ -7,17 +13,14 @@ export const useBots = defineStore('useBots', () => {
     console.log('zj-route-name', name);
     return name === 'edit' ? 0 : 1;
   };
-  //是否展示创建Bot Modal
   const newBotsVisible = ref(false);
   const setNewBotsVisible = value => {
     newBotsVisible.value = value;
   };
-  //是否展示学则知识库Modal
   const selectKnowledgeVisible = ref(false);
   const setSelectKnowledgeVisible = value => {
     selectKnowledgeVisible.value = value;
   };
-  //是否展示复制链接Modal
   const copyUrlVisible = ref(false);
   const setCopyUrlVisible = value => {
     copyUrlVisible.value = value;
@@ -33,30 +36,64 @@ export const useBots = defineStore('useBots', () => {
     QA_List.value = value;
   };
 
-  const botList = ref([]);
-  const setBotList = value => {
+  const botList = ref<IBot[]>([]);
+  const setBotList = (value: IBot[]) => {
     botList.value = value;
   };
 
-  const defaultBotList = ref([]);
-  const setDefaultBotList = value => {
+  const defaultBotList = ref<IBot[]>([]);
+  const setDefaultBotList = (value: IBot[]) => {
     defaultBotList.value = value;
   };
 
-  // 当前正在编辑的bot
-  const curBot = ref(null);
-  const setCurBot = value => {
+  const curBot = ref<IBot | null>(null);
+  const setCurBot = (value: IBot | null) => {
     curBot.value = value;
   };
 
-  const knowledgeList = ref([]);
-  const setKnowledgeList = value => {
+  const knowledgeList = ref<IKnowledgeBase[]>([]);
+  const setKnowledgeList = (value: IKnowledgeBase[]) => {
     knowledgeList.value = value;
   };
 
   const webUrl = ref('');
   const setWebUrl = value => {
     webUrl.value = value;
+  };
+
+  const fetchBotList = async (botId?: string): Promise<IBot[]> => {
+    try {
+      const params = botId ? { bot_id: botId } : {};
+      const result = await api.bot.getBotList(params);
+      setBotList(result.bots);
+      setDefaultBotList(result.defaultBots);
+      return result.bots;
+    } catch (e) {
+      message.error((e as { msg?: string }).msg || '获取Bot列表失败');
+      return [];
+    }
+  };
+
+  const fetchSingleBot = async (botId: string): Promise<IBot | null> => {
+    try {
+      const bot = await api.bot.getBot({ bot_id: botId });
+      if (bot) setCurBot(bot);
+      return bot;
+    } catch (e) {
+      message.error((e as { msg?: string }).msg || '获取Bot信息失败');
+      return null;
+    }
+  };
+
+  const fetchKnowledgeList = async (): Promise<IKnowledgeBase[]> => {
+    try {
+      const list = await api.knowledge.getKbList();
+      setKnowledgeList(list);
+      return list;
+    } catch (e) {
+      message.error((e as { msg?: string }).msg || '获取知识库列表失败');
+      return [];
+    }
   };
 
   return {
@@ -80,5 +117,8 @@ export const useBots = defineStore('useBots', () => {
     setCurBot,
     QA_List,
     setQaList,
+    fetchBotList,
+    fetchSingleBot,
+    fetchKnowledgeList,
   };
 });

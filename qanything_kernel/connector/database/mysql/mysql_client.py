@@ -1,8 +1,7 @@
 from qanything_kernel.configs.model_config import (MYSQL_HOST_LOCAL, MYSQL_PORT_LOCAL, MYSQL_USER_LOCAL,
                                                    MYSQL_PASSWORD_LOCAL,
                                                    MYSQL_DATABASE_LOCAL, KB_SUFFIX, MILVUS_HOST_LOCAL)
-from qanything_kernel.utils.custom_log import debug_logger, insert_logger, s_debug_logger, s_insert_logger
-from qanything_kernel.utils.request_context import set_context, Stage
+from qanything_kernel.utils.custom_log import debug_logger, insert_logger
 import mysql.connector
 from mysql.connector import pooling
 import json
@@ -33,7 +32,7 @@ class KnowledgeBaseManager:
         self.free_cnx = pool_size
         self.used_cnx = 0
         self.create_tables_()
-        s_debug_logger.info("数据库连接成功", database=database, status="SUCCESS")
+        debug_logger.info("[SUCCESS] 数据库{}连接成功".format(database))
 
     def check_database_(self, host, port, user, password, database_name):
         # 连接 MySQL 服务器
@@ -52,8 +51,8 @@ class KnowledgeBaseManager:
         if database_name not in databases:
             # 如果数据库不存在，则新建数据库
             cursor.execute('CREATE DATABASE IF NOT EXISTS {}'.format(database_name))
-            s_debug_logger.info("数据库新建成功或已存在", database_name=database_name)
-        s_debug_logger.info("数据库检查通过", database_name=database_name, status="SUCCESS")
+            debug_logger.info("数据库{}新建成功或已存在".format(database_name))
+        debug_logger.info("[SUCCESS] 数据库{}检查通过".format(database_name))
         # 关闭游标
         cursor.close()
         # 连接到数据库
@@ -62,34 +61,15 @@ class KnowledgeBaseManager:
         cnx.close()
 
     def execute_query_(self, query, params, commit=False, fetch=False, check=False, user_dict=False):
-        set_context(stage=Stage.DB_OPERATION)
         try:
             conn = self.cnxpool.get_connection()
             self.used_cnx += 1
             self.free_cnx -= 1
             if self.free_cnx < 4:
-                s_debug_logger.info("MySQL 连接池状态检查",
-                                    free_cnx=self.free_cnx,
-                                    used_cnx=self.used_cnx,
-                                    pool_size=self.cnxpool.pool_size)
-                s_debug_logger.warning("MySQL connection pool low",
-                                       stage=Stage.DB_OPERATION,
-                                       free_cnx=self.free_cnx,
-                                       used_cnx=self.used_cnx,
-                                       pool_size=self.cnxpool.pool_size)
+                debug_logger.info("获取连接成功，当前连接池状态：空闲连接数 {}，已使用连接数 {}".format(
+                    self.free_cnx, self.used_cnx))
         except MySQLError as err:
-            s_debug_logger.error("从连接池获取连接失败",
-                                 error=err,
-                                 stage=Stage.DB_OPERATION,
-                                 error_category="db_error",
-                                 free_cnx=self.free_cnx,
-                                 used_cnx=self.used_cnx)
-            s_debug_logger.exception("MySQL get connection from pool failed",
-                                     error=err,
-                                     stage=Stage.DB_OPERATION,
-                                     error_category="db_error",
-                                     free_cnx=self.free_cnx,
-                                     used_cnx=self.used_cnx)
+            debug_logger.error("从连接池获取连接失败：{}".format(err))
             return None
 
         result = None
@@ -110,22 +90,9 @@ class KnowledgeBaseManager:
                 result = cursor.rowcount
         except MySQLError as err:
             if err.errno == 1061:
-                s_debug_logger.info("索引已存在，无需创建",
-                                    mysql_errno=err.errno,
-                                    sql_query=query)
+                debug_logger.info(f"Index already exists (this is okay): {query}")
             else:
-                s_debug_logger.error("执行数据库操作失败",
-                                     error=err,
-                                     mysql_errno=err.errno,
-                                     sql_query=query,
-                                     sql_params=params)
-            s_debug_logger.exception("MySQL query execution failed",
-                                     error=err,
-                                     stage=Stage.DB_OPERATION,
-                                     error_category="db_error",
-                                     mysql_errno=err.errno,
-                                     sql_query=query,
-                                     sql_params=params)
+                debug_logger.error("执行数据库操作失败：{}，SQL：{}".format(err, query))
             if commit:
                 conn.rollback()
         finally:
@@ -135,15 +102,8 @@ class KnowledgeBaseManager:
             self.used_cnx -= 1
             self.free_cnx += 1
             if self.free_cnx <= 4:
-                s_debug_logger.info("连接关闭，返回连接池",
-                                    free_cnx=self.free_cnx,
-                                    used_cnx=self.used_cnx,
-                                    pool_size=self.cnxpool.pool_size)
-                s_debug_logger.info("MySQL connection returned to pool",
-                                    stage=Stage.DB_OPERATION,
-                                    free_cnx=self.free_cnx,
-                                    used_cnx=self.used_cnx,
-                                    pool_size=self.cnxpool.pool_size)
+                debug_logger.info("连接关闭，返回连接池。当前连接池状态：空闲连接数 {}，已使用连接数 {}".format(
+                    self.free_cnx, self.used_cnx))
 
         return result
 
@@ -307,31 +267,22 @@ class KnowledgeBaseManager:
         for query in index_queries:
             try:
                 self.execute_query_(query, (), commit=True)
-                s_debug_logger.info("索引创建成功", sql_query=query)
+                debug_logger.info(f"Index created successfully: {query}")
             except mysql.connector.Error as err:
-                if err.errno == 1061:
-                    s_debug_logger.info("索引已存在，无需重复创建",
-                                        mysql_errno=err.errno,
-                                        sql_query=query)
-                elif err.errno == 1060:
-                    s_debug_logger.info("列已存在，无需重复添加",
-                                        mysql_errno=err.errno,
-                                        sql_query=query)
-                elif err.errno == 1091:
-                    s_debug_logger.info("列已删除，无需重复删除",
-                                        mysql_errno=err.errno,
-                                        sql_query=query)
+                if err.errno == 1061:  # 重复键错误
+                    debug_logger.info(f"Index already exists (this is okay): {query}")
+                elif err.errno == 1060:  # 已存在的列无需创建
+                    debug_logger.info(f"Column already exists (this is okay): {query}")
+                elif err.errno == 1091:  # 已经删除的列无需删除
+                    debug_logger.info(f"Column already deleted (this is okay): {query}")
                 else:
-                    s_debug_logger.error("创建索引/修改表结构失败",
-                                         error=err,
-                                         mysql_errno=err.errno,
-                                         sql_query=query)
+                    debug_logger.error(f"Error creating index: {err}")
 
-        s_debug_logger.info("所有表和索引检查/创建完成")
+        debug_logger.info("All tables and indexes checked/created successfully.")
 
     def update_file_msg(self, file_id, msg):
         query = "UPDATE File SET msg = %s WHERE file_id = %s"
-        s_insert_logger.info("更新文件状态信息", file_id=file_id, msg=msg)
+        insert_logger.info(f"Update file msg: {file_id} {msg}")
         self.execute_query_(query, (msg, file_id), commit=True)
 
     def update_file_upload_infos(self, file_id, upload_infos):
@@ -343,7 +294,7 @@ class KnowledgeBaseManager:
         nos_key = nos_key.split(' ')[0]
         query = "INSERT INTO FileImages (image_id, file_id, user_id, kb_id, nos_key) VALUES (%s, %s, %s, %s, %s)"
         self.execute_query_(query, (image_id, file_id, user_id, kb_id, nos_key), commit=True)
-        s_insert_logger.info("添加文件图片记录", image_id=image_id, file_id=file_id, user_id=user_id, kb_id=kb_id, nos_key=nos_key)
+        insert_logger.info(f"Add file image: {image_id} {file_id} {user_id} {kb_id} {nos_key}")
 
     def get_image_id_by_nos_key(self, nos_key):
         query = "SELECT image_id FROM FileImages WHERE nos_key = %s"
@@ -358,7 +309,7 @@ class KnowledgeBaseManager:
     def check_user_exist_(self, user_id):
         query = "SELECT user_id FROM User WHERE user_id = %s"
         result = self.execute_query_(query, (user_id,), fetch=True)
-        s_debug_logger.info("检查用户是否存在", user_id=user_id, result=result)
+        debug_logger.info("check_user_exist {}".format(result))
         return result is not None and len(result) > 0
 
     def check_kb_exist(self, user_id, kb_ids):
@@ -368,7 +319,7 @@ class KnowledgeBaseManager:
         query = "SELECT kb_id FROM KnowledgeBase WHERE kb_id IN ({}) AND deleted = 0 AND user_id = %s".format(
             kb_ids_str)
         result = self.execute_query_(query, (user_id,), fetch=True)
-        s_debug_logger.info("检查知识库是否存在", user_id=user_id, kb_ids=kb_ids, result=result)
+        debug_logger.info("check_kb_exist {}".format(result))
         valid_kb_ids = [kb_info[0] for kb_info in result]
         unvalid_kb_ids = list(set(kb_ids) - set(valid_kb_ids))
         return unvalid_kb_ids
@@ -386,8 +337,9 @@ class KnowledgeBaseManager:
         return result[0][0] if result else None
 
     def check_file_exist(self, user_id, kb_id, file_ids):
+        # 筛选出有效的文件
         if not file_ids:
-            s_debug_logger.info("检查文件是否存在：file_ids 为空")
+            debug_logger.info("check_file_exist: file_ids is empty")
             return []
 
         file_ids_str = ','.join("'{}'".format(str(x)) for x in file_ids)
@@ -397,7 +349,7 @@ class KnowledgeBaseManager:
                  AND kb_id = %s
                  AND kb_id IN (SELECT kb_id FROM KnowledgeBase WHERE user_id = %s)""".format(file_ids_str)
         result = self.execute_query_(query, (kb_id, user_id), fetch=True)
-        s_debug_logger.info("检查文件是否存在", user_id=user_id, kb_id=kb_id, file_ids=file_ids, result=result)
+        debug_logger.info("check_file_exist {}".format(result))
         return result
 
     def check_file_exist_by_name(self, user_id, kb_id, file_names):
@@ -421,12 +373,7 @@ class KnowledgeBaseManager:
             # 使用参数化查询，将文件名作为参数传递
             query_params = batch_file_names + [kb_id, user_id]
             batch_result = self.execute_query_(query, query_params, fetch=True)
-            s_debug_logger.info("按文件名批量检查文件是否存在",
-                                user_id=user_id,
-                                kb_id=kb_id,
-                                batch_index=i // batch_size,
-                                batch_count=len(batch_file_names),
-                                result=batch_result)
+            debug_logger.info("check_file_exist_by_name batch {}: {}".format(i // batch_size, batch_result))
             results.extend(batch_result)
 
         return results
@@ -435,7 +382,7 @@ class KnowledgeBaseManager:
     def add_user_(self, user_id, user_name):
         query = "INSERT IGNORE INTO User (user_id, user_name) VALUES (%s, %s)"
         self.execute_query_(query, (user_id, user_name), commit=True)
-        s_debug_logger.info("添加用户", user_id=user_id, user_name=user_name)
+        debug_logger.info(f"Add user: {user_id} {user_name}")
 
     def new_milvus_base(self, kb_id, user_id, kb_name, user_name=None):
         if not self.check_user_exist_(user_id):
@@ -496,36 +443,14 @@ class KnowledgeBaseManager:
         query = "UPDATE KnowledgeBase SET latest_insert_time = %s WHERE kb_id = %s"
         self.execute_query_(query, (timestamp, kb_id), commit=True)
 
-    def _parse_upload_infos(self, raw):
-        if not raw:
-            return {}
-        try:
-            if isinstance(raw, (dict, list)):
-                return raw
-            return json.loads(raw)
-        except Exception:
-            return {}
-
-    def set_file_request_id(self, file_id, request_id):
-        query = "SELECT upload_infos FROM File WHERE file_id = %s"
-        result = self.execute_query_(query, (file_id,), fetch=True)
-        current = self._parse_upload_infos(result[0][0]) if result and result[0] else {}
-        current['request_id'] = request_id
-        self.update_file_upload_infos(file_id, current)
-
     # [文件] 向指定知识库下面增加文件
     def add_file(self, file_id, user_id, kb_id, file_name, file_size, file_location, chunk_size, timestamp, file_url='',
-                 status="gray", request_id=None):
+                 status="gray"):
         query = ("INSERT INTO File (file_id, user_id, kb_id, file_name, status, file_size, file_location, chunk_size, "
                  "timestamp, file_url) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)")
         self.execute_query_(query,
                             (file_id, user_id, kb_id, file_name, status, file_size, file_location, chunk_size, timestamp, file_url),
                             commit=True)
-        if request_id:
-            try:
-                self.set_file_request_id(file_id, request_id)
-            except Exception as e:
-                debug_logger.warning("set_file_request_id failed", file_id=file_id, error=str(e))
         return "success"
 
     #  更新file中的content_length
@@ -636,7 +561,7 @@ class KnowledgeBaseManager:
     def delete_files(self, kb_id, file_ids):
         file_ids_str = ','.join("'{}'".format(str(x)) for x in file_ids)
         query = "UPDATE File SET deleted = 1 WHERE kb_id = %s AND file_id IN ({})".format(file_ids_str)
-        s_debug_logger.info("删除文件", kb_id=kb_id, file_ids=file_ids)
+        debug_logger.info("delete_files: {}".format(file_ids))
         self.execute_query_(query, (kb_id,), commit=True)
 
     def add_document(self, doc_id, json_data):
@@ -683,7 +608,7 @@ class KnowledgeBaseManager:
 
             offset += batch_size  # 更新offset
 
-        s_debug_logger.info("获取文档列表", file_id=file_id, doc_count=len(all_json_datas))
+        debug_logger.info(f"get_document: file_id: {file_id}, mysql parent documents res: {len(all_json_datas)}")
         if all_json_datas:
             # 对所有数据进行排序
             all_json_datas.sort(key=lambda x: int(x[0]))
@@ -700,7 +625,7 @@ class KnowledgeBaseManager:
             # debug_logger.info(f"get_document: doc_id: {doc_id}")
             return doc
         else:
-            s_debug_logger.error("文档未找到", doc_id=doc_id)
+            debug_logger.error(f"get_document: doc_id: {doc_id} not found")
             return None
 
     def get_faq(self, faq_id) -> tuple:
@@ -708,10 +633,10 @@ class KnowledgeBaseManager:
         faq_all = self.execute_query_(query, (faq_id,), fetch=True)
         if faq_all:
             faq = faq_all[0]
-            s_debug_logger.info("获取FAQ信息", faq_id=faq_id, result=faq)
+            debug_logger.info(f"get_faq: faq_id: {faq_id}, mysql res: {faq}")
             return faq
         else:
-            s_debug_logger.error("FAQ未找到", faq_id=faq_id)
+            debug_logger.error(f"get_faq: faq_id: {faq_id} not found")
             return None
 
     def delete_documents(self, file_ids):
@@ -720,7 +645,7 @@ class KnowledgeBaseManager:
         for file_id in file_ids:
             query = f"SELECT doc_id FROM Documents WHERE doc_id LIKE \"{file_id}_%\""
             doc_ids = self.execute_query_(query, None, fetch=True)
-            s_debug_logger.info("找到待删除的文档", file_id=file_id, doc_ids_count=len(doc_ids) if doc_ids else 0)
+            debug_logger.info(f"Found documents to delete: {doc_ids}, {file_id}")
 
             if doc_ids:
                 doc_ids = [doc_id[0] for doc_id in doc_ids]
@@ -731,7 +656,7 @@ class KnowledgeBaseManager:
                         ','.join(['%s'] * len(batch_doc_ids)))
                     res = self.execute_query_(delete_query, batch_doc_ids, commit=True, check=True)
                     total_deleted += res
-        s_debug_logger.info("文档删除完成", total_deleted=total_deleted)
+        debug_logger.info(f"Deleted documents count: {total_deleted}")
 
     def delete_faqs(self, faq_ids):
         # 分批，因为多个faq_id的加一起可能会超过sql的最大长度
@@ -743,11 +668,11 @@ class KnowledgeBaseManager:
             query = "DELETE FROM Faqs WHERE faq_id IN ({})".format(placeholders)
             res = self.execute_query_(query, (batch_faq_ids), commit=True, check=True)
             total_deleted += res
-        s_debug_logger.info("FAQ删除完成", total_deleted=total_deleted)
+        debug_logger.info(f"delete_faqs count: {total_deleted}")
 
     def add_qalog(self, user_id, bot_id, kb_ids, query, model, product_source, time_record, history, condense_question,
                   prompt, result, retrieval_documents, source_documents):
-        s_debug_logger.info("添加QA日志", user_id=user_id, kb_ids=kb_ids, query=query, model=model)
+        debug_logger.info("add_qalog: {}".format(query))
         qa_id = uuid.uuid4().hex
         kb_ids = json.dumps(kb_ids, ensure_ascii=False)
         retrieval_documents = json.dumps(retrieval_documents, ensure_ascii=False)
@@ -783,12 +708,7 @@ class KnowledgeBaseManager:
             if query:
                 mysql_query += " AND query = %s"
                 params.append(query)
-            s_debug_logger.info("按条件查询QA日志",
-                                user_id=user_id,
-                                bot_id=bot_id,
-                                any_kb_id=any_kb_id,
-                                query=query,
-                                time_range=time_range)
+            debug_logger.info("get_qalog_by_filter: {}".format(params))
             qa_infos = self.execute_query_(mysql_query, params, fetch=True)
         # 根据need_info构建一个dict
         qa_infos = [dict(zip(need_info.split(", "), qa_info)) for qa_info in qa_infos]
@@ -918,7 +838,7 @@ class KnowledgeBaseManager:
         # 使用参数化查询
         query = "SELECT bot_id FROM QanythingBot WHERE bot_id = %s AND deleted = 0"
         result = self.execute_query_(query, (bot_id,), fetch=True)
-        s_debug_logger.info("检查Bot是否存在", bot_id=bot_id, result=result)
+        debug_logger.info("check_bot_exist {}".format(result))
         return result is not None and len(result) > 0
 
     def new_qanything_bot(self, bot_id, user_id, bot_name, description, head_image, prompt_setting, welcome_message,
