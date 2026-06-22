@@ -50,7 +50,7 @@ class MilvusClient:
             # 如果Collection不在缓存中，创建它并添加到缓存
             if not utility.has_collection(collection_name):
                 schema = CollectionSchema(self.fields)
-                debug_logger.info(f'create collection {self.user_id}')
+                s_debug_logger.info("创建Milvus集合", user_id=self.user_id, collection_name=collection_name)
                 collection = Collection(self.user_id, schema)
                 collection.create_index(field_name="embedding", index_params=self.create_params)
                 # raise MilvusFailed(f"Collection {collection_name} does not exist.")
@@ -76,7 +76,7 @@ class MilvusClient:
 
     @get_time
     def parse_batch_result(self, batch_result):
-        debug_logger.info(f'batch_result_length {len(batch_result)}')
+        s_debug_logger.info("解析Milvus批量搜索结果开始", batch_result_count=len(batch_result))
         new_result = []
         for batch_idx, result in enumerate(batch_result):
             new_cands = []
@@ -134,7 +134,15 @@ class MilvusClient:
                     self.sess.create_partition(kb_id)
             self.partitions = [Partition(self.sess, kb_id) for kb_id in self.kb_ids]
         except Exception as e:
-            debug_logger.error(f'[{cur_func_name()}] [MilvusClient] traceback = {traceback.format_exc()}')
+            s_debug_logger.error("MilvusClient初始化失败",
+                                 error=e,
+                                 stage=Stage.VECTOR_DB_OPERATION,
+                                 error_category="vector_db_error",
+                                 user_id=self.user_id,
+                                 kb_ids=self.kb_ids,
+                                 host=self.host,
+                                 port=self.port,
+                                 traceback=traceback.format_exc())
             s_debug_logger.exception("MilvusClient init failed",
                                      error=e,
                                      stage=Stage.VECTOR_DB_OPERATION,
@@ -158,7 +166,14 @@ class MilvusClient:
                                                   output_fields=self.output_fields, expr=expr, timeout=client_timeout)
                 break
             except Exception as e:
-                debug_logger.error(e)
+                s_debug_logger.error("Milvus向量搜索异常",
+                                     error=e,
+                                     user_id=self.user_id,
+                                     kb_ids=self.kb_ids,
+                                     expr=expr,
+                                     top_k=top_k,
+                                     retry_count=retry_count,
+                                     max_retries=max_retries)
                 s_debug_logger.exception("Milvus search failed",
                                          error=e,
                                          stage=Stage.VECTOR_DB_OPERATION,
@@ -169,16 +184,28 @@ class MilvusClient:
                                          top_k=top_k,
                                          retry_count=retry_count,
                                          max_retries=max_retries)
-                retry_count += 1  # 出错时增加重试计数
+                retry_count += 1
                 if retry_count > max_retries:
-                    debug_logger.error("milvus搜索重试失败，停止尝试。")
+                    s_debug_logger.error("Milvus向量搜索重试失败，已达到最大重试次数",
+                                         user_id=self.user_id,
+                                         kb_ids=self.kb_ids,
+                                         retry_count=retry_count,
+                                         max_retries=max_retries)
                     return []
                 else:
-                    debug_logger.info("milvus搜索失败，正在尝试重试。")
+                    s_debug_logger.info("Milvus向量搜索失败，正在尝试重试",
+                                        user_id=self.user_id,
+                                        kb_ids=self.kb_ids,
+                                        retry_count=retry_count,
+                                        max_retries=max_retries)
                     try:
                         self.sess = self.__load_collection(self.user_id, _async=False)
                     except Exception as e:
-                        debug_logger.error("重新加载 milvus 集合失败：" + str(e))
+                        s_debug_logger.error("重新加载Milvus集合失败",
+                                             error=e,
+                                             user_id=self.user_id,
+                                             stage=Stage.VECTOR_DB_OPERATION,
+                                             error_category="vector_db_error")
                         s_debug_logger.exception("Milvus reload collection failed",
                                                  error=e,
                                                  stage=Stage.VECTOR_DB_OPERATION,
@@ -226,7 +253,7 @@ class MilvusClient:
         if res:
             valid_ids = [result['chunk_id'] for result in res]
             self.sess.delete(expr=f"chunk_id in {valid_ids}")
-            debug_logger.info('milvus delete files_id: %s', files_id)
+            s_debug_logger.info("Milvus删除文件", files_id=files_id, deleted_chunks_count=len(valid_ids))
 
     def get_files(self, files_id):
         res = self.query_expr_async(expr=f"file_id in {files_id}", output_fields=["file_id"])
@@ -308,7 +335,7 @@ class MilvusClient:
         cand_docs = sorted(cand_docs, key=lambda x: x.metadata['file_id'])
         # 按照file_id进行分组
         m_grouped = [list(group) for key, group in groupby(cand_docs, key=lambda x: x.metadata['file_id'])]
-        debug_logger.info('当前用户问题搜索到的相关文档数量（非切片数） : %s', len(m_grouped))
+        s_debug_logger.info("搜索到的相关文档分组数量", groups_count=len(m_grouped), user_id=self.user_id)
 
         with ThreadPoolExecutor(max_workers=10) as executor:
             futures = []

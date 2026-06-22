@@ -13,7 +13,7 @@ class StoreElasticSearchClient:
             es_password=ES_PASSWORD,
             strategy=ElasticsearchStore.BM25RetrievalStrategy()
         )
-        debug_logger.info(f"Init ElasticSearchStore with index_name: {ES_INDEX_NAME}")
+        s_debug_logger.info("ElasticSearchStore初始化完成", index_name=ES_INDEX_NAME, es_url=ES_URL, es_user=ES_USER)
 
     def delete(self, docs_ids):
         docs_count = len(docs_ids)
@@ -21,12 +21,19 @@ class StoreElasticSearchClient:
                                    docs_count=docs_count)
         try:
             res = self.es_store.delete(docs_ids, timeout=60)
-            debug_logger.info(f"Delete ES document with number: {len(docs_ids)}, {docs_ids[0]}, res: {res}")
+            s_debug_logger.info("ES文档删除完成",
+                                docs_count=docs_count,
+                                first_doc_id=docs_ids[0] if docs_ids else None,
+                                delete_result=res)
             s_debug_logger.stage_success(Stage.ES_OPERATION, "ES delete success",
                                          docs_count=docs_count,
                                          delete_result=res)
         except Exception as e:
-            debug_logger.error(f"Delete ES document failed with error: {e}")
+            s_debug_logger.error("ES文档删除失败",
+                                 error=e,
+                                 docs_count=docs_count,
+                                 stage=Stage.ES_OPERATION,
+                                 error_category="search_engine_error")
             s_debug_logger.stage_fail(Stage.ES_OPERATION, "ES delete failed",
                                       error=e,
                                       error_category="search_engine_error",

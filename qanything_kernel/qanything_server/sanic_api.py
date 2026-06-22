@@ -113,8 +113,21 @@ async def on_request_start(req: Request):
         debug_logger.error(f"on_request_start error: {e}")
 
 
+def _is_stream_response(response) -> bool:
+    cls_name = type(response).__name__
+    if "Stream" in cls_name:
+        return True
+    if hasattr(response, "_streaming") or getattr(response, "stream", False):
+        return True
+    content_type = getattr(response, "content_type", "") or ""
+    if "text/event-stream" in content_type:
+        return True
+    return False
+
+
 @app.on_response
 async def on_request_end(req: Request, response):
+    is_stream = False
     try:
         ctx = get_context()
         duration_ms = ctx.get('elapsed_ms', 0)
@@ -123,19 +136,23 @@ async def on_request_end(req: Request, response):
         set_context(stage=Stage.RESPONSE_SENT)
         status_code = getattr(response, 'status', None)
 
+        is_stream = _is_stream_response(response)
+
         s_debug_logger.info(
-            "Response sent",
+            "Response headers sent",
             stage=Stage.RESPONSE_SENT,
             status="success" if status_code and status_code < 400 else "fail",
             api_name=api_name,
             status_code=status_code,
             duration_ms=duration_ms,
+            is_stream=is_stream,
             response_size=len(response.body) if hasattr(response, 'body') else None,
         )
     except Exception as e:
         debug_logger.error(f"on_request_end error: {e}")
     finally:
-        reset_context()
+        if not is_stream:
+            reset_context()
 
 
 @app.before_server_start

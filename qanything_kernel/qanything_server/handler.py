@@ -4,7 +4,8 @@ from qanything_kernel.core.local_file import LocalFile
 from qanything_kernel.core.local_doc_qa import LocalDocQA
 from qanything_kernel.utils.custom_log import (debug_logger, qa_logger,
                                               s_debug_logger, s_qa_logger)
-from qanything_kernel.utils.request_context import set_context, update_extra, Stage
+from qanything_kernel.utils.request_context import (init_context, set_context, reset_context,
+                                                  get_context, generate_request_id, Stage, get_elapsed_ms, update_extra)
 from qanything_kernel.configs.model_config import (BOT_DESC, BOT_IMAGE, BOT_PROMPT, BOT_WELCOME,
                                                    DEFAULT_PARENT_CHUNK_SIZE, MAX_CHARS, VECTOR_SEARCH_TOP_K,
                                                    UPLOAD_ROOT_PATH, IMAGES_ROOT_PATH)
@@ -179,8 +180,8 @@ async def upload_weblink(req: request):
         file_size = len(local_file.file_content)
         file_location = local_file.file_location
         msg = local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
-                                                   chunk_size, timestamp, url)
-        debug_logger.info(f"{url}, {file_name}, {file_id}, {msg}")
+                                                   chunk_size, timestamp, url, request_id=get_request_id())
+        s_debug_logger.info("url file added", file_url=url, file_name=file_name, file_id=file_id, add_msg=msg)
         data.append({"file_id": file_id, "file_name": file_name, "file_url": url, "status": "gray", "bytes": 0,
                      "timestamp": timestamp})
         # asyncio.create_task(local_doc_qa.insert_files_to_milvus(user_id, kb_id, [local_file]))
@@ -288,8 +289,9 @@ async def upload_files(req: request):
         file_location = local_file.file_location
         local_files.append(local_file)
         add_msg = local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
-                                                       chunk_size, timestamp)
-        debug_logger.info(f"{file_name}, {file_id}, {add_msg}")
+                                                       chunk_size, timestamp, request_id=get_request_id())
+        s_debug_logger.info("local file added", file_name=file_name, file_id=file_id, add_msg=add_msg,
+                            file_size=len(local_file.file_content), estimated_chars=chars)
         file_ids_created.append(file_id)
         data.append(
             {"file_id": file_id, "file_name": file_name, "status": "gray", "bytes": len(local_file.file_content),
@@ -390,12 +392,12 @@ async def upload_faqs(req: request):
         local_files.append(local_file)
         local_doc_qa.milvus_summary.add_faq(file_id, user_id, kb_id, faq['question'], faq['answer'], faq.get('nos_keys', ''))
         local_doc_qa.milvus_summary.add_file(file_id, user_id, kb_id, file_name, file_size, file_location,
-                                             chunk_size, timestamp)
+                                             chunk_size, timestamp, request_id=get_request_id())
         # debug_logger.info(f"{file_name}, {file_id}, {msg}, {faq}")
         data.append(
             {"file_id": file_id, "file_name": file_name, "status": "gray", "length": file_size,
              "timestamp": timestamp})
-    debug_logger.info(f"end insert {len(faqs)} faqs to mysql, user_id: {user_id}, kb_id: {kb_id}")
+    s_debug_logger.info("faq insert to mysql completed", faqs_count=len(faqs), user_id=user_id, kb_id=kb_id)
 
     msg = "success，后台正在飞速上传文件，请耐心等待"
     return sanic_json({"code": 200, "msg": msg, "data": data})
@@ -832,7 +834,7 @@ async def local_doc_chat(req: request):
         faq_kb_ids = [kb + '_FAQ' for kb in kb_ids]
         not_exist_faq_kb_ids = local_doc_qa.milvus_summary.check_kb_exist(user_id, faq_kb_ids)
         exist_faq_kb_ids = [kb for kb in faq_kb_ids if kb not in not_exist_faq_kb_ids]
-        debug_logger.info("exist_faq_kb_ids: %s", exist_faq_kb_ids)
+        s_debug_logger.info("exist_faq_kb_ids", exist_faq_kb_ids=exist_faq_kb_ids)
         kb_ids += exist_faq_kb_ids
 
     file_infos = []
@@ -841,7 +843,7 @@ async def local_doc_chat(req: request):
     valid_files = [fi for fi in file_infos if fi[2] == 'green']
     valid_files_count = len(valid_files)
     if valid_files_count == 0:
-        debug_logger.info("valid_files is empty, use only chat mode.")
+        s_debug_logger.info("valid_files is empty, use only chat mode", valid_files_count=0)
         kb_ids = []
     update_extra(valid_files_count=valid_files_count)
     preprocess_end = time.perf_counter()
@@ -850,11 +852,27 @@ async def local_doc_chat(req: request):
     qa_timestamp = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(time.time()))
     for kb_id in kb_ids:
         local_doc_qa.milvus_summary.update_knowledge_base_latest_qa_time(kb_id, qa_timestamp)
-    debug_logger.info("streaming: %s", streaming)
+    s_debug_logger.info("local_doc_chat mode", streaming=streaming, valid_files_count=valid_files_count)
     if streaming:
-        debug_logger.info("start generate answer")
-
+        s_debug_logger.info("start generate answer (stream mode)", model=model, kb_ids_count=len(kb_ids))
         async def generate_answer(response):
+            s_debug_logger.info("generate_answer stream start", model=model, kb_ids_count=len(kb_ids))
+            try:
+                async for __stream_chunk in _generate_raw_answer(response):
+                    yield __stream_chunk
+            except Exception as e:
+                s_debug_logger.stage_fail(Stage.LLM_GENERATE, "stream chat generator error",
+                                          error=e,
+                                          duration_ms=time_record.get('chat_completed', 0) * 1000)
+                raise
+            finally:
+                s_debug_logger.info("stream context cleanup",
+                                    elapsed_ms=get_elapsed_ms(),
+                                    model=model)
+                reset_context()
+
+        async def _generate_raw_answer(response):
+            debug_logger.info("start generate...")
             debug_logger.info("start generate...")
             async for resp, next_history in local_doc_qa.get_knowledge_based_answer(model=model,
                                                                                     max_token=max_token,
@@ -914,7 +932,7 @@ async def local_doc_chat(req: request):
                                                  retrieval_docs_count=len(retrieval_documents),
                                                  source_docs_count=len(source_documents),
                                                  time_record=formatted_time_record)
-                    debug_logger.info("response: %s", chat_data['result'])
+                    s_debug_logger.info("stream chat final result", result_length=len(chat_data['result']), condense_question_length=len(resp.get('condense_question', '') or ''))
                     stream_res = {
                         "code": 200,
                         "msg": "success stream chat",
